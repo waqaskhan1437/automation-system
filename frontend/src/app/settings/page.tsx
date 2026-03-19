@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 type Tab = "postforme" | "github" | "video-sources" | "ai";
 
@@ -57,6 +57,23 @@ function PostformeSettings() {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncedAccounts, setSyncedAccounts] = useState<Array<{ platform: string; username: string; connected: boolean }>>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/settings/postforme")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          setApiKey(data.data.api_key || "");
+          try {
+            const plats = JSON.parse(data.data.platforms || "[]");
+            if (Array.isArray(plats)) setPlatforms(plats);
+          } catch {}
+        }
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
 
   const allPlatforms = [
     { id: "instagram", label: "Instagram", color: "#E1306C" },
@@ -260,6 +277,21 @@ function GithubSettings() {
   const [repoName, setRepoName] = useState("");
   const [runnerLabels, setRunnerLabels] = useState("self-hosted");
   const [saving, setSaving] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/settings/github")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          setPatToken(data.data.pat_token || "");
+          setRepoOwner(data.data.repo_owner || "");
+          setRepoName(data.data.repo_name || "");
+          setRunnerLabels(data.data.runner_labels || "self-hosted");
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSave = async () => {
     setSaving(true);
@@ -349,6 +381,18 @@ function VideoSourceSettings() {
   const [bunnyLibraryId, setBunnyLibraryId] = useState("");
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    fetch("/api/settings/video-sources")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          setBunnyApiKey(data.data.bunny_api_key || "");
+          setBunnyLibraryId(data.data.bunny_library_id || "");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -423,6 +467,22 @@ function AISettings() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
+
+  useEffect(() => {
+    fetch("/api/settings/ai")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          setGeminiKey(data.data.gemini_key || "");
+          setGrokKey(data.data.grok_key || "");
+          setCohereKey(data.data.cohere_key || "");
+          setOpenrouterKey(data.data.openrouter_key || "");
+          setOpenaiKey(data.data.openai_key || "");
+          setDefaultProvider(data.data.default_provider || "openai");
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const providers = [
     { id: "openai", label: "OpenAI", key: openaiKey, setKey: setOpenaiKey, placeholder: "sk-...", color: "#10a37f" },
