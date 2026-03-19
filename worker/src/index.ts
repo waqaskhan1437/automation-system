@@ -1,4 +1,4 @@
-import { Env, ApiResponse } from "./types";
+import { Env, ApiResponse, GithubSettings, Job } from "./types";
 import { handleSettingsRoutes } from "./routes/settings";
 import { handleAutomationsRoutes } from "./routes/automations";
 import { handleJobsRoutes } from "./routes/jobs";
@@ -49,6 +49,153 @@ export default {
 
     if (path.startsWith("/api/jobs")) {
       return handleJobsRoutes(request, env, path);
+    }
+
+    // Serve video/image output files
+    if (path.startsWith("/api/output/") && method === "GET") {
+      const segments = path.split("/").filter(Boolean);
+      const jobId = segments[2] ? parseInt(segments[2]) : null;
+      if (!jobId) {
+        return jsonResponse({ success: false, error: "Job ID required" }, 400);
+      }
+
+      const job = await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(jobId).first<Job>();
+      if (!job) {
+        return jsonResponse({ success: false, error: "Job not found" }, 404);
+      }
+
+      const githubSettings = await env.DB.prepare("SELECT * FROM settings_github LIMIT 1").first<GithubSettings>();
+      if (!githubSettings || !job.github_run_id) {
+        return jsonResponse({ success: false, error: "No GitHub run associated" }, 400);
+      }
+
+      try {
+        // Get artifacts list
+        const artRes = await fetch(
+          `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}/artifacts`,
+          {
+            headers: {
+              Authorization: `Bearer ${githubSettings.pat_token}`,
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": "AutomationSystem/1.0",
+            },
+          }
+        );
+
+        if (!artRes.ok) {
+          return jsonResponse({ success: false, error: "Failed to fetch artifacts" }, 500);
+        }
+
+        const artData = await artRes.json() as { artifacts?: Array<{ name: string; archive_download_url: string }> };
+        const artifacts = artData.artifacts || [];
+
+        if (artifacts.length === 0) {
+          return jsonResponse({ success: false, error: "No artifacts found" }, 404);
+        }
+
+        // Get the artifact download URL
+        const artifact = artifacts[0];
+        const downloadUrl = artifact.archive_download_url;
+
+        // Fetch the actual artifact (it's a zip file)
+        const fileRes = await fetch(downloadUrl, {
+          headers: {
+            Authorization: `Bearer ${githubSettings.pat_token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "AutomationSystem/1.0",
+          },
+          redirect: "follow",
+        });
+
+        if (!fileRes.ok) {
+          return jsonResponse({ success: false, error: "Failed to download artifact" }, 500);
+        }
+
+        // Return the zip file with proper headers
+        return new Response(fileRes.body, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/zip",
+            "Content-Disposition": `attachment; filename="${artifact.name}.zip"`,
+            "Access-Control-Allow-Origin": "*",
+          },
+        });
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        return jsonResponse({ success: false, error: errorMsg }, 500);
+      }
+    }
+
+    // Serve video stream (for playing in browser)
+    if (path.startsWith("/api/stream/") && method === "GET") {
+      const segments = path.split("/").filter(Boolean);
+      const jobId = segments[2] ? parseInt(segments[2]) : null;
+      if (!jobId) {
+        return jsonResponse({ success: false, error: "Job ID required" }, 400);
+      }
+
+      const job = await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(jobId).first<Job>();
+      if (!job) {
+        return jsonResponse({ success: false, error: "Job not found" }, 404);
+      }
+
+      const githubSettings = await env.DB.prepare("SELECT * FROM settings_github LIMIT 1").first<GithubSettings>();
+      if (!githubSettings || !job.github_run_id) {
+        return jsonResponse({ success: false, error: "No GitHub run" }, 400);
+      }
+
+      try {
+        // Get artifacts
+        const artRes = await fetch(
+          `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}/artifacts`,
+          {
+            headers: {
+              Authorization: `Bearer ${githubSettings.pat_token}`,
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": "AutomationSystem/1.0",
+            },
+          }
+        );
+
+        if (!artRes.ok) {
+          return jsonResponse({ success: false, error: "Failed to fetch artifacts" }, 500);
+        }
+
+        const artData = await artRes.json() as { artifacts?: Array<{ name: string; archive_download_url: string }> };
+        const artifacts = artData.artifacts || [];
+
+        if (artifacts.length === 0) {
+          return jsonResponse({ success: false, error: "No artifacts found" }, 404);
+        }
+
+        // Download the artifact
+        const artifact = artifacts[0];
+        const fileRes = await fetch(artifact.archive_download_url, {
+          headers: {
+            Authorization: `Bearer ${githubSettings.pat_token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "AutomationSystem/1.0",
+          },
+          redirect: "follow",
+        });
+
+        if (!fileRes.ok) {
+          return jsonResponse({ success: false, error: "Failed to download" }, 500);
+        }
+
+        // Return as zip for now (video files inside will need extraction)
+        return new Response(fileRes.body, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/zip",
+            "Content-Disposition": `inline; filename="${artifact.name}.zip"`,
+            "Access-Control-Allow-Origin": "*",
+          },
+        });
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        return jsonResponse({ success: false, error: errorMsg }, 500);
+      }
     }
 
     if (path === "/api/webhook/github" && method === "POST") {
