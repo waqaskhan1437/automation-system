@@ -1,4 +1,4 @@
-import { Env, ApiResponse, Job } from "../types";
+import { Env, ApiResponse, Job, GithubSettings } from "../types";
 
 function jsonResponse<T>(data: ApiResponse<T>, status: number = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -70,6 +70,45 @@ export async function handleJobsRoutes(
     ).bind(id).run();
 
     return jsonResponse({ success: true, message: "Job queued for retry" });
+  }
+
+  // GET /api/jobs/:id/artifacts - Get GitHub Actions artifacts
+  if (id && action === "artifacts" && method === "GET") {
+    const job = await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(id).first<Job>();
+    if (!job) {
+      return jsonResponse({ success: false, error: "Job not found" }, 404);
+    }
+
+    const githubSettings = await env.DB.prepare("SELECT * FROM settings_github LIMIT 1").first<GithubSettings>();
+    if (!githubSettings) {
+      return jsonResponse({ success: false, error: "GitHub settings not configured" }, 400);
+    }
+
+    if (!job.github_run_id) {
+      return jsonResponse({ success: false, error: "No GitHub run associated with this job" }, 400);
+    }
+
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}/artifacts`,
+        {
+          headers: {
+            Authorization: `Bearer ${githubSettings.pat_token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "AutomationSystem/1.0",
+          },
+        }
+      );
+
+      if (res.ok) {
+        const data = await res.json() as { artifacts?: Array<{ name: string; archive_download_url: string; size_in_bytes: number }> };
+        return jsonResponse({ success: true, data: data.artifacts || [] });
+      }
+      return jsonResponse({ success: false, error: "Failed to fetch artifacts" });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
   }
 
   return jsonResponse({ success: false, error: "Job route not found" }, 404);
