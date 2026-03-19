@@ -170,10 +170,6 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [description, setDescription] = useState("");
   const [videoSource, setVideoSource] = useState<"direct" | "youtube" | "bunny">("youtube");
   const [videoUrl, setVideoUrl] = useState("");
-  const [trimStart, setTrimStart] = useState("");
-  const [trimEnd, setTrimEnd] = useState("");
-  const [resize, setResize] = useState("");
-  const [fps, setFps] = useState("");
   const [codec, setCodec] = useState("libx264");
   const [audioCodec, setAudioCodec] = useState("aac");
   const [watermarkText, setWatermarkText] = useState("");
@@ -192,6 +188,21 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [schedule, setSchedule] = useState("once");
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
+
+  // Video tab - advanced features
+  const [fetchMode, setFetchMode] = useState<"last_days" | "date_range" | "url">("url");
+  const [lastDays, setLastDays] = useState("7");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [videosPerRun, setVideosPerRun] = useState("1");
+  const [shortDuration, setShortDuration] = useState("60");
+  const [splitEnabled, setSplitEnabled] = useState(false);
+  const [splitDuration, setSplitDuration] = useState("30");
+  const [playbackSpeed, setPlaybackSpeed] = useState("1");
+  const [aspectRatio, setAspectRatio] = useState("9:16");
+  const [combineVideos, setCombineVideos] = useState(false);
+  const [combineCount, setCombineCount] = useState("3");
+  const [convertToShorts, setConvertToShorts] = useState(true);
 
   const allPlatforms = ["instagram", "youtube", "tiktok", "facebook", "x"];
 
@@ -215,17 +226,30 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
     const config = {
       video_source: videoSource,
       video_url: videoUrl,
+      fetch_mode: fetchMode,
+      fetch_config: {
+        last_days: fetchMode === "last_days" ? parseInt(lastDays) : null,
+        date_from: fetchMode === "date_range" ? dateFrom : null,
+        date_to: fetchMode === "date_range" ? dateTo : null,
+        videos_per_run: parseInt(videosPerRun),
+      },
+      short_settings: {
+        max_duration: parseInt(shortDuration),
+        playback_speed: parseFloat(playbackSpeed),
+        aspect_ratio: aspectRatio,
+        convert_to_shorts: convertToShorts,
+      },
+      split: {
+        enabled: splitEnabled,
+        chunk_duration: splitEnabled ? parseInt(splitDuration) : null,
+      },
+      combine: {
+        enabled: combineVideos,
+        count: combineVideos ? parseInt(combineCount) : null,
+      },
       ffmpeg_config: {
-        trim_start: trimStart || null,
-        trim_end: trimEnd || null,
-        resize: resize || null,
-        fps: fps ? parseInt(fps) : null,
         codec,
         audio_codec: audioCodec,
-        watermark_text: watermarkText || null,
-        watermark_position: watermarkPosition,
-        overlay_text: overlayText || null,
-        overlay_position: overlayPosition,
       },
       taglines: {
         watermark: { text: watermarkText, position: watermarkPosition, size: parseInt(watermarkSize) },
@@ -331,41 +355,207 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 
           {activeTab === "video" && (
             <div className="space-y-5">
-              <div className="glass-card p-4 mb-2">
-                <p className="text-xs text-[#a1a1aa]">
-                  Video source: <span className="text-white font-medium capitalize">{videoSource}</span> (configured in Basic tab)
-                </p>
-              </div>
-
+              {/* Fetch Mode */}
               <div>
-                <label className="block text-sm font-medium mb-2">Video URL</label>
-                <input
-                  className="glass-input"
-                  placeholder={videoSource === "youtube" ? "https://youtube.com/watch?v=..." : videoSource === "bunny" ? "https://iframe.mediadelivery.net/..." : "https://example.com/video.mp4"}
-                  value={videoUrl}
-                  onChange={(e) => setVideoUrl(e.target.value)}
-                />
+                <label className="block text-sm font-medium mb-2">Fetch Videos</label>
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={() => setFetchMode("url")} className={`px-4 py-2 rounded-xl text-sm font-medium ${fetchMode === "url" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
+                    Single URL
+                  </button>
+                  <button onClick={() => setFetchMode("last_days")} className={`px-4 py-2 rounded-xl text-sm font-medium ${fetchMode === "last_days" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
+                    Last X Days
+                  </button>
+                  <button onClick={() => setFetchMode("date_range")} className={`px-4 py-2 rounded-xl text-sm font-medium ${fetchMode === "date_range" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
+                    Date Range
+                  </button>
+                </div>
               </div>
 
+              {/* URL Input */}
+              {fetchMode === "url" && (
+                <div>
+                  <label className="block text-sm font-medium mb-2">Video URL</label>
+                  <input
+                    className="glass-input"
+                    placeholder={videoSource === "youtube" ? "https://youtube.com/watch?v=..." : "https://example.com/video.mp4"}
+                    value={videoUrl}
+                    onChange={(e) => setVideoUrl(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {/* Last X Days */}
+              {fetchMode === "last_days" && (
+                <div className="glass-card p-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-[#a1a1aa] mb-1">Fetch videos from last</label>
+                      <select className="glass-select text-sm" value={lastDays} onChange={(e) => setLastDays(e.target.value)}>
+                        <option value="1">1 Day</option>
+                        <option value="3">3 Days</option>
+                        <option value="7">7 Days</option>
+                        <option value="14">14 Days</option>
+                        <option value="30">30 Days</option>
+                        <option value="60">60 Days</option>
+                        <option value="90">90 Days</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-[#a1a1aa] mb-1">Videos per run</label>
+                      <select className="glass-select text-sm" value={videosPerRun} onChange={(e) => setVideosPerRun(e.target.value)}>
+                        <option value="1">1 Video</option>
+                        <option value="3">3 Videos</option>
+                        <option value="5">5 Videos</option>
+                        <option value="10">10 Videos</option>
+                        <option value="20">20 Videos</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-xs text-[#a1a1aa] mt-3">
+                    Will fetch the latest {videosPerRun} video(s) from the last {lastDays} day(s)
+                  </p>
+                </div>
+              )}
+
+              {/* Date Range */}
+              {fetchMode === "date_range" && (
+                <div className="glass-card p-4">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs text-[#a1a1aa] mb-1">From Date</label>
+                      <input type="date" className="glass-input text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-[#a1a1aa] mb-1">To Date</label>
+                      <input type="date" className="glass-input text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-[#a1a1aa] mb-1">Videos per run</label>
+                      <select className="glass-select text-sm" value={videosPerRun} onChange={(e) => setVideosPerRun(e.target.value)}>
+                        <option value="1">1 Video</option>
+                        <option value="3">3 Videos</option>
+                        <option value="5">5 Videos</option>
+                        <option value="10">10 Videos</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Short Duration */}
               <div className="border-t border-[rgba(255,255,255,0.08)] pt-4">
-                <p className="text-sm font-medium mb-3">FFmpeg Processing</p>
+                <p className="text-sm font-medium mb-3">Short Video Settings</p>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Trim Start</label>
-                    <input className="glass-input text-sm" placeholder="00:00:05" value={trimStart} onChange={(e) => setTrimStart(e.target.value)} />
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Max Short Duration (seconds)</label>
+                    <select className="glass-select text-sm" value={shortDuration} onChange={(e) => setShortDuration(e.target.value)}>
+                      <option value="15">15 sec</option>
+                      <option value="30">30 sec</option>
+                      <option value="45">45 sec</option>
+                      <option value="60">60 sec (Recommended)</option>
+                      <option value="90">90 sec</option>
+                      <option value="120">120 sec</option>
+                    </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Trim End</label>
-                    <input className="glass-input text-sm" placeholder="00:01:00" value={trimEnd} onChange={(e) => setTrimEnd(e.target.value)} />
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Playback Speed</label>
+                    <select className="glass-select text-sm" value={playbackSpeed} onChange={(e) => setPlaybackSpeed(e.target.value)}>
+                      <option value="0.5">0.5x (Slow)</option>
+                      <option value="0.75">0.75x</option>
+                      <option value="1">1x (Normal)</option>
+                      <option value="1.25">1.25x</option>
+                      <option value="1.5">1.5x (Fast)</option>
+                      <option value="2">2x (Very Fast)</option>
+                    </select>
                   </div>
+                </div>
+              </div>
+
+              {/* Splitting */}
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-sm font-medium">Split Long Video</label>
+                  <button onClick={() => setSplitEnabled(!splitEnabled)} className={`w-11 h-6 rounded-full transition-all ${splitEnabled ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6]" : "bg-[rgba(255,255,255,0.1)]"}`}>
+                    <div className={`w-5 h-5 rounded-full bg-white transition-transform ${splitEnabled ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+                  </button>
+                </div>
+                {splitEnabled && (
                   <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Resize (W:H)</label>
-                    <input className="glass-input text-sm" placeholder="1080:1920" value={resize} onChange={(e) => setResize(e.target.value)} />
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Split into chunks of</label>
+                    <select className="glass-select text-sm" value={splitDuration} onChange={(e) => setSplitDuration(e.target.value)}>
+                      <option value="15">15 seconds each</option>
+                      <option value="30">30 seconds each</option>
+                      <option value="45">45 seconds each</option>
+                      <option value="60">60 seconds each</option>
+                    </select>
+                    <p className="text-xs text-[#a1a1aa] mt-2">Each chunk becomes a separate short video</p>
                   </div>
+                )}
+              </div>
+
+              {/* Aspect Ratio */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Aspect Ratio</label>
+                <div className="flex gap-2 flex-wrap">
+                  {[
+                    { value: "9:16", label: "9:16", desc: "Shorts/Reels/TikTok" },
+                    { value: "16:9", label: "16:9", desc: "YouTube/Horizontal" },
+                    { value: "1:1", label: "1:1", desc: "Square/Instagram" },
+                    { value: "4:5", label: "4:5", desc: "Instagram Feed" },
+                  ].map((ar) => (
+                    <button
+                      key={ar.value}
+                      onClick={() => setAspectRatio(ar.value)}
+                      className={`px-4 py-3 rounded-xl text-center transition-all ${aspectRatio === ar.value ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}
+                    >
+                      <p className="text-sm font-medium">{ar.label}</p>
+                      <p className="text-[10px] opacity-70">{ar.desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Combine Videos */}
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between mb-3">
                   <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">FPS</label>
-                    <input className="glass-input text-sm" type="number" placeholder="30" value={fps} onChange={(e) => setFps(e.target.value)} />
+                    <label className="text-sm font-medium">Combine Multiple Videos</label>
+                    <p className="text-xs text-[#a1a1aa]">Merge X videos into 1 short</p>
                   </div>
+                  <button onClick={() => setCombineVideos(!combineVideos)} className={`w-11 h-6 rounded-full transition-all ${combineVideos ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6]" : "bg-[rgba(255,255,255,0.1)]"}`}>
+                    <div className={`w-5 h-5 rounded-full bg-white transition-transform ${combineVideos ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+                  </button>
+                </div>
+                {combineVideos && (
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Combine how many videos</label>
+                    <select className="glass-select text-sm" value={combineCount} onChange={(e) => setCombineCount(e.target.value)}>
+                      <option value="2">2 Videos</option>
+                      <option value="3">3 Videos</option>
+                      <option value="5">5 Videos</option>
+                      <option value="10">10 Videos</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* Convert to Shorts */}
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-sm font-medium">Convert to Shorts Format</label>
+                    <p className="text-xs text-[#a1a1aa]">Auto-crop and optimize for vertical shorts</p>
+                  </div>
+                  <button onClick={() => setConvertToShorts(!convertToShorts)} className={`w-11 h-6 rounded-full transition-all ${convertToShorts ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6]" : "bg-[rgba(255,255,255,0.1)]"}`}>
+                    <div className={`w-5 h-5 rounded-full bg-white transition-transform ${convertToShorts ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* FFmpeg Advanced */}
+              <div className="border-t border-[rgba(255,255,255,0.08)] pt-4">
+                <p className="text-sm font-medium mb-3">Advanced FFmpeg</p>
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs text-[#a1a1aa] mb-1">Video Codec</label>
                     <select className="glass-select text-sm" value={codec} onChange={(e) => setCodec(e.target.value)}>
@@ -379,7 +569,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                     <select className="glass-select text-sm" value={audioCodec} onChange={(e) => setAudioCodec(e.target.value)}>
                       <option value="aac">AAC</option>
                       <option value="mp3">MP3</option>
-                      <option value="copy">Copy (no re-encode)</option>
+                      <option value="copy">Copy</option>
                     </select>
                   </div>
                 </div>
