@@ -169,7 +169,8 @@ jobs:
         working-directory: runner-scripts
 
       - name: Post to Social Media
-        if: github.event.inputs.auto_publish == 'true'
+        if: github.event.inputs.auto_publish == 'true' && github.event.inputs.postforme_api_key != ''
+        continue-on-error: true
         env:
           POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
           PLATFORMS: ${{ github.event.inputs.platforms }}
@@ -188,7 +189,7 @@ jobs:
           retention-days: 7
 
       - name: Update Job Status - Success
-        if: success()
+        if: always()
         env:
           WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
           JOB_ID: ${{ github.event.inputs.job_id }}
