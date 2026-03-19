@@ -4,7 +4,7 @@ const path = require("path");
 const https = require("https");
 const http = require("http");
 
-const OUTPUT_DIR = path.join(__dirname, "..", "output");
+const OUTPUT_DIR = path.join(process.cwd(), "output");
 const OUTPUT_FILE = path.join(OUTPUT_DIR, "processed-image.png");
 
 async function downloadImage(url) {

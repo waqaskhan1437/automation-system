@@ -187,8 +187,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: processed-video-${{ github.event.inputs.job_id }}
-          path: runner-scripts/output/
+          path: |
+            output/
+            runner-scripts/output/
           retention-days: 7
+          if-no-files-found: warn
 
       - name: Update Job Status - Success
         if: always()

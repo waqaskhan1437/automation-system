@@ -167,6 +167,9 @@ export async function handleAutomationsRoutes(
         workflowInputs.postforme_api_key = postformeSettings.api_key;
       }
 
+      // Add worker webhook URL for status updates
+      workflowInputs.worker_webhook_url = "https://automation-api.waqaskhan1437.workers.dev/api/webhook/github";
+
       const githubResponse = await fetch(
         `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/video-automation.yml/dispatches`,
         {

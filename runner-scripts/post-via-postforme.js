@@ -2,7 +2,7 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 
-const OUTPUT_DIR = path.join(__dirname, "..", "output");
+const OUTPUT_DIR = path.join(process.cwd(), "output");
 
 function postToPostforme(apiKey, platform, filePath) {
   return new Promise((resolve, reject) => {

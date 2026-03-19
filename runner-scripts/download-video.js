@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 
-const OUTPUT_DIR = path.join(__dirname, "..", "output");
+const OUTPUT_DIR = path.join(process.cwd(), "output");
 const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 
 function downloadDirect(url) {
