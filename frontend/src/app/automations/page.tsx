@@ -51,14 +51,22 @@ export default function AutomationsPage() {
 
   const handleAction = async (id: number, action: "run" | "pause" | "resume" | "delete") => {
     try {
-      if (action === "delete") {
+      if (action === "run") {
+        const res = await fetch(`/api/automations/${id}/run`, { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+          alert("Automation started! Check GitHub Actions: https://github.com/waqaskhan1437/automation-system/actions");
+        } else {
+          alert("Failed: " + data.error);
+        }
+      } else if (action === "delete") {
         await fetch(`/api/automations/${id}`, { method: "DELETE" });
       } else {
         await fetch(`/api/automations/${id}/${action}`, { method: "POST" });
       }
       fetchAutomations();
     } catch (err) {
-      console.error("Action failed");
+      alert("Action failed: " + (err instanceof Error ? err.message : "Unknown error"));
     }
   };
 
