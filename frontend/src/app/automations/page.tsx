@@ -200,6 +200,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [splitDuration, setSplitDuration] = useState("30");
   const [playbackSpeed, setPlaybackSpeed] = useState("1");
   const [aspectRatio, setAspectRatio] = useState("9:16");
+  const [cropMode, setCropMode] = useState<"crop" | "fit">("crop");
   const [combineVideos, setCombineVideos] = useState(false);
   const [combineCount, setCombineCount] = useState("3");
   const [convertToShorts, setConvertToShorts] = useState(true);
@@ -237,6 +238,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
         max_duration: parseInt(shortDuration),
         playback_speed: parseFloat(playbackSpeed),
         aspect_ratio: aspectRatio,
+        crop_mode: cropMode,
         convert_to_shorts: convertToShorts,
       },
       split: {
@@ -502,7 +504,6 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                     { value: "16:9", label: "16:9", desc: "YouTube/Horizontal" },
                     { value: "1:1", label: "1:1", desc: "Square/Instagram" },
                     { value: "4:5", label: "4:5", desc: "Instagram Feed" },
-                    { value: "no-crop", label: "No Crop", desc: "Original ratio + black bars" },
                   ].map((ar) => (
                     <button
                       key={ar.value}
@@ -513,6 +514,72 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                       <p className="text-[10px] opacity-70">{ar.desc}</p>
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Crop Mode */}
+              <div className="glass-card p-4">
+                <label className="block text-sm font-medium mb-3">Crop Mode</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setCropMode("crop")}
+                    className={`p-4 rounded-xl text-left transition-all ${cropMode === "crop" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                      </svg>
+                      <span className="text-sm font-medium">Crop (Fill Frame)</span>
+                    </div>
+                    <p className="text-[10px] opacity-70">Fills entire frame, may cut edges</p>
+                  </button>
+                  <button
+                    onClick={() => setCropMode("fit")}
+                    className={`p-4 rounded-xl text-left transition-all ${cropMode === "fit" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span className="text-sm font-medium">No Crop (Fit)</span>
+                    </div>
+                    <p className="text-[10px] opacity-70">Full video visible with black bars</p>
+                  </button>
+                </div>
+
+                {/* Preview */}
+                <div className="mt-4 p-3 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)]">
+                  <p className="text-xs text-[#a1a1aa] mb-2">Preview: {aspectRatio} ({cropMode === "crop" ? "Crop" : "No Crop"})</p>
+                  <div className="flex items-center justify-center">
+                    <div
+                      className={`relative border-2 border-dashed border-[rgba(255,255,255,0.15)] rounded-lg flex items-center justify-center ${
+                        aspectRatio === "9:16" ? "w-16 h-28" :
+                        aspectRatio === "16:9" ? "w-28 h-16" :
+                        aspectRatio === "1:1" ? "w-20 h-20" :
+                        "w-20 h-25"
+                      }`}
+                    >
+                      {cropMode === "crop" ? (
+                        <>
+                          <div className="absolute inset-0 bg-[rgba(99,102,241,0.15)] rounded-md" />
+                          <svg className="w-6 h-6 text-[#6366f1] relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                          </svg>
+                        </>
+                      ) : (
+                        <>
+                          <div className="absolute bg-[rgba(99,102,241,0.15)] rounded-md" style={
+                            aspectRatio === "9:16" ? { width: "60%", height: "35%", left: "20%", top: "32.5%" } :
+                            aspectRatio === "16:9" ? { width: "35%", height: "60%", left: "32.5%", top: "20%" } :
+                            { width: "70%", height: "70%", left: "15%", top: "15%" }
+                          } />
+                          <svg className="w-6 h-6 text-[#8b5cf6] relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14" />
+                          </svg>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
 
