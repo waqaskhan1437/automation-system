@@ -8,9 +8,8 @@ const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 
 function downloadDirect(url) {
   console.log("Downloading: " + url);
-  const proto = url.startsWith("https") ? https : require("http");
   return new Promise((resolve, reject) => {
-    proto.get(url, (res) => {
+    https.get(url, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return downloadDirect(res.headers.location).then(resolve).catch(reject);
       }
@@ -25,138 +24,154 @@ function downloadDirect(url) {
 
 function downloadWithYtDlp(url, output) {
   const outFile = output || VIDEO_FILE;
-  console.log("Trying yt-dlp: " + url);
+  console.log("yt-dlp: " + url);
   try {
-    execSync('yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "' + outFile + '" "' + url + '"', {
-      stdio: "inherit",
-      timeout: 600000
+    execSync('yt-dlp --no-check-certificates -f "best" -o "' + outFile + '" "' + url + '"', {
+      stdio: "inherit", timeout: 600000
     });
     return true;
-  } catch (e) {
-    console.log("yt-dlp failed: " + e.message);
-    return false;
-  }
+  } catch (e) { return false; }
 }
 
-async function downloadFromGooglePhotos(url) {
-  console.log("Google Photos detected: " + url);
+function fetchPage(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { 
+      headers: { 
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9"
+      } 
+    }, (res) => {
+      let data = "";
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchPage(res.headers.location).then(resolve).catch(reject);
+      }
+      res.on("data", chunk => data += chunk);
+      res.on("end", () => resolve(data));
+      res.on("error", reject);
+    }).on("error", reject);
+  });
+}
+
+async function extractVideoFromGooglePhotos(url) {
+  console.log("Extracting video from Google Photos...");
   
-  // Extract album/photo key from URL
-  const keyMatch = url.match(/key=([A-Za-z0-9_-]+)/);
-  const photoMatch = url.match(/photo\/([A-Za-z0-9_-]+)/);
-  const albumMatch = url.match(/share\/([A-Za-z0-9_-]+)/);
-  
-  const mediaId = (keyMatch && keyMatch[1]) || (photoMatch && photoMatch[1]) || (albumMatch && albumMatch[1]);
-  
-  if (mediaId) {
-    console.log("Media ID: " + mediaId);
+  try {
+    const html = await fetchPage(url);
     
-    // Try direct Google content URL formats
-    const directUrls = [
-      "https://lh3.googleusercontent.com/" + mediaId + "=dv",
-      "https://lh3.googleusercontent.com/" + mediaId + "=w1920-h1080",
-      "https://photos.fife.usercontent.google.com/" + mediaId,
+    // Look for video URLs in the page
+    const videoPatterns = [
+      /https:\/\/video\.googleusercontent\.com\/[^"'\s\\]+/g,
+      /https:\/\/lh3\.googleusercontent\.com\/[^"'\s\\]+=dv/g,
+      /https:\/\/[^"'\s\\]*\.googleusercontent\.com\/[^"'\s\\]*video[^"'\s\\]*/g,
+      /https:\/\/[^"'\s\\]*fife[^"'\s\\]*\.google\.com\/[^"'\s\\]*/g,
     ];
     
-    for (const dUrl of directUrls) {
-      console.log("Trying: " + dUrl);
-      try {
-        await downloadDirect(dUrl);
-        if (fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 1000) {
-          console.log("Downloaded from direct URL!");
-          return true;
+    for (const pattern of videoPatterns) {
+      const matches = html.match(pattern);
+      if (matches && matches.length > 0) {
+        for (const match of matches) {
+          const cleanUrl = match.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+          console.log("Found URL: " + cleanUrl);
+          try {
+            await downloadDirect(cleanUrl);
+            if (fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 10000) {
+              console.log("Success!");
+              return true;
+            }
+          } catch (e) {
+            console.log("Failed: " + e.message);
+          }
         }
-      } catch (e) {
-        console.log("Failed: " + e.message);
       }
     }
+    
+    // Try to find JSON data with video URLs
+    const jsonPattern = /\[[\s\S]*?"(https:\/\/[^"]*video[^"]*)"/g;
+    let match;
+    while ((match = jsonPattern.exec(html)) !== null) {
+      const videoUrl = match[1].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+      console.log("Trying JSON URL: " + videoUrl);
+      try {
+        await downloadDirect(videoUrl);
+        if (fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 10000) {
+          console.log("Success!");
+          return true;
+        }
+      } catch (e) {}
+    }
+    
+  } catch (e) {
+    console.log("Page fetch failed: " + e.message);
   }
   
-  // Try yt-dlp as fallback
-  console.log("Trying yt-dlp for Google Photos...");
-  return downloadWithYtDlp(url);
+  return false;
 }
 
 async function main() {
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  }
+  if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
   const videoUrl = process.env.VIDEO_URL || "";
   const channelUrl = process.env.CHANNEL_URL || "";
   const multipleUrlsStr = process.env.MULTIPLE_URLS || "[]";
-  const videosPerRun = parseInt(process.env.VIDEOS_PER_RUN || "1");
 
   let multipleUrls = [];
-  try { multipleUrls = JSON.parse(multipleUrlsStr); } catch { 
-    multipleUrls = multipleUrlsStr.split("\n").map(u => u.trim()).filter(Boolean); 
+  try { multipleUrls = JSON.parse(multipleUrlsStr); } catch {
+    multipleUrls = multipleUrlsStr.split("\n").map(u => u.trim()).filter(Boolean);
   }
 
-  let urlsToDownload = [];
-  if (videoUrl) urlsToDownload.push(videoUrl);
-  if (multipleUrls.length > 0) urlsToDownload = urlsToDownload.concat(multipleUrls.slice(0, videosPerRun));
-  
-  if (urlsToDownload.length === 0 && channelUrl) {
-    console.log("Fetching channel: " + channelUrl);
+  let urls = [];
+  if (videoUrl) urls.push(videoUrl);
+  if (multipleUrls.length > 0) urls = urls.concat(multipleUrls);
+
+  if (urls.length === 0 && channelUrl) {
     try {
-      const output = execSync('yt-dlp --flat-playlist --playlist-end ' + videosPerRun + ' --print url "' + channelUrl + '"', {
-        encoding: "utf-8", timeout: 60000
-      });
-      urlsToDownload = output.trim().split("\n").filter(Boolean).slice(0, videosPerRun);
-    } catch (e) {
-      console.error("Channel fetch failed: " + e.message);
-    }
+      const out = execSync('yt-dlp --flat-playlist --playlist-end 1 --print url "' + channelUrl + '"', { encoding: "utf-8", timeout: 60000 });
+      urls = out.trim().split("\n").filter(Boolean);
+    } catch (e) {}
   }
 
-  if (urlsToDownload.length === 0) {
-    console.error("No URLs to download!");
-    process.exit(1);
-  }
+  if (urls.length === 0) { console.error("No URLs!"); process.exit(1); }
 
-  console.log("Downloading " + urlsToDownload.length + " video(s)...\n");
+  console.log("Processing " + urls.length + " URL(s)...\n");
 
-  for (let i = 0; i < urlsToDownload.length; i++) {
-    const url = urlsToDownload[i];
-    const outputFile = i === 0 ? VIDEO_FILE : path.join(OUTPUT_DIR, "input-video-" + i + ".mp4");
-    
-    console.log("[" + (i + 1) + "/" + urlsToDownload.length + "] " + url);
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
+    const outFile = i === 0 ? VIDEO_FILE : path.join(OUTPUT_DIR, "video-" + i + ".mp4");
+    console.log("[" + (i + 1) + "] " + url);
 
-    const isGooglePhotos = url.includes("photos.google.com") || url.includes("photos.app.goo.gl");
-    const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
+    const isGP = url.includes("photos.google.com") || url.includes("photos.app.goo.gl");
+    const isYT = url.includes("youtube.com") || url.includes("youtu.be");
 
-    if (isGooglePhotos) {
+    let success = false;
+
+    if (isGP) {
+      console.log("Google Photos detected");
       if (i === 0) {
-        await downloadFromGooglePhotos(url);
-      } else {
-        downloadWithYtDlp(url, outputFile);
+        success = await extractVideoFromGooglePhotos(url);
       }
-    } else if (isYouTube) {
-      downloadWithYtDlp(url, outputFile);
+      if (!success) {
+        console.log("Trying yt-dlp...");
+        success = downloadWithYtDlp(url, outFile);
+      }
+    } else if (isYT) {
+      success = downloadWithYtDlp(url, outFile);
     } else {
-      try {
-        console.log("Direct download...");
-        await downloadDirect(url);
-      } catch (e) {
-        console.log("Direct failed, trying yt-dlp...");
-        downloadWithYtDlp(url, outputFile);
+      try { await downloadDirect(url); success = true; } catch {
+        success = downloadWithYtDlp(url, outFile);
       }
     }
 
-    if (fs.existsSync(i === 0 ? VIDEO_FILE : outputFile)) {
-      const stats = fs.statSync(i === 0 ? VIDEO_FILE : outputFile);
+    if (fs.existsSync(i === 0 ? VIDEO_FILE : outFile)) {
+      const stats = fs.statSync(i === 0 ? VIDEO_FILE : outFile);
       console.log("Downloaded: " + (stats.size / 1024 / 1024).toFixed(2) + " MB\n");
+    } else if (!success) {
+      console.error("Failed to download!\n");
     }
   }
 
-  if (!fs.existsSync(VIDEO_FILE)) {
-    console.error("No video downloaded!");
-    process.exit(1);
-  }
-
-  console.log("Download complete!");
+  if (!fs.existsSync(VIDEO_FILE)) { console.error("No video!"); process.exit(1); }
+  console.log("Done!");
 }
 
-main().catch(err => {
-  console.error("Failed: " + err.message);
-  process.exit(1);
-});
+main().catch(e => { console.error(e.message); process.exit(1); });
