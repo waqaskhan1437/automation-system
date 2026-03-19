@@ -210,8 +210,6 @@ export async function handleAutomationsRoutes(
       return jsonResponse({ success: false, error: errorMsg }, 500);
     }
   }
-    });
-  }
 
   // POST /api/automations/:id/pause
   if (id && action === "pause" && method === "POST") {
