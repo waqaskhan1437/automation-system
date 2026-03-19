@@ -7,12 +7,12 @@ const OUTPUT_DIR = path.join(process.cwd(), "output");
 const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 
 function downloadWithCurl(url) {
-  console.log("curl: " + url.substring(0, 80) + "...");
+  console.log("curl: " + url.substring(0, 60) + "...");
   try {
     execSync('curl -L -o "' + VIDEO_FILE + '" "' + url + '" --max-time 180 -A "Mozilla/5.0"', {
       stdio: "inherit", timeout: 200000
     });
-    return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 100000; // Must be > 100KB
+    return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
   } catch { return false; }
 }
 
@@ -20,9 +20,9 @@ function downloadWithYtDlp(url) {
   console.log("yt-dlp: " + url);
   try {
     execSync('yt-dlp -f "best[ext=mp4]/best" --no-check-certificates -o "' + VIDEO_FILE + '" "' + url + '"', {
-      stdio: "inherit", timeout: 300000
+      stdio: "inherit", timeout: 600000
     });
-    return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 100000;
+    return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
   } catch { return false; }
 }
 
@@ -42,46 +42,31 @@ function fetchPage(url) {
 }
 
 async function downloadGooglePhotos(url) {
-  console.log("Google Photos: extracting...");
+  console.log("Google Photos: extracting video...");
   try {
     const html = await fetchPage(url);
     
-    // Look for VIDEO URLs only (not thumbnails)
-    // Video URLs typically have specific patterns
-    const videoPatterns = [
-      /https:\/\/video\.googleusercontent\.com\/[^"'\s\\]+/g,
-      /https:\/\/[^"'\s\\]*\.googleusercontent\.com\/[^"'\s\\]*=dv/g,
-      /https:\/\/[^"'\s\\]*video[^"'\s\\]*google[^"'\s\\]*/g,
-    ];
+    // Find all googleusercontent URLs
+    const allMatches = html.match(/https:\/\/[^"'\s\\]*googleusercontent\.com\/[^"'\s\\]+/g) || [];
     
-    for (const pattern of videoPatterns) {
-      const matches = html.match(pattern);
-      if (matches) {
-        for (const match of matches) {
-          const cleanUrl = match.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-          console.log("Video URL found!");
-          if (downloadWithCurl(cleanUrl)) {
-            return true;
-          }
+    for (const match of allMatches) {
+      const cleanUrl = match.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+      
+      // Skip tiny thumbnails
+      if (cleanUrl.match(/=s\d+$/)) continue;
+      if (cleanUrl.match(/=w\d+-h\d+-p-k-no$/)) continue;
+      
+      console.log("Trying: " + cleanUrl.substring(0, 80) + "...");
+      if (downloadWithCurl(cleanUrl)) {
+        const size = fs.statSync(VIDEO_FILE).size;
+        if (size > 50000) { // At least 50KB
+          console.log("Downloaded: " + (size / 1024 / 1024).toFixed(2) + " MB");
+          return true;
         }
       }
     }
-    
-    // If no video URL found, try to find any large media URL (skip thumbnails)
-    const allUrls = html.match(/https:\/\/lh3\.googleusercontent\.com\/[^"'\s\\]+/g) || [];
-    for (const u of allUrls) {
-      const cleanUrl = u.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-      // Skip thumbnails (usually have size params like =w100-h100)
-      if (cleanUrl.match(/=w\d+-h\d+/)) continue;
-      // Skip small images
-      if (cleanUrl.match(/=s\d+/)) continue;
-      console.log("Trying media URL...");
-      if (downloadWithCurl(cleanUrl)) {
-        return true;
-      }
-    }
   } catch (e) {
-    console.log("Extraction failed: " + e.message);
+    console.log("Google Photos failed: " + e.message);
   }
   return false;
 }
@@ -118,17 +103,16 @@ function main() {
   const isGooglePhotos = url.includes("photos.google") || url.includes("photos.app.goo.gl");
   const isDirectFile = url.match(/\.(mp4|mov|webm|mkv)$/i);
 
+  // Run synchronously
   if (isGooglePhotos) {
-    // Google Photos - use yt-dlp (it may not work but worth trying)
-    // If yt-dlp fails, the extraction method is unreliable
-    console.log("Google Photos detected - using yt-dlp...");
-    const ok = downloadWithYtDlp(url);
-    if (!ok) {
-      console.log("yt-dlp cannot download Google Photos directly.");
-      console.log("Please use a direct video URL or YouTube link instead.");
-      process.exit(1);
-    }
-    finish(ok);
+    downloadGooglePhotos(url).then(ok => {
+      if (!ok) {
+        console.log("Trying yt-dlp...");
+        finish(downloadWithYtDlp(url));
+      } else {
+        finish(true);
+      }
+    });
     return;
   } else if (isYouTube) {
     finish(downloadWithYtDlp(url));
@@ -137,7 +121,6 @@ function main() {
     finish(downloadWithCurl(url));
     return;
   } else {
-    // Unknown - try curl first, then yt-dlp
     let ok = downloadWithCurl(url);
     if (!ok) ok = downloadWithYtDlp(url);
     finish(ok);
