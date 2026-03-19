@@ -205,7 +205,76 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [combineCount, setCombineCount] = useState("3");
   const [convertToShorts, setConvertToShorts] = useState(true);
 
+  // Taglines AI state
+  const [aiProviders, setAiProviders] = useState<{ id: string; label: string; hasKey: boolean }[]>([]);
+  const [selectedAI, setSelectedAI] = useState("openai");
+  const [generating, setGenerating] = useState(false);
+  const [topTaglines, setTopTaglines] = useState<string[]>([]);
+  const [bottomTaglines, setBottomTaglines] = useState<string[]>([]);
+  const [selectedTopTagline, setSelectedTopTagline] = useState("");
+  const [selectedBottomTagline, setSelectedBottomTagline] = useState("");
+  const [taglinePrompt, setTaglinePrompt] = useState("");
+
   const allPlatforms = ["instagram", "youtube", "tiktok", "facebook", "x"];
+
+  useEffect(() => {
+    fetch("/api/settings/ai")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          const d = data.data;
+          const providers = [
+            { id: "openai", label: "OpenAI", hasKey: !!d.openai_key },
+            { id: "gemini", label: "Gemini", hasKey: !!d.gemini_key },
+            { id: "grok", label: "Grok", hasKey: !!d.grok_key },
+            { id: "cohere", label: "Cohere", hasKey: !!d.cohere_key },
+            { id: "openrouter", label: "OpenRouter", hasKey: !!d.openrouter_key },
+          ];
+          setAiProviders(providers.filter((p) => p.hasKey));
+          if (d.default_provider) setSelectedAI(d.default_provider);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const generateTaglines = async () => {
+    setGenerating(true);
+    setTopTaglines([]);
+    setBottomTaglines([]);
+
+    const prompt = taglinePrompt || `Generate 5 catchy top taglines and 5 catchy bottom taglines for a ${aspectRatio} ${convertToShorts ? "short" : "video"} about "${name || "social media content"}". 
+    Top taglines should be hook/catchy headlines (max 8 words each). 
+    Bottom taglines should be call-to-action or engaging closing lines (max 8 words each).
+    Return JSON format: {"top": ["tagline1", "tagline2", ...], "bottom": ["tagline1", "tagline2", ...]}`;
+
+    try {
+      const res = await fetch("/api/settings/ai/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: selectedAI, prompt }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setTopTaglines(data.data.top || []);
+        setBottomTaglines(data.data.bottom || []);
+        if (data.data.top?.[0]) setSelectedTopTagline(data.data.top[0]);
+        if (data.data.bottom?.[0]) setSelectedBottomTagline(data.data.bottom[0]);
+      } else {
+        // Fallback mock taglines if API not available
+        setTopTaglines(["Watch till the end!", "You won't believe this!", "This changed everything!", "The secret revealed!", "Nobody talks about this!"]);
+        setBottomTaglines(["Follow for more!", "Like & Share!", "Comment your thoughts!", "Save for later!", "Subscribe now!"]);
+        setSelectedTopTagline("Watch till the end!");
+        setSelectedBottomTagline("Follow for more!");
+      }
+    } catch {
+      // Fallback
+      setTopTaglines(["Watch till the end!", "You won't believe this!", "This changed everything!", "The secret revealed!", "Nobody talks about this!"]);
+      setBottomTaglines(["Follow for more!", "Like & Share!", "Comment your thoughts!", "Save for later!", "Subscribe now!"]);
+      setSelectedTopTagline("Watch till the end!");
+      setSelectedBottomTagline("Follow for more!");
+    }
+    setGenerating(false);
+  };
 
   const tabs = [
     { id: "basic" as const, label: "Basic", icon: "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
@@ -254,8 +323,12 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
         audio_codec: audioCodec,
       },
       taglines: {
+        ai_provider: selectedAI,
+        top_tagline: selectedTopTagline,
+        bottom_tagline: selectedBottomTagline,
+        all_top: topTaglines,
+        all_bottom: bottomTaglines,
         watermark: { text: watermarkText, position: watermarkPosition, size: parseInt(watermarkSize) },
-        overlay: { text: overlayText, position: overlayPosition, size: parseInt(overlaySize) },
       },
       social_content: {
         caption,
@@ -647,7 +720,135 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 
           {activeTab === "taglines" && (
             <div className="space-y-5">
-              {/* Watermark Section */}
+              {/* AI Provider Selection */}
+              <div className="glass-card p-5">
+                <p className="text-sm font-medium mb-4">Generate Taglines with AI</p>
+                <div className="space-y-3">
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs text-[#a1a1aa] mb-1">Select AI Provider</label>
+                      <select className="glass-select text-sm" value={selectedAI} onChange={(e) => setSelectedAI(e.target.value)}>
+                        {aiProviders.length > 0 ? (
+                          aiProviders.map((p) => (
+                            <option key={p.id} value={p.id}>{p.label}</option>
+                          ))
+                        ) : (
+                          <option value="">No AI configured (go to Settings → AI Settings)</option>
+                        )}
+                      </select>
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        onClick={generateTaglines}
+                        disabled={generating || aiProviders.length === 0}
+                        className="glass-button-primary text-sm h-[42px] px-6 whitespace-nowrap"
+                      >
+                        {generating ? (
+                          <span className="flex items-center gap-2">
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            Generating...
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-2">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                            Generate
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Custom Prompt (optional)</label>
+                    <textarea
+                      className="glass-input text-xs min-h-[50px] resize-none"
+                      placeholder="e.g., Generate motivational taglines about fitness and health..."
+                      value={taglinePrompt}
+                      onChange={(e) => setTaglinePrompt(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Top Taglines */}
+              <div className="glass-card p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-sm font-medium">Top Taglines</p>
+                    <p className="text-xs text-[#a1a1aa]">Appears at the top of video (hook/headline)</p>
+                  </div>
+                  {selectedTopTagline && (
+                    <span className="badge badge-active text-xs">Selected</span>
+                  )}
+                </div>
+                {topTaglines.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {topTaglines.map((tag, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setSelectedTopTagline(tag)}
+                        className={`p-3 rounded-xl text-left text-sm transition-all ${
+                          selectedTopTagline === tag
+                            ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white"
+                            : "glass-button hover:bg-[rgba(255,255,255,0.08)]"
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-[#a1a1aa] text-sm">
+                    <svg className="w-8 h-8 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                    </svg>
+                    Click Generate to create AI taglines
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Taglines */}
+              <div className="glass-card p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-sm font-medium">Bottom Taglines</p>
+                    <p className="text-xs text-[#a1a1aa]">Appears at the bottom of video (CTA/closing)</p>
+                  </div>
+                  {selectedBottomTagline && (
+                    <span className="badge badge-active text-xs">Selected</span>
+                  )}
+                </div>
+                {bottomTaglines.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {bottomTaglines.map((tag, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setSelectedBottomTagline(tag)}
+                        className={`p-3 rounded-xl text-left text-sm transition-all ${
+                          selectedBottomTagline === tag
+                            ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white"
+                            : "glass-button hover:bg-[rgba(255,255,255,0.08)]"
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-[#a1a1aa] text-sm">
+                    <svg className="w-8 h-8 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                    </svg>
+                    Click Generate to create AI taglines
+                  </div>
+                )}
+              </div>
+
+              {/* Watermark */}
               <div className="glass-card p-5">
                 <p className="text-sm font-medium mb-4">Watermark</p>
                 <div className="grid grid-cols-3 gap-4">
@@ -662,7 +863,6 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                       <option value="topright">Top Right</option>
                       <option value="bottomleft">Bottom Left</option>
                       <option value="bottomright">Bottom Right</option>
-                      <option value="center">Center</option>
                     </select>
                   </div>
                   <div>
@@ -672,49 +872,33 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                 </div>
               </div>
 
-              {/* Overlay Text Section */}
-              <div className="glass-card p-5">
-                <p className="text-sm font-medium mb-4">Overlay Text</p>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="col-span-3 sm:col-span-1">
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Overlay Text</label>
-                    <input className="glass-input text-sm" placeholder="Subscribe for more!" value={overlayText} onChange={(e) => setOverlayText(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Position</label>
-                    <select className="glass-select text-sm" value={overlayPosition} onChange={(e) => setOverlayPosition(e.target.value)}>
-                      <option value="topleft">Top Left</option>
-                      <option value="topright">Top Right</option>
-                      <option value="bottomleft">Bottom Left</option>
-                      <option value="bottomright">Bottom Right</option>
-                      <option value="center">Center</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Font Size</label>
-                    <input className="glass-input text-sm" type="number" placeholder="48" value={overlaySize} onChange={(e) => setOverlaySize(e.target.value)} />
-                  </div>
-                </div>
-              </div>
-
               {/* Preview */}
               <div className="glass-card p-4">
                 <p className="text-xs text-[#a1a1aa] mb-2">Preview</p>
-                <div className="relative w-full h-48 rounded-lg bg-[#1a1a2e] overflow-hidden">
+                <div className={`relative w-full ${aspectRatio === "9:16" ? "h-72" : aspectRatio === "16:9" ? "h-40" : "h-56"} rounded-lg bg-[#1a1a2e] overflow-hidden`}>
                   <div className="absolute inset-0 flex items-center justify-center">
                     <svg className="w-12 h-12 text-[rgba(255,255,255,0.1)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </div>
-                  {watermarkText && (
-                    <span className={`absolute text-white/50 text-xs ${watermarkPosition === "topleft" ? "top-2 left-2" : watermarkPosition === "topright" ? "top-2 right-2" : watermarkPosition === "bottomleft" ? "bottom-2 left-2" : watermarkPosition === "center" ? "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" : "bottom-2 right-2"}`}>
-                      {watermarkText}
-                    </span>
+                  {selectedTopTagline && (
+                    <div className="absolute top-3 left-0 right-0 text-center">
+                      <span className="bg-black/60 text-white text-sm font-bold px-3 py-1 rounded-lg">
+                        {selectedTopTagline}
+                      </span>
+                    </div>
                   )}
-                  {overlayText && (
-                    <span className={`absolute text-white text-sm font-bold ${overlayPosition === "topleft" ? "top-6 left-2" : overlayPosition === "topright" ? "top-6 right-2" : overlayPosition === "bottomleft" ? "bottom-6 left-2" : overlayPosition === "bottomright" ? "bottom-6 right-2" : "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"}`}>
-                      {overlayText}
+                  {selectedBottomTagline && (
+                    <div className="absolute bottom-3 left-0 right-0 text-center">
+                      <span className="bg-black/60 text-white text-sm font-bold px-3 py-1 rounded-lg">
+                        {selectedBottomTagline}
+                      </span>
+                    </div>
+                  )}
+                  {watermarkText && (
+                    <span className={`absolute text-white/50 text-xs ${watermarkPosition === "topleft" ? "top-2 left-2" : watermarkPosition === "topright" ? "top-2 right-2" : watermarkPosition === "bottomleft" ? "bottom-2 left-2" : "bottom-2 right-2"}`}>
+                      {watermarkText}
                     </span>
                   )}
                 </div>

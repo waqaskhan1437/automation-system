@@ -180,5 +180,109 @@ export async function handleSettingsRoutes(
     }
   }
 
+  // AI GENERATE TAGLINES
+  if (path === "/api/settings/ai/generate" && method === "POST") {
+    const body = await request.json() as { provider: string; prompt: string };
+    if (!body.provider || !body.prompt) {
+      return jsonResponse({ success: false, error: "provider and prompt required" }, 400);
+    }
+
+    const aiSettings = await env.DB.prepare("SELECT * FROM settings_ai LIMIT 1").first<AISettings>();
+    if (!aiSettings) {
+      return jsonResponse({ success: false, error: "No AI settings configured" }, 400);
+    }
+
+    let apiKey = "";
+    switch (body.provider) {
+      case "openai": apiKey = aiSettings.openai_key || ""; break;
+      case "gemini": apiKey = aiSettings.gemini_key || ""; break;
+      case "grok": apiKey = aiSettings.grok_key || ""; break;
+      case "cohere": apiKey = aiSettings.cohere_key || ""; break;
+      case "openrouter": apiKey = aiSettings.openrouter_key || ""; break;
+      default: return jsonResponse({ success: false, error: "Unknown provider" }, 400);
+    }
+
+    if (!apiKey) {
+      return jsonResponse({ success: false, error: `No API key for ${body.provider}` }, 400);
+    }
+
+    try {
+      let response;
+      const systemPrompt = "You are a creative social media expert. Always respond with valid JSON only.";
+
+      switch (body.provider) {
+        case "openai": {
+          response = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "gpt-4o-mini", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: body.prompt }], temperature: 0.8 }),
+          });
+          break;
+        }
+        case "openrouter": {
+          response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "meta-llama/llama-3.1-8b-instruct:free", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: body.prompt }], temperature: 0.8 }),
+          });
+          break;
+        }
+        case "grok": {
+          response = await fetch("https://api.x.ai/v1/chat/completions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "grok-beta", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: body.prompt }], temperature: 0.8 }),
+          });
+          break;
+        }
+        case "gemini": {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contents: [{ parts: [{ text: body.prompt }] }], generationConfig: { temperature: 0.8 } }),
+          });
+          break;
+        }
+        case "cohere": {
+          response = await fetch("https://api.cohere.ai/v1/generate", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "command-r", prompt: body.prompt, temperature: 0.8, max_tokens: 500 }),
+          });
+          break;
+        }
+      }
+
+      if (!response || !response.ok) {
+        return jsonResponse({ success: false, error: "AI API request failed" }, 500);
+      }
+
+      const aiData = await response.json() as Record<string, unknown>;
+      let content = "";
+
+      if (body.provider === "gemini") {
+        const candidates = (aiData as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }).candidates;
+        content = candidates?.[0]?.content?.parts?.[0]?.text || "";
+      } else if (body.provider === "cohere") {
+        const generations = (aiData as { generations?: Array<{ text?: string }> }).generations;
+        content = generations?.[0]?.text || "";
+      } else {
+        const choices = (aiData as { choices?: Array<{ message?: { content?: string }> }> }).choices;
+        content = choices?.[0]?.message?.content || "";
+      }
+
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as { top?: string[]; bottom?: string[] };
+        return jsonResponse({ success: true, data: parsed });
+      }
+
+      return jsonResponse({ success: false, error: "Could not parse AI response" });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "AI generation failed";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
   return jsonResponse({ success: false, error: "Settings route not found" }, 404);
 }
