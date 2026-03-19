@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "automation-db"
-database_id = "local-dev-db-id"
+database_id = "d1a88132-78e9-4fab-9855-4cd554f7febc"
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
