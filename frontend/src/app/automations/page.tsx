@@ -11,10 +11,25 @@ interface Automation {
   created_at: string;
 }
 
+interface FFmpegConfig {
+  trim_start: string;
+  trim_end: string;
+  resize: string;
+  watermark_text: string;
+  watermark_position: string;
+  overlay_text: string;
+  overlay_position: string;
+  fps: string;
+  codec: string;
+  audio_codec: string;
+  custom_args: string;
+}
+
 export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "video" | "image">("all");
+  const [modalType, setModalType] = useState<"video" | "image" | null>(null);
 
   useEffect(() => {
     fetchAutomations();
@@ -56,12 +71,12 @@ export default function AutomationsPage() {
           <p className="text-[#a1a1aa] mt-1">Manage your automation pipelines</p>
         </div>
         <div className="flex gap-3">
-          <a href="/automations/video/new" className="glass-button-primary">
+          <button onClick={() => setModalType("video")} className="glass-button-primary">
             + Video
-          </a>
-          <a href="/automations/image/new" className="glass-button-primary">
+          </button>
+          <button onClick={() => setModalType("image")} className="glass-button-primary">
             + Image
-          </a>
+          </button>
         </div>
       </div>
 
@@ -115,11 +130,11 @@ export default function AutomationsPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {auto.status === "active" ? (
+                {auto.status === "active" && (
                   <button onClick={() => handleAction(auto.id, "run")} className="glass-button-primary text-sm py-2 px-4">
                     Run Now
                   </button>
-                ) : null}
+                )}
                 {auto.status === "active" ? (
                   <button onClick={() => handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">
                     Pause
@@ -137,6 +152,396 @@ export default function AutomationsPage() {
           ))}
         </div>
       )}
+
+      {modalType === "video" && (
+        <VideoModal onClose={() => setModalType(null)} onCreated={() => { setModalType(null); fetchAutomations(); }} />
+      )}
+      {modalType === "image" && (
+        <ImageModal onClose={() => setModalType(null)} onCreated={() => { setModalType(null); fetchAutomations(); }} />
+      )}
+    </div>
+  );
+}
+
+/* ========== VIDEO MODAL ========== */
+function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [step, setStep] = useState(1);
+  const [name, setName] = useState("");
+  const [videoSource, setVideoSource] = useState<"direct" | "youtube" | "bunny">("direct");
+  const [videoUrl, setVideoUrl] = useState("");
+  const [outputFormat, setOutputFormat] = useState("mp4");
+  const [outputQuality, setOutputQuality] = useState("high");
+  const [outputResolution, setOutputResolution] = useState("1080x1920");
+  const [schedule, setSchedule] = useState("once");
+  const [platforms, setPlatforms] = useState<string[]>([]);
+  const [ffmpeg, setFfmpeg] = useState<FFmpegConfig>({
+    trim_start: "", trim_end: "", resize: "",
+    watermark_text: "", watermark_position: "bottomright",
+    overlay_text: "", overlay_position: "center",
+    fps: "", codec: "libx264", audio_codec: "aac", custom_args: "",
+  });
+  const [creating, setCreating] = useState(false);
+
+  const allPlatforms = ["instagram", "youtube", "tiktok", "facebook", "x"];
+
+  const updateFfmpeg = (key: keyof FFmpegConfig, value: string) => {
+    setFfmpeg((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleCreate = async () => {
+    setCreating(true);
+    const config = {
+      video_source: videoSource, video_url: videoUrl,
+      ffmpeg_config: ffmpeg, output_format: outputFormat,
+      output_quality: outputQuality, output_resolution: outputResolution, platforms,
+    };
+    try {
+      const res = await fetch("/api/automations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, type: "video", config: JSON.stringify(config), schedule: schedule === "once" ? null : schedule }),
+      });
+      const data = await res.json();
+      if (data.success) onCreated();
+      else alert("Failed: " + data.error);
+    } catch { alert("Failed to create"); }
+    setCreating(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="glass-card p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-thin" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-bold">Create Video Automation</h3>
+          <button onClick={onClose} className="glass-button py-1 px-3 text-sm">Close</button>
+        </div>
+
+        <div className="flex items-center gap-2 mb-6">
+          {[1, 2, 3, 4, 5].map((s) => (
+            <div key={s} className="flex items-center gap-2">
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${s === step ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : s < step ? "bg-[#10b981] text-white" : "glass-button"}`}>{s}</div>
+              {s < 5 && <div className={`w-8 h-0.5 ${s < step ? "bg-[#10b981]" : "bg-[rgba(255,255,255,0.1)]"}`} />}
+            </div>
+          ))}
+        </div>
+
+        {step === 1 && (
+          <div className="space-y-4">
+            <h4 className="font-semibold">Basic Info</h4>
+            <div>
+              <label className="block text-sm text-[#a1a1aa] mb-1">Automation Name</label>
+              <input className="glass-input" placeholder="e.g., Daily YouTube Shorts" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="space-y-4">
+            <h4 className="font-semibold">Video Source</h4>
+            <div className="flex gap-2">
+              {(["direct", "youtube", "bunny"] as const).map((src) => (
+                <button key={src} onClick={() => setVideoSource(src)} className={`px-4 py-2 rounded-xl text-sm font-medium capitalize ${videoSource === src ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
+                  {src === "direct" ? "Direct URL" : src === "youtube" ? "YouTube" : "Bunny CDN"}
+                </button>
+              ))}
+            </div>
+            <div>
+              <label className="block text-sm text-[#a1a1aa] mb-1">Video URL</label>
+              <input className="glass-input" placeholder={videoSource === "youtube" ? "https://youtube.com/watch?v=..." : "https://example.com/video.mp4"} value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} />
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="space-y-4">
+            <h4 className="font-semibold">FFmpeg Configuration</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Trim Start</label>
+                <input className="glass-input text-sm" placeholder="00:00:05" value={ffmpeg.trim_start} onChange={(e) => updateFfmpeg("trim_start", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Trim End</label>
+                <input className="glass-input text-sm" placeholder="00:01:00" value={ffmpeg.trim_end} onChange={(e) => updateFfmpeg("trim_end", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Resize</label>
+                <input className="glass-input text-sm" placeholder="1080:1920" value={ffmpeg.resize} onChange={(e) => updateFfmpeg("resize", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">FPS</label>
+                <input className="glass-input text-sm" type="number" placeholder="30" value={ffmpeg.fps} onChange={(e) => updateFfmpeg("fps", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Watermark Text</label>
+                <input className="glass-input text-sm" placeholder="@yourhandle" value={ffmpeg.watermark_text} onChange={(e) => updateFfmpeg("watermark_text", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Overlay Text</label>
+                <input className="glass-input text-sm" placeholder="Text on video" value={ffmpeg.overlay_text} onChange={(e) => updateFfmpeg("overlay_text", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Video Codec</label>
+                <select className="glass-select text-sm" value={ffmpeg.codec} onChange={(e) => updateFfmpeg("codec", e.target.value)}>
+                  <option value="libx264">H.264</option>
+                  <option value="libx265">H.265/HEVC</option>
+                  <option value="libvpx-vp9">VP9</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Audio Codec</label>
+                <select className="glass-select text-sm" value={ffmpeg.audio_codec} onChange={(e) => updateFfmpeg("audio_codec", e.target.value)}>
+                  <option value="aac">AAC</option>
+                  <option value="mp3">MP3</option>
+                  <option value="copy">Copy</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 4 && (
+          <div className="space-y-4">
+            <h4 className="font-semibold">Output & Platforms</h4>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Format</label>
+                <select className="glass-select text-sm" value={outputFormat} onChange={(e) => setOutputFormat(e.target.value)}>
+                  <option value="mp4">MP4</option>
+                  <option value="mov">MOV</option>
+                  <option value="webm">WebM</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Quality</label>
+                <select className="glass-select text-sm" value={outputQuality} onChange={(e) => setOutputQuality(e.target.value)}>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Resolution</label>
+                <select className="glass-select text-sm" value={outputResolution} onChange={(e) => setOutputResolution(e.target.value)}>
+                  <option value="1080x1920">1080x1920</option>
+                  <option value="1920x1080">1920x1080</option>
+                  <option value="1080x1080">1080x1080</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-2">Target Platforms</label>
+              <div className="flex flex-wrap gap-2">
+                {allPlatforms.map((p) => (
+                  <button key={p} onClick={() => setPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p])} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${platforms.includes(p) ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Schedule</label>
+              <select className="glass-select text-sm" value={schedule} onChange={(e) => setSchedule(e.target.value)}>
+                <option value="once">Run Once (Manual)</option>
+                <option value="0 */6 * * *">Every 6 Hours</option>
+                <option value="0 0 * * *">Daily</option>
+                <option value="0 0 * * 0">Weekly</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {step === 5 && (
+          <div className="space-y-3">
+            <h4 className="font-semibold">Review</h4>
+            <div className="glass-card p-3"><p className="text-xs text-[#a1a1aa]">Name</p><p className="text-sm font-medium">{name || "-"}</p></div>
+            <div className="glass-card p-3"><p className="text-xs text-[#a1a1aa]">Source</p><p className="text-sm font-medium capitalize">{videoSource} - {videoUrl || "-"}</p></div>
+            <div className="glass-card p-3"><p className="text-xs text-[#a1a1aa]">Output</p><p className="text-sm font-medium">{outputFormat.toUpperCase()} | {outputQuality} | {outputResolution}</p></div>
+            <div className="glass-card p-3"><p className="text-xs text-[#a1a1aa]">Platforms</p><div className="flex gap-1 mt-1">{platforms.map((p) => <span key={p} className="badge badge-active text-xs capitalize">{p}</span>)}</div></div>
+          </div>
+        )}
+
+        <div className="flex justify-between mt-6">
+          <button onClick={() => setStep((s) => Math.max(1, s - 1))} className={`glass-button text-sm ${step === 1 ? "opacity-30 pointer-events-none" : ""}`}>Previous</button>
+          {step < 5 ? (
+            <button onClick={() => setStep((s) => Math.min(5, s + 1))} className="glass-button-primary text-sm">Next</button>
+          ) : (
+            <button onClick={handleCreate} disabled={creating || !name} className="glass-button-primary text-sm">{creating ? "Creating..." : "Create"}</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========== IMAGE MODAL ========== */
+function ImageModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [step, setStep] = useState(1);
+  const [name, setName] = useState("");
+  const [imageSource, setImageSource] = useState<"url" | "placeholder">("url");
+  const [imageUrl, setImageUrl] = useState("");
+  const [placeholderText, setPlaceholderText] = useState("");
+  const [bgColor, setBgColor] = useState("#000000");
+  const [textColor, setTextColor] = useState("#ffffff");
+  const [textSize, setTextSize] = useState("48");
+  const [width, setWidth] = useState("1080");
+  const [height, setHeight] = useState("1080");
+  const [watermarkText, setWatermarkText] = useState("");
+  const [platforms, setPlatforms] = useState<string[]>([]);
+  const [schedule, setSchedule] = useState("once");
+  const [creating, setCreating] = useState(false);
+
+  const allPlatforms = ["instagram", "facebook", "x"];
+
+  const handleCreate = async () => {
+    setCreating(true);
+    const config = {
+      image_source: imageSource, image_url: imageUrl || null,
+      placeholder_text: placeholderText || null,
+      image_config: {
+        width: parseInt(width), height: parseInt(height),
+        background_color: bgColor, text_color: textColor,
+        text_size: parseInt(textSize),
+        watermark_text: watermarkText || null, watermark_position: "bottomright",
+      },
+      platforms,
+    };
+    try {
+      const res = await fetch("/api/automations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, type: "image", config: JSON.stringify(config), schedule: schedule === "once" ? null : schedule }),
+      });
+      const data = await res.json();
+      if (data.success) onCreated();
+      else alert("Failed: " + data.error);
+    } catch { alert("Failed to create"); }
+    setCreating(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="glass-card p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto scrollbar-thin" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-bold">Create Image Automation</h3>
+          <button onClick={onClose} className="glass-button py-1 px-3 text-sm">Close</button>
+        </div>
+
+        <div className="flex items-center gap-2 mb-6">
+          {[1, 2, 3].map((s) => (
+            <div key={s} className="flex items-center gap-2">
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${s === step ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : s < step ? "bg-[#10b981] text-white" : "glass-button"}`}>{s}</div>
+              {s < 3 && <div className={`w-12 h-0.5 ${s < step ? "bg-[#10b981]" : "bg-[rgba(255,255,255,0.1)]"}`} />}
+            </div>
+          ))}
+        </div>
+
+        {step === 1 && (
+          <div className="space-y-4">
+            <h4 className="font-semibold">Basic Info & Source</h4>
+            <div>
+              <label className="block text-sm text-[#a1a1aa] mb-1">Automation Name</label>
+              <input className="glass-input" placeholder="e.g., Daily Quote" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setImageSource("url")} className={`px-4 py-2 rounded-xl text-sm font-medium ${imageSource === "url" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>Image URL</button>
+              <button onClick={() => setImageSource("placeholder")} className={`px-4 py-2 rounded-xl text-sm font-medium ${imageSource === "placeholder" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>Text Placeholder</button>
+            </div>
+            {imageSource === "url" ? (
+              <div>
+                <label className="block text-sm text-[#a1a1aa] mb-1">Image URL</label>
+                <input className="glass-input" placeholder="https://example.com/image.jpg" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm text-[#a1a1aa] mb-1">Placeholder Text</label>
+                <textarea className="glass-input min-h-[80px] resize-none" placeholder="Enter text..." value={placeholderText} onChange={(e) => setPlaceholderText(e.target.value)} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="space-y-4">
+            <h4 className="font-semibold">Image Configuration</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Width</label>
+                <input className="glass-input text-sm" type="number" value={width} onChange={(e) => setWidth(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Height</label>
+                <input className="glass-input text-sm" type="number" value={height} onChange={(e) => setHeight(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Background Color</label>
+                <div className="flex gap-2">
+                  <input type="color" className="w-10 h-9 rounded-lg border border-[rgba(255,255,255,0.1)] bg-transparent cursor-pointer" value={bgColor} onChange={(e) => setBgColor(e.target.value)} />
+                  <input className="glass-input text-sm flex-1" value={bgColor} onChange={(e) => setBgColor(e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Text Color</label>
+                <div className="flex gap-2">
+                  <input type="color" className="w-10 h-9 rounded-lg border border-[rgba(255,255,255,0.1)] bg-transparent cursor-pointer" value={textColor} onChange={(e) => setTextColor(e.target.value)} />
+                  <input className="glass-input text-sm flex-1" value={textColor} onChange={(e) => setTextColor(e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Text Size</label>
+                <input className="glass-input text-sm" type="number" value={textSize} onChange={(e) => setTextSize(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Watermark</label>
+                <input className="glass-input text-sm" placeholder="@handle" value={watermarkText} onChange={(e) => setWatermarkText(e.target.value)} />
+              </div>
+            </div>
+            <div className="glass-card p-3">
+              <p className="text-xs text-[#a1a1aa] mb-2">Preview</p>
+              <div className="w-full h-32 rounded-lg flex items-center justify-center" style={{ backgroundColor: bgColor }}>
+                <p style={{ color: textColor, fontSize: `${Math.min(parseInt(textSize), 20)}px` }}>{placeholderText || "Your text here"}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="space-y-4">
+            <h4 className="font-semibold">Platforms & Schedule</h4>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-2">Target Platforms</label>
+              <div className="flex flex-wrap gap-2">
+                {allPlatforms.map((p) => (
+                  <button key={p} onClick={() => setPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p])} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${platforms.includes(p) ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Schedule</label>
+              <select className="glass-select text-sm" value={schedule} onChange={(e) => setSchedule(e.target.value)}>
+                <option value="once">Run Once</option>
+                <option value="0 */6 * * *">Every 6 Hours</option>
+                <option value="0 0 * * *">Daily</option>
+                <option value="0 0 * * 0">Weekly</option>
+              </select>
+            </div>
+            <div className="glass-card p-3 space-y-2">
+              <div className="grid grid-cols-2 gap-1 text-xs"><span className="text-[#a1a1aa]">Name:</span><span>{name || "-"}</span><span className="text-[#a1a1aa]">Source:</span><span className="capitalize">{imageSource}</span><span className="text-[#a1a1aa]">Size:</span><span>{width}x{height}</span></div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-between mt-6">
+          <button onClick={() => setStep((s) => Math.max(1, s - 1))} className={`glass-button text-sm ${step === 1 ? "opacity-30 pointer-events-none" : ""}`}>Previous</button>
+          {step < 3 ? (
+            <button onClick={() => setStep((s) => Math.min(3, s + 1))} className="glass-button-primary text-sm">Next</button>
+          ) : (
+            <button onClick={handleCreate} disabled={creating || !name} className="glass-button-primary text-sm">{creating ? "Creating..." : "Create"}</button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
