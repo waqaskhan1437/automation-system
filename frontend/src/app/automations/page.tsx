@@ -5,73 +5,179 @@ interface Automation {
   id: number;
   name: string;
   type: "video" | "image";
-  status: "active" | "paused" | "completed" | "failed";
+  status: string;
   schedule: string | null;
   last_run: string | null;
   created_at: string;
   config: string;
 }
 
+interface Job {
+  id: number;
+  automation_id: number;
+  status: string;
+  github_run_id: number | null;
+  github_run_url: string | null;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+interface StepInfo {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
 interface RunningJob {
-  automationId: number;
   jobId: number;
   status: string;
+  githubRunId: number | null;
   githubRunUrl: string | null;
-  steps: Array<{ name: string; status: string; conclusion: string | null }>;
+  steps: StepInfo[];
   error: string | null;
+  progress: number;
 }
 
 export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
-  const [showVideoModal, setShowVideoModal] = useState(false);
-  const [showImageModal, setShowImageModal] = useState(false);
+  const [showForm, setShowForm] = useState<"video" | "image" | null>(null);
   const [editData, setEditData] = useState<Automation | null>(null);
   const [runningJobs, setRunningJobs] = useState<Record<number, RunningJob>>({});
-  const [showLogs, setShowLogs] = useState<RunningJob | null>(null);
+  const [showLogs, setShowLogs] = useState<{ autoId: number; job: RunningJob } | null>(null);
 
-  const fetchAutomations = useCallback(async () => {
+  // Load automations and check for running jobs
+  const loadData = useCallback(async () => {
     try {
-      const res = await fetch("/api/automations");
-      const data = await res.json();
-      if (data.success) setAutomations(data.data || []);
+      const autoRes = await fetch("/api/automations");
+      const autoData = await autoRes.json();
+      if (autoData.success) setAutomations(autoData.data || []);
+
+      // Check for running jobs in DB
+      const jobsRes = await fetch("/api/jobs?status=running");
+      const jobsData = await jobsRes.json();
+      if (jobsData.success && jobsData.data) {
+        const running: Record<number, RunningJob> = {};
+        for (const job of jobsData.data) {
+          // Fetch live status from GitHub
+          try {
+            const statusRes = await fetch(`/api/jobs/${job.id}/logs`);
+            const statusData = await statusRes.json();
+            if (statusData.success) {
+              const completedSteps = statusData.data.steps?.filter((s: StepInfo) => s.conclusion === "success").length || 0;
+              const totalSteps = statusData.data.steps?.length || 1;
+              running[job.automation_id] = {
+                jobId: job.id,
+                status: statusData.data.run_status === "completed"
+                  ? (statusData.data.run_conclusion === "success" ? "success" : "failed")
+                  : statusData.data.run_status || "running",
+                githubRunId: statusData.data.run_id,
+                githubRunUrl: statusData.data.run_url,
+                steps: statusData.data.steps || [],
+                error: job.error_message,
+                progress: Math.round((completedSteps / totalSteps) * 100),
+              };
+            }
+          } catch {}
+        }
+        setRunningJobs(running);
+      }
     } catch {}
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetchAutomations(); }, [fetchAutomations]);
+  useEffect(() => {
+    loadData();
+    // Poll every 5 seconds for updates
+    const interval = setInterval(loadData, 5000);
+    return () => clearInterval(interval);
+  }, [loadData]);
 
   const handleRun = async (autoId: number) => {
-    setRunningJobs(prev => ({ ...prev, [autoId]: { automationId: autoId, jobId: 0, status: "queued", githubRunUrl: null, steps: [], error: null } }));
+    // Optimistic update
+    setRunningJobs(prev => ({
+      ...prev,
+      [autoId]: {
+        jobId: 0,
+        status: "queued",
+        githubRunId: null,
+        githubRunUrl: null,
+        steps: [{ name: "Starting...", status: "in_progress", conclusion: null }],
+        error: null,
+        progress: 0,
+      }
+    }));
+
     try {
-      const res = await fetch("/api/automations/" + autoId + "/run", { method: "POST" });
+      const res = await fetch(`/api/automations/${autoId}/run`, { method: "POST" });
       const data = await res.json();
       if (data.success) {
-        setRunningJobs(prev => ({ ...prev, [autoId]: { ...prev[autoId], jobId: data.data.job_id, status: "running" } }));
+        setRunningJobs(prev => ({
+          ...prev,
+          [autoId]: {
+            ...prev[autoId],
+            jobId: data.data.job_id,
+            status: "running",
+            githubRunId: data.data.github_run_id,
+            steps: [{ name: "Workflow triggered", status: "completed", conclusion: "success" }],
+            progress: 5,
+          }
+        }));
+        // Immediate poll
+        setTimeout(loadData, 3000);
       } else {
-        setRunningJobs(prev => ({ ...prev, [autoId]: { ...prev[autoId], status: "failed", error: data.error } }));
+        setRunningJobs(prev => ({
+          ...prev,
+          [autoId]: {
+            ...prev[autoId],
+            status: "failed",
+            error: data.error,
+            progress: 0,
+          }
+        }));
       }
-    } catch {
-      setRunningJobs(prev => ({ ...prev, [autoId]: { ...prev[autoId], status: "failed", error: "Request failed" } }));
+    } catch (err) {
+      setRunningJobs(prev => ({
+        ...prev,
+        [autoId]: {
+          ...prev[autoId],
+          status: "failed",
+          error: "Request failed",
+          progress: 0,
+        }
+      }));
     }
   };
 
   const handleAction = async (id: number, action: string) => {
     if (action === "run") { handleRun(id); return; }
     try {
-      if (action === "delete") await fetch("/api/automations/" + id, { method: "DELETE" });
-      else await fetch("/api/automations/" + id + "/" + action, { method: "POST" });
-      fetchAutomations();
+      if (action === "delete") await fetch(`/api/automations/${id}`, { method: "DELETE" });
+      else await fetch(`/api/automations/${id}/${action}`, { method: "POST" });
+      loadData();
     } catch {}
   };
 
-  const filtered = filter === "all" ? automations : automations.filter((a) => a.type === filter);
-
-  const getStatusBadge = (status: string) => {
-    const cls = status === "success" ? "badge-success" : status === "failed" ? "badge-failed" : status === "running" ? "badge-running" : "badge-queued";
-    return <span className={"badge " + cls}>{status}</span>;
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "success": return "#10b981";
+      case "failed": return "#ef4444";
+      case "running": case "in_progress": return "#6366f1";
+      case "queued": return "#f59e0b";
+      default: return "#a1a1aa";
+    }
   };
+
+  const getStepIcon = (step: StepInfo) => {
+    if (step.conclusion === "success") return "\u2713";
+    if (step.conclusion === "failure") return "\u2717";
+    if (step.status === "in_progress") return "\u27F3";
+    return "\u25CB";
+  };
+
+  const filtered = filter === "all" ? automations : automations.filter(a => a.type === filter);
 
   return (
     <div>
@@ -81,14 +187,14 @@ export default function AutomationsPage() {
           <p className="text-[#a1a1aa] mt-1">Manage your automation pipelines</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={() => { setEditData(null); setShowVideoModal(true); }} className="glass-button-primary">+ Video</button>
-          <button onClick={() => { setEditData(null); setShowImageModal(true); }} className="glass-button-primary">+ Image</button>
+          <button onClick={() => { setEditData(null); setShowForm("video"); }} className="glass-button-primary">+ Video</button>
+          <button onClick={() => { setEditData(null); setShowForm("image"); }} className="glass-button-primary">+ Image</button>
         </div>
       </div>
 
       <div className="flex gap-2 mb-6">
-        {["all", "video", "image"].map((f) => (
-          <button key={f} onClick={() => setFilter(f)} className={"px-4 py-2 rounded-xl text-sm font-medium capitalize " + (filter === f ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button")}>
+        {["all", "video", "image"].map(f => (
+          <button key={f} onClick={() => setFilter(f)} className={`px-4 py-2 rounded-xl text-sm font-medium capitalize ${filter === f ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
             {f === "all" ? "All" : f}
           </button>
         ))}
@@ -103,50 +209,108 @@ export default function AutomationsPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {filtered.map((auto) => {
+          {filtered.map(auto => {
             const running = runningJobs[auto.id];
+            const isRunning = running && running.status !== "success" && running.status !== "failed";
+
             return (
-              <div key={auto.id} className="glass-card p-5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={"w-10 h-10 rounded-xl flex items-center justify-center " + (auto.type === "video" ? "bg-[rgba(139,92,246,0.15)]" : "bg-[rgba(236,72,153,0.15)]")}>
-                      <span className={"text-lg " + (auto.type === "video" ? "text-[#8b5cf6]" : "text-[#ec4899]")}>{auto.type === "video" ? "\u25B6" : "\uD83D\uDDBC"}</span>
-                    </div>
-                    <div>
-                      <h4 className="font-semibold">{auto.name}</h4>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className={"badge " + (auto.type === "video" ? "badge-video" : "badge-image")}>{auto.type}</span>
-                        <span className={"badge badge-" + auto.status}>{auto.status}</span>
+              <div key={auto.id} className="glass-card overflow-hidden">
+                <div className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl ${auto.type === "video" ? "bg-[rgba(139,92,246,0.15)] text-[#8b5cf6]" : "bg-[rgba(236,72,153,0.15)] text-[#ec4899]"}`}>
+                        {auto.type === "video" ? "\u25B6" : "\uD83D\uDDBC"}
+                      </div>
+                      <div>
+                        <h4 className="font-semibold text-lg">{auto.name}</h4>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`badge ${auto.type === "video" ? "badge-video" : "badge-image"}`}>{auto.type}</span>
+                          <span className={`badge badge-${auto.status}`}>{auto.status}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => { setEditData(auto); setShowVideoModal(auto.type === "video"); setShowImageModal(auto.type === "image"); }} className="glass-button text-sm py-2 px-4">Edit</button>
-                    {running ? (
-                      <button onClick={() => setShowLogs(running)} className="glass-button-primary text-sm py-2 px-4 flex items-center gap-2">
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
-                        {running.status}
+
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => { setEditData(auto); setShowForm(auto.type as "video" | "image"); }} className="glass-button text-sm py-2 px-4">
+                        Edit
                       </button>
-                    ) : auto.status === "active" && (
-                      <button onClick={() => handleRun(auto.id)} className="glass-button-primary text-sm py-2 px-4">Run Now</button>
-                    )}
-                    {auto.status === "active" && !running && (
-                      <button onClick={() => handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">Pause</button>
-                    )}
-                    {auto.status !== "active" && !running && (
-                      <button onClick={() => handleAction(auto.id, "resume")} className="glass-button text-sm py-2 px-4">Resume</button>
-                    )}
-                    <button onClick={() => handleAction(auto.id, "delete")} className="glass-button text-sm py-2 px-4 text-[#ef4444]">Delete</button>
+
+                      {isRunning ? (
+                        <button onClick={() => setShowLogs({ autoId: auto.id, job: running! })} className="glass-button-primary text-sm py-2 px-4 flex items-center gap-2">
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          {running.progress}% Running
+                        </button>
+                      ) : running && (running.status === "success" || running.status === "failed") ? (
+                        <button onClick={() => setShowLogs({ autoId: auto.id, job: running })} className={`text-sm py-2 px-4 flex items-center gap-2 ${running.status === "success" ? "bg-[rgba(16,185,129,0.15)] text-[#10b981] rounded-xl" : "bg-[rgba(239,68,68,0.15)] text-[#ef4444] rounded-xl"}`}>
+                          {running.status === "success" ? "\u2713 Done" : "\u2717 Failed"}
+                        </button>
+                      ) : auto.status === "active" && (
+                        <button onClick={() => handleRun(auto.id)} className="glass-button-primary text-sm py-2 px-4">
+                          Run Now
+                        </button>
+                      )}
+
+                      {auto.status === "active" && !running && (
+                        <button onClick={() => handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">Pause</button>
+                      )}
+                      {auto.status !== "active" && !running && (
+                        <button onClick={() => handleAction(auto.id, "resume")} className="glass-button text-sm py-2 px-4">Resume</button>
+                      )}
+                      <button onClick={() => handleAction(auto.id, "delete")} className="glass-button text-sm py-2 px-4 text-[#ef4444]">Delete</button>
+                    </div>
                   </div>
                 </div>
+
+                {/* Progress Bar & Steps */}
                 {running && (
-                  <div className="mt-3 pt-3 border-t border-[rgba(255,255,255,0.05)]">
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 h-2 rounded-full bg-[rgba(255,255,255,0.1)] overflow-hidden">
-                        <div className={"h-full rounded-full transition-all duration-500 " + (running.status === "success" ? "bg-[#10b981] w-full" : running.status === "failed" ? "bg-[#ef4444] w-full" : "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] animate-pulse w-1/2")} />
-                      </div>
-                      <button onClick={() => setShowLogs(running)} className="text-xs text-[#6366f1] hover:underline">View Logs</button>
+                  <div className="px-5 pb-5">
+                    <div className="h-2 rounded-full bg-[rgba(255,255,255,0.1)] overflow-hidden mb-3">
+                      <div
+                        className="h-full rounded-full transition-all duration-700"
+                        style={{
+                          width: `${running.progress}%`,
+                          backgroundColor: getStatusColor(running.status),
+                        }}
+                      />
                     </div>
+
+                    {/* Steps */}
+                    {running.steps.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {running.steps.slice(0, 8).map((step, i) => (
+                          <span
+                            key={i}
+                            className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1"
+                            style={{
+                              backgroundColor: `${getStatusColor(step.conclusion || step.status)}15`,
+                              color: getStatusColor(step.conclusion || step.status),
+                            }}
+                          >
+                            {getStepIcon(step)} {step.name.length > 20 ? step.name.substring(0, 20) + "..." : step.name}
+                          </span>
+                        ))}
+                        {running.steps.length > 8 && (
+                          <span className="text-[11px] px-2 py-1 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#a1a1aa]">
+                            +{running.steps.length - 8} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Error */}
+                    {running.error && (
+                      <div className="mt-2 p-2 rounded-lg bg-[rgba(239,68,68,0.1)] text-xs text-[#ef4444]">
+                        {running.error}
+                      </div>
+                    )}
+
+                    {/* View Full Logs */}
+                    <button onClick={() => setShowLogs({ autoId: auto.id, job: running })} className="text-xs text-[#6366f1] hover:underline mt-2">
+                      View Full Logs {"\u2192"}
+                    </button>
                   </div>
                 )}
               </div>
@@ -157,65 +321,131 @@ export default function AutomationsPage() {
 
       {/* Logs Modal */}
       {showLogs && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowLogs(null)}>
-          <div className="glass-card max-w-lg w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold">Runner Status</h3>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowLogs(null)}>
+          <div className="glass-card max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="p-5 border-b border-[rgba(255,255,255,0.08)] flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold">Workflow Logs</h3>
+                <p className="text-xs text-[#a1a1aa]">Automation #{showLogs.autoId} / Job #{showLogs.job.jobId}</p>
+              </div>
               <button onClick={() => setShowLogs(null)} className="glass-button py-1 px-3 text-sm">Close</button>
             </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">{getStatusBadge(showLogs.status)}</div>
-              <div className="h-3 rounded-full bg-[rgba(255,255,255,0.1)] overflow-hidden">
-                <div className={"h-full rounded-full transition-all " + (showLogs.status === "success" ? "bg-[#10b981] w-full" : showLogs.status === "failed" ? "bg-[#ef4444] w-full" : "bg-[#6366f1] w-1/2 animate-pulse")} />
+
+            {/* Content */}
+            <div className="p-5 overflow-y-auto flex-1 scrollbar-thin space-y-4">
+              {/* Status */}
+              <div className="flex items-center gap-3">
+                <span className="badge" style={{ backgroundColor: `${getStatusColor(showLogs.job.status)}20`, color: getStatusColor(showLogs.job.status) }}>
+                  {showLogs.job.status}
+                </span>
+                {showLogs.job.githubRunUrl && (
+                  <a href={showLogs.job.githubRunUrl} target="_blank" rel="noopener" className="text-xs text-[#6366f1] hover:underline">
+                    Open in GitHub {"\u2192"}
+                  </a>
+                )}
               </div>
-              {showLogs.steps.length > 0 && (
+
+              {/* Progress */}
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span>Progress</span>
+                  <span>{showLogs.job.progress}%</span>
+                </div>
+                <div className="h-3 rounded-full bg-[rgba(255,255,255,0.1)] overflow-hidden">
+                  <div className="h-full rounded-full transition-all" style={{ width: `${showLogs.job.progress}%`, backgroundColor: getStatusColor(showLogs.job.status) }} />
+                </div>
+              </div>
+
+              {/* Steps */}
+              <div>
+                <p className="text-sm font-medium mb-3">Workflow Steps</p>
                 <div className="space-y-2">
-                  {showLogs.steps.map((step, i) => (
-                    <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-[rgba(255,255,255,0.03)]">
-                      <span className={step.conclusion === "success" ? "text-[#10b981]" : step.conclusion === "failure" ? "text-[#ef4444]" : "text-[#a1a1aa]"}>
-                        {step.conclusion === "success" ? "\u2713" : step.conclusion === "failure" ? "\u2717" : "\u25CB"}
+                  {showLogs.job.steps.map((step, i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-[rgba(255,255,255,0.03)]">
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold" style={{ backgroundColor: `${getStatusColor(step.conclusion || step.status)}20`, color: getStatusColor(step.conclusion || step.status) }}>
+                        {getStepIcon(step)}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm">{step.name}</p>
+                        <p className="text-xs text-[#a1a1aa]">{step.status.replace(/_/g, " ")}</p>
+                      </div>
+                      <span className="text-xs" style={{ color: getStatusColor(step.conclusion || step.status) }}>
+                        {step.conclusion === "success" ? "Completed" : step.conclusion === "failure" ? "Failed" : step.status === "in_progress" ? "Running" : "Pending"}
                       </span>
-                      <span className="text-sm">{step.name}</span>
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Console Output */}
+              <div>
+                <p className="text-sm font-medium mb-2">Runner Output</p>
+                <div className="bg-[#0d0d14] rounded-xl p-4 font-mono text-xs overflow-auto max-h-48 scrollbar-thin">
+                  <p className="text-[#10b981]">$ github-actions-runner started</p>
+                  {showLogs.job.steps.map((step, i) => (
+                    <p key={i} style={{ color: getStatusColor(step.conclusion || step.status) }} className="mt-1">
+                      {getStepIcon(step)} [{i + 1}/{showLogs.job.steps.length}] {step.name}
+                      {step.conclusion === "success" && <span className="text-[#a1a1aa] ml-2">- done</span>}
+                      {step.conclusion === "failure" && <span className="text-[#ef4444] ml-2">- FAILED</span>}
+                    </p>
+                  ))}
+                  {showLogs.job.status === "success" && <p className="text-[#10b981] mt-2">$ All tasks completed successfully!</p>}
+                  {showLogs.job.status === "failed" && <p className="text-[#ef4444] mt-2">$ Workflow failed. Check step details above.</p>}
+                </div>
+              </div>
+
+              {/* Error */}
+              {showLogs.job.error && (
+                <div className="p-4 rounded-xl bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.2)]">
+                  <p className="text-xs font-medium text-[#ef4444] mb-1">Error Details</p>
+                  <p className="text-sm text-[#ef4444]">{showLogs.job.error}</p>
+                </div>
               )}
-              {showLogs.error && (
-                <div className="p-3 rounded-lg bg-[rgba(239,68,68,0.1)]"><p className="text-xs text-[#ef4444]">{showLogs.error}</p></div>
-              )}
-              <div className="flex gap-3">
-                {showLogs.githubRunUrl && (
-                  <a href={showLogs.githubRunUrl} target="_blank" rel="noopener" className="glass-button-primary text-sm py-2 px-4">View on GitHub</a>
+
+              {/* Actions */}
+              <div className="flex gap-3 pt-2">
+                {showLogs.job.githubRunUrl && (
+                  <a href={showLogs.job.githubRunUrl} target="_blank" rel="noopener" className="glass-button-primary text-sm py-2 px-4">
+                    View on GitHub
+                  </a>
                 )}
-                <button onClick={() => setShowLogs(null)} className="glass-button text-sm py-2 px-4">Close</button>
+                {showLogs.job.status === "success" && (
+                  <a href="/output" className="glass-button text-sm py-2 px-4">
+                    View Output
+                  </a>
+                )}
+                <button onClick={() => setShowLogs(null)} className="glass-button text-sm py-2 px-4">
+                  Close
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Video Modal Placeholder */}
-      {showVideoModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowVideoModal(false)}>
-          <div className="glass-card max-w-lg w-full p-6" onClick={(e) => e.stopPropagation()}>
+      {/* Video Form Modal */}
+      {showForm === "video" && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowForm(null)}>
+          <div className="glass-card max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold">{editData ? "Edit" : "Create"} Video Automation</h3>
-              <button onClick={() => setShowVideoModal(false)} className="glass-button py-1 px-3 text-sm">Close</button>
+              <button onClick={() => setShowForm(null)} className="glass-button py-1 px-3 text-sm">Close</button>
             </div>
-            <VideoForm editData={editData} onClose={() => setShowVideoModal(false)} onSaved={fetchAutomations} />
+            <VideoForm editData={editData} onClose={() => setShowForm(null)} onSaved={loadData} />
           </div>
         </div>
       )}
 
-      {/* Image Modal Placeholder */}
-      {showImageModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowImageModal(false)}>
-          <div className="glass-card max-w-lg w-full p-6" onClick={(e) => e.stopPropagation()}>
+      {/* Image Form Modal */}
+      {showForm === "image" && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowForm(null)}>
+          <div className="glass-card max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold">{editData ? "Edit" : "Create"} Image Automation</h3>
-              <button onClick={() => setShowImageModal(false)} className="glass-button py-1 px-3 text-sm">Close</button>
+              <button onClick={() => setShowForm(null)} className="glass-button py-1 px-3 text-sm">Close</button>
             </div>
-            <ImageForm editData={editData} onClose={() => setShowImageModal(false)} onSaved={fetchAutomations} />
+            <ImageForm editData={editData} onClose={() => setShowForm(null)} onSaved={loadData} />
           </div>
         </div>
       )}
@@ -229,6 +459,7 @@ function VideoForm({ editData, onClose, onSaved }: { editData: Automation | null
   const [videoSource, setVideoSource] = useState("youtube");
   const [videoUrl, setVideoUrl] = useState("");
   const [channelUrl, setChannelUrl] = useState("");
+  const [multipleUrls, setMultipleUrls] = useState("");
   const [schedule, setSchedule] = useState(editData?.schedule || "once");
   const [saving, setSaving] = useState(false);
 
@@ -239,15 +470,21 @@ function VideoForm({ editData, onClose, onSaved }: { editData: Automation | null
         if (cfg.video_source) setVideoSource(cfg.video_source);
         if (cfg.video_url) setVideoUrl(cfg.video_url);
         if (cfg.channel_url) setChannelUrl(cfg.channel_url);
+        if (cfg.multiple_urls) setMultipleUrls(cfg.multiple_urls.join("\n"));
       } catch {}
     }
   }, [editData]);
 
   const handleSave = async () => {
     setSaving(true);
-    const config = { video_source: videoSource, video_url: videoUrl, channel_url: channelUrl };
+    const config = {
+      video_source: videoSource,
+      video_url: videoUrl,
+      channel_url: channelUrl,
+      multiple_urls: multipleUrls.split("\n").map(u => u.trim()).filter(Boolean),
+    };
     try {
-      const url = editData ? "/api/automations/" + editData.id : "/api/automations";
+      const url = editData ? `/api/automations/${editData.id}` : "/api/automations";
       const method = editData ? "PUT" : "POST";
       const res = await fetch(url, {
         method,
@@ -265,11 +502,11 @@ function VideoForm({ editData, onClose, onSaved }: { editData: Automation | null
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium mb-1">Name</label>
-        <input className="glass-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="My Video Automation" />
+        <input className="glass-input" value={name} onChange={e => setName(e.target.value)} placeholder="My Video Automation" />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">Video Source</label>
-        <select className="glass-select" value={videoSource} onChange={(e) => setVideoSource(e.target.value)}>
+        <label className="block text-sm font-medium mb-1">Source</label>
+        <select className="glass-select" value={videoSource} onChange={e => setVideoSource(e.target.value)}>
           <option value="youtube">YouTube</option>
           <option value="direct">Direct URL</option>
           <option value="bunny">Bunny CDN</option>
@@ -277,15 +514,19 @@ function VideoForm({ editData, onClose, onSaved }: { editData: Automation | null
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">Channel URL</label>
-        <input className="glass-input" value={channelUrl} onChange={(e) => setChannelUrl(e.target.value)} placeholder="https://youtube.com/@channel" />
+        <input className="glass-input" value={channelUrl} onChange={e => setChannelUrl(e.target.value)} placeholder="https://youtube.com/@channel" />
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">Video URL</label>
-        <input className="glass-input" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="https://youtube.com/watch?v=..." />
+        <input className="glass-input" value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="https://youtube.com/watch?v=..." />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Multiple URLs (one per line)</label>
+        <textarea className="glass-input min-h-[60px]" value={multipleUrls} onChange={e => setMultipleUrls(e.target.value)} placeholder={"https://photos.app.goo.gl/...\nhttps://youtube.com/watch?v=..."} />
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">Schedule</label>
-        <select className="glass-select" value={schedule} onChange={(e) => setSchedule(e.target.value)}>
+        <select className="glass-select" value={schedule} onChange={e => setSchedule(e.target.value)}>
           <option value="once">Manual</option>
           <option value="0 * * * *">Hourly</option>
           <option value="0 0 * * *">Daily</option>
@@ -309,23 +550,19 @@ function ImageForm({ editData, onClose, onSaved }: { editData: Automation | null
 
   useEffect(() => {
     if (editData?.config) {
-      try {
-        const cfg = JSON.parse(editData.config);
-        if (cfg.image_url) setImageUrl(cfg.image_url);
-      } catch {}
+      try { const cfg = JSON.parse(editData.config); if (cfg.image_url) setImageUrl(cfg.image_url); } catch {}
     }
   }, [editData]);
 
   const handleSave = async () => {
     setSaving(true);
-    const config = { image_source: "url", image_url: imageUrl };
     try {
-      const url = editData ? "/api/automations/" + editData.id : "/api/automations";
+      const url = editData ? `/api/automations/${editData.id}` : "/api/automations";
       const method = editData ? "PUT" : "POST";
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, type: "image", config: JSON.stringify(config), schedule: schedule === "once" ? null : schedule }),
+        body: JSON.stringify({ name, type: "image", config: JSON.stringify({ image_url: imageUrl }), schedule: schedule === "once" ? null : schedule }),
       });
       const data = await res.json();
       if (data.success) { onSaved(); onClose(); }
@@ -338,20 +575,11 @@ function ImageForm({ editData, onClose, onSaved }: { editData: Automation | null
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium mb-1">Name</label>
-        <input className="glass-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="My Image Automation" />
+        <input className="glass-input" value={name} onChange={e => setName(e.target.value)} placeholder="My Image Automation" />
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">Image URL</label>
-        <input className="glass-input" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://example.com/image.jpg" />
-      </div>
-      <div>
-        <label className="block text-sm font-medium mb-1">Schedule</label>
-        <select className="glass-select" value={schedule} onChange={(e) => setSchedule(e.target.value)}>
-          <option value="once">Manual</option>
-          <option value="0 * * * *">Hourly</option>
-          <option value="0 0 * * *">Daily</option>
-          <option value="0 0 * * 0">Weekly</option>
-        </select>
+        <input className="glass-input" value={imageUrl} onChange={e => setImageUrl(e.target.value)} placeholder="https://example.com/image.jpg" />
       </div>
       <div className="flex gap-3">
         <button onClick={handleSave} disabled={saving || !name} className="glass-button-primary flex-1">{saving ? "Saving..." : editData ? "Update" : "Create"}</button>
