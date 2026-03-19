@@ -53,6 +53,10 @@ function PostformeSettings() {
   const [apiKey, setApiKey] = useState("");
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncedAccounts, setSyncedAccounts] = useState<Array<{ platform: string; username: string; connected: boolean }>>([]);
 
   const allPlatforms = [
     { id: "instagram", label: "Instagram", color: "#E1306C" },
@@ -68,6 +72,55 @@ function PostformeSettings() {
     );
   };
 
+  const handleTest = async () => {
+    if (!apiKey) {
+      setTestResult({ success: false, message: "API key is empty" });
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/settings/postforme/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: apiKey }),
+      });
+      const data = await res.json();
+      setTestResult({ success: data.success, message: data.message || data.error });
+    } catch {
+      setTestResult({ success: false, message: "Connection failed" });
+    }
+    setTesting(false);
+  };
+
+  const handleSync = async () => {
+    if (!apiKey) {
+      setTestResult({ success: false, message: "API key is empty" });
+      return;
+    }
+    setSyncing(true);
+    setSyncedAccounts([]);
+    try {
+      const res = await fetch("/api/settings/postforme/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: apiKey }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setSyncedAccounts(data.data);
+        const connectedPlatforms = data.data.filter((a: { connected: boolean }) => a.connected).map((a: { platform: string }) => a.platform);
+        setPlatforms(connectedPlatforms);
+        setTestResult({ success: true, message: `Found ${data.data.length} account(s)` });
+      } else {
+        setTestResult({ success: false, message: data.error || "Sync failed" });
+      }
+    } catch {
+      setTestResult({ success: false, message: "Sync failed" });
+    }
+    setSyncing(false);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -79,9 +132,9 @@ function PostformeSettings() {
           platforms: JSON.stringify(platforms),
         }),
       });
-      alert("Settings saved!");
+      setTestResult({ success: true, message: "Settings saved successfully!" });
     } catch (err) {
-      alert("Failed to save settings");
+      setTestResult({ success: false, message: "Failed to save settings" });
     }
     setSaving(false);
   };
@@ -101,6 +154,93 @@ function PostformeSettings() {
             onChange={(e) => setApiKey(e.target.value)}
           />
         </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              testResult?.success === true
+                ? "bg-[rgba(16,185,129,0.15)] text-[#10b981]"
+                : testResult?.success === false && testResult?.message
+                ? "bg-[rgba(239,68,68,0.15)] text-[#ef4444]"
+                : "glass-button"
+            }`}
+          >
+            {testing ? (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : testResult?.success === true ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : testResult?.success === false && testResult?.message ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            )}
+            {testing ? "Testing..." : "Test API"}
+          </button>
+
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="glass-button flex items-center gap-2 text-sm font-medium"
+          >
+            {syncing ? (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            )}
+            {syncing ? "Syncing..." : "Sync Accounts"}
+          </button>
+        </div>
+
+        {testResult && (
+          <div className={`glass-card p-3 ${testResult.success ? "border-[rgba(16,185,129,0.3)]" : "border-[rgba(239,68,68,0.3)]"}`}>
+            <p className={`text-sm ${testResult.success ? "text-[#10b981]" : "text-[#ef4444]"}`}>
+              {testResult.message}
+            </p>
+          </div>
+        )}
+
+        {/* Synced Accounts */}
+        {syncedAccounts.length > 0 && (
+          <div className="glass-card p-5">
+            <p className="text-sm font-medium mb-3">Synced Accounts</p>
+            <div className="space-y-2">
+              {syncedAccounts.map((account, i) => (
+                <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-[rgba(255,255,255,0.03)]">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-2 h-2 rounded-full ${
+                      account.platform === "instagram" ? "bg-[#E1306C]" :
+                      account.platform === "youtube" ? "bg-[#FF0000]" :
+                      account.platform === "tiktok" ? "bg-white" :
+                      account.platform === "facebook" ? "bg-[#1877F2]" :
+                      "bg-[#1DA1F2]"
+                    }`} />
+                    <span className="text-sm font-medium capitalize">{account.platform}</span>
+                    <span className="text-xs text-[#a1a1aa]">@{account.username}</span>
+                  </div>
+                  <span className={`badge ${account.connected ? "badge-success" : "badge-failed"}`}>
+                    {account.connected ? "Connected" : "Disconnected"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div>
           <label className="block text-sm text-[#a1a1aa] mb-3">Connected Platforms</label>

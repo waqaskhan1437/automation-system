@@ -44,6 +44,48 @@ export async function handleSettingsRoutes(
     }
   }
 
+  // POSTFORME TEST
+  if (path === "/api/settings/postforme/test" && method === "POST") {
+    const body = await request.json() as { api_key: string };
+    if (!body.api_key) {
+      return jsonResponse({ success: false, error: "api_key required" }, 400);
+    }
+    try {
+      const res = await fetch("https://api.postforme.io/v1/me", {
+        headers: { Authorization: `Bearer ${body.api_key}` },
+      });
+      if (res.ok) {
+        const data = await res.json() as Record<string, unknown>;
+        return jsonResponse({ success: true, message: "Postforme API connected successfully" });
+      }
+      return jsonResponse({ success: false, message: `Postforme error: ${res.status} - Invalid API key` });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Connection failed";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
+  // POSTFORME SYNC ACCOUNTS
+  if (path === "/api/settings/postforme/sync" && method === "POST") {
+    const body = await request.json() as { api_key: string };
+    if (!body.api_key) {
+      return jsonResponse({ success: false, error: "api_key required" }, 400);
+    }
+    try {
+      const res = await fetch("https://api.postforme.io/v1/accounts", {
+        headers: { Authorization: `Bearer ${body.api_key}` },
+      });
+      if (res.ok) {
+        const data = await res.json() as { accounts?: Array<{ platform: string; username: string; connected: boolean }> };
+        return jsonResponse({ success: true, data: data.accounts || [] });
+      }
+      return jsonResponse({ success: false, error: `Postforme error: ${res.status}` });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Sync failed";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
   // GITHUB SETTINGS
   if (path === "/api/settings/github") {
     if (method === "GET") {
