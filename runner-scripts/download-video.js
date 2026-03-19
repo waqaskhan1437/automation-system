@@ -1,54 +1,78 @@
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const https = require("https");
+const http = require("http");
 
 const OUTPUT_DIR = path.join(__dirname, "..", "output");
 const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 
-function downloadWithYtDlp(url) {
+function downloadDirect(url, outputFile) {
   console.log(`Downloading: ${url}`);
-  try {
-    execSync(
-      `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${VIDEO_FILE}" "${url}"`,
-      { stdio: "inherit", timeout: 600000 }
-    );
-    return true;
-  } catch (err) {
-    console.error("yt-dlp failed, trying simpler format...");
-    try {
-      execSync(
-        `yt-dlp -f "best" -o "${VIDEO_FILE}" "${url}"`,
-        { stdio: "inherit", timeout: 600000 }
-      );
-      return true;
-    } catch (err2) {
-      console.error("Download failed:", err2.message);
-      return false;
-    }
-  }
-}
-
-function downloadDirect(url) {
-  console.log(`Downloading direct: ${url}`);
-  const https = require("https");
-  const http = require("http");
   const proto = url.startsWith("https") ? https : http;
+  const file = outputFile || VIDEO_FILE;
 
   return new Promise((resolve, reject) => {
     proto.get(url, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return downloadDirect(res.headers.location).then(resolve).catch(reject);
+        return downloadDirect(res.headers.location, file).then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) {
         return reject(new Error(`HTTP ${res.statusCode}`));
       }
-      const file = fs.createWriteStream(VIDEO_FILE);
-      res.pipe(file);
-      file.on("finish", () => {
-        file.close();
-        resolve(true);
+      const ws = fs.createWriteStream(file);
+      res.pipe(ws);
+      ws.on("finish", () => { ws.close(); resolve(true); });
+      ws.on("error", reject);
+    }).on("error", reject);
+  });
+}
+
+function downloadWithYtDlp(url, outputFile) {
+  const file = outputFile || VIDEO_FILE;
+  console.log(`Downloading with yt-dlp: ${url}`);
+  try {
+    execSync(
+      `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${file}" "${url}"`,
+      { stdio: "inherit", timeout: 600000 }
+    );
+    return true;
+  } catch (err) {
+    console.error("yt-dlp failed:", err.message);
+    return false;
+  }
+}
+
+async function downloadFromGooglePhotos(url) {
+  console.log("Detected Google Photos URL, trying to extract video...");
+
+  // Try to get the direct video URL from Google Photos
+  // Google Photos shared links format: https://photos.app.goo.gl/XXXXX
+  // They redirect to: https://photos.google.com/share/XXXXX or https://photos.google.com/photo/XXXXX
+
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { "User-Agent": "Mozilla/5.0" } }, (res) => {
+      let data = "";
+      let finalUrl = res.headers.location || url;
+
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        // Try to extract video URL from the page
+        // Google Photos embeds video URLs in the page source
+        const videoUrlMatch = data.match(/https:\/\/video\.googleusercontent\.com\/[^"'\s]+/);
+        const lh3Match = data.match(/https:\/\/lh3\.googleusercontent\.com\/[^"'\s]+/);
+
+        if (videoUrlMatch) {
+          console.log("Found Google Photos video URL");
+          resolve(videoUrlMatch[0]);
+        } else if (lh3Match) {
+          console.log("Found lh3 URL");
+          resolve(lh3Match[0]);
+        } else {
+          reject(new Error("Could not extract video URL from Google Photos. Please provide a direct video URL."));
+        }
       });
-      file.on("error", reject);
+      res.on("error", reject);
     }).on("error", reject);
   });
 }
@@ -79,11 +103,10 @@ async function main() {
 
   let urlsToDownload = [];
 
-  if (videoUrl) {
-    urlsToDownload.push(videoUrl);
-  }
+  if (videoUrl) urlsToDownload.push(videoUrl);
+  if (multipleUrls.length > 0) urlsToDownload.push(...multipleUrls.slice(0, videosPerRun));
 
-  if (channelUrl) {
+  if (urlsToDownload.length === 0 && channelUrl) {
     console.log(`Fetching channel: ${channelUrl}`);
     try {
       const output = execSync(
@@ -97,53 +120,54 @@ async function main() {
     }
   }
 
-  if (multipleUrls.length > 0) {
-    urlsToDownload.push(...multipleUrls.slice(0, videosPerRun));
-  }
-
   if (urlsToDownload.length === 0) {
     console.error("No URLs to download!");
     process.exit(1);
   }
 
-  console.log(`\nDownloading ${urlsToDownload.length} video(s)...`);
+  console.log(`\nDownloading ${urlsToDownload.length} video(s)...\n`);
 
   for (let i = 0; i < urlsToDownload.length; i++) {
     const url = urlsToDownload[i];
     const outputFile = i === 0 ? VIDEO_FILE : path.join(OUTPUT_DIR, `input-video-${i}.mp4`);
 
-    console.log(`\n[${i + 1}/${urlsToDownload.length}] ${url}`);
+    console.log(`[${i + 1}/${urlsToDownload.length}] Processing: ${url}`);
 
-    if (source === "direct") {
+    // Check if it's a Google Photos URL
+    const isGooglePhotos = url.includes("photos.google.com") || url.includes("photos.app.goo.gl") || url.includes("googleusercontent.com");
+
+    if (isGooglePhotos) {
+      console.log("Google Photos detected, trying to download...");
       try {
-        await downloadDirect(url);
+        // Try to extract direct video URL
+        const directUrl = await downloadFromGooglePhotos(url);
+        console.log(`Extracted URL: ${directUrl}`);
+        await downloadDirect(directUrl, outputFile);
+      } catch (err) {
+        console.log(`Direct extraction failed: ${err.message}`);
+        console.log("Trying yt-dlp...");
+        if (!downloadWithYtDlp(url, outputFile)) {
+          console.error("Failed to download from Google Photos.");
+          console.log("TIP: Open the video in Google Photos, right-click → Copy video address, and use that URL.");
+          continue;
+        }
+      }
+    } else if (source === "youtube" || url.includes("youtube.com") || url.includes("youtu.be")) {
+      if (!downloadWithYtDlp(url, outputFile)) continue;
+    } else {
+      // Direct URL
+      try {
+        await downloadDirect(url, outputFile);
       } catch (err) {
         console.error("Direct download failed:", err.message);
-        continue;
-      }
-    } else {
-      if (i > 0) {
-        const origFile = VIDEO_FILE;
-        const tempFile = outputFile;
-        try {
-          execSync(
-            `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" "${url}"`,
-            { stdio: "inherit", timeout: 600000 }
-          );
-        } catch (err) {
-          console.error("Download failed:", err.message);
-          continue;
-        }
-      } else {
-        if (!downloadWithYtDlp(url)) {
-          continue;
-        }
+        console.log("Trying yt-dlp...");
+        if (!downloadWithYtDlp(url, outputFile)) continue;
       }
     }
 
-    if (fs.existsSync(i === 0 ? VIDEO_FILE : outputFile)) {
-      const stats = fs.statSync(i === 0 ? VIDEO_FILE : outputFile);
-      console.log(`Downloaded: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+    if (fs.existsSync(outputFile)) {
+      const stats = fs.statSync(outputFile);
+      console.log(`Downloaded: ${(stats.size / 1024 / 1024).toFixed(2)} MB\n`);
     }
   }
 
@@ -152,7 +176,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("\nDownload complete!");
+  console.log("Download complete!");
 }
 
 main().catch((err) => {
