@@ -309,14 +309,23 @@ export async function handleSettingsRoutes(
       let content = "";
 
       if (body.provider === "gemini") {
-        const candidates = (aiData as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }).candidates;
-        content = candidates?.[0]?.content?.parts?.[0]?.text || "";
+        interface GeminiPart { text?: string }
+        interface GeminiContent { parts?: GeminiPart[] }
+        interface GeminiCandidate { content?: GeminiContent }
+        interface GeminiResponse { candidates?: GeminiCandidate[] }
+        const geminiData = aiData as GeminiResponse;
+        content = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
       } else if (body.provider === "cohere") {
-        const generations = (aiData as { generations?: Array<{ text?: string }> }).generations;
-        content = generations?.[0]?.text || "";
+        interface CohereGeneration { text?: string }
+        interface CohereResponse { generations?: CohereGeneration[] }
+        const cohereData = aiData as CohereResponse;
+        content = cohereData.generations?.[0]?.text || "";
       } else {
-        const choices = (aiData as { choices?: Array<{ message?: { content?: string }> }> }).choices;
-        content = choices?.[0]?.message?.content || "";
+        interface ChatMessage { content?: string }
+        interface ChatChoice { message?: ChatMessage }
+        interface ChatResponse { choices?: ChatChoice[] }
+        const chatData = aiData as ChatResponse;
+        content = chatData.choices?.[0]?.message?.content || "";
       }
 
       const jsonMatch = content.match(/\{[\s\S]*\}/);
