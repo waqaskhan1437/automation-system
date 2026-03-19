@@ -292,33 +292,51 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                 <label className="block text-sm font-medium mb-2">Automation Name</label>
                 <input className="glass-input" placeholder="e.g., Daily YouTube Shorts" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
+
               <div>
-                <label className="block text-sm font-medium mb-2">Description</label>
-                <textarea className="glass-input min-h-[80px] resize-none" placeholder="What does this automation do?" value={description} onChange={(e) => setDescription(e.target.value)} />
+                <label className="block text-sm font-medium mb-2">Video Source</label>
+                <select className="glass-select" value={videoSource} onChange={(e) => setVideoSource(e.target.value as "direct" | "youtube" | "bunny")}>
+                  <option value="youtube">YouTube Channel / Video Links</option>
+                  <option value="direct">Direct Links (.mp4)</option>
+                  <option value="bunny">Bunny CDN</option>
+                </select>
+                <p className="text-xs text-[#a1a1aa] mt-1.5">
+                  {videoSource === "youtube" && "Fetch latest video from YouTube channel or paste specific video links"}
+                  {videoSource === "direct" && "Provide direct .mp4 video links"}
+                  {videoSource === "bunny" && "Fetch video from Bunny CDN library"}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Schedule</label>
+                <select className="glass-select" value={schedule} onChange={(e) => setSchedule(e.target.value)}>
+                  <option value="once">Manual (Run Once)</option>
+                  <option value="*/15 * * * *">Every 15 Minutes</option>
+                  <option value="*/30 * * * *">Every 30 Minutes</option>
+                  <option value="0 * * * *">Hourly</option>
+                  <option value="0 */6 * * *">Every 6 Hours</option>
+                  <option value="0 */12 * * *">Every 12 Hours</option>
+                  <option value="0 0 * * *">Daily</option>
+                  <option value="0 0 * * 0">Weekly</option>
+                  <option value="0 0 1 * *">Monthly</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Description (optional)</label>
+                <textarea className="glass-input min-h-[60px] resize-none" placeholder="What does this automation do?" value={description} onChange={(e) => setDescription(e.target.value)} />
               </div>
             </div>
           )}
 
           {activeTab === "video" && (
             <div className="space-y-5">
-              <div>
-                <label className="block text-sm font-medium mb-2">Video Source</label>
-                <div className="flex gap-2">
-                  {(["youtube", "direct", "bunny"] as const).map((src) => (
-                    <button
-                      key={src}
-                      onClick={() => setVideoSource(src)}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                        videoSource === src ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"
-                      }`}
-                    >
-                      {src === "youtube" && "YouTube"}
-                      {src === "direct" && "Direct URL"}
-                      {src === "bunny" && "Bunny CDN"}
-                    </button>
-                  ))}
-                </div>
+              <div className="glass-card p-4 mb-2">
+                <p className="text-xs text-[#a1a1aa]">
+                  Video source: <span className="text-white font-medium capitalize">{videoSource}</span> (configured in Basic tab)
+                </p>
               </div>
+
               <div>
                 <label className="block text-sm font-medium mb-2">Video URL</label>
                 <input
@@ -551,13 +569,9 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
               </div>
 
               <div className="border-t border-[rgba(255,255,255,0.08)] pt-4">
-                <label className="block text-sm font-medium mb-3">Schedule</label>
-                <select className="glass-select" value={schedule} onChange={(e) => setSchedule(e.target.value)}>
-                  <option value="once">Run Once (Manual)</option>
-                  <option value="0 */6 * * *">Every 6 Hours</option>
-                  <option value="0 0 * * *">Daily</option>
-                  <option value="0 0 * * 0">Weekly</option>
-                </select>
+                <p className="text-xs text-[#a1a1aa]">
+                  Schedule: <span className="text-white font-medium capitalize">{schedule === "once" ? "Manual" : schedule}</span> (configured in Basic tab)
+                </p>
               </div>
 
               {/* Review Summary */}
