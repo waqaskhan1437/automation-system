@@ -242,30 +242,6 @@ function PostformeSettings() {
           </div>
         )}
 
-        <div>
-          <label className="block text-sm text-[#a1a1aa] mb-3">Connected Platforms</label>
-          <div className="flex flex-wrap gap-3">
-            {allPlatforms.map((platform) => (
-              <button
-                key={platform.id}
-                onClick={() => togglePlatform(platform.id)}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-                  platforms.includes(platform.id)
-                    ? "text-white"
-                    : "glass-button"
-                }`}
-                style={
-                  platforms.includes(platform.id)
-                    ? { backgroundColor: platform.color }
-                    : {}
-                }
-              >
-                {platform.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <button
           onClick={handleSave}
           disabled={saving}
