@@ -6,68 +6,83 @@ const OUTPUT_DIR = path.join(__dirname, "..", "output");
 const INPUT_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 const OUTPUT_FILE = path.join(OUTPUT_DIR, "processed-video.mp4");
 
-function buildFFmpegCommand(config) {
+function parseResolution(resStr) {
+  const parts = resStr.split("x");
+  return { width: parseInt(parts[0]), height: parseInt(parts[1]) };
+}
+
+function buildFFmpegCommand() {
   const args = ["-i", INPUT_FILE];
 
-  if (config.trim_start) {
-    args.push("-ss", config.trim_start);
-  }
-  if (config.trim_end) {
-    args.push("-to", config.trim_end);
-  }
+  const shortDuration = parseInt(process.env.SHORT_DURATION || "60");
+  const playbackSpeed = parseFloat(process.env.PLAYBACK_SPEED || "1");
+  const aspectRatio = process.env.ASPECT_RATIO || "9:16";
+  const cropMode = process.env.CROP_MODE || "crop";
+  const codec = process.env.CODEC || "libx264";
+  const outputResolution = process.env.OUTPUT_RESOLUTION || "1080x1920";
+  const topTagline = process.env.TOP_TAGLINE || "";
+  const bottomTagline = process.env.BOTTOM_TAGLINE || "";
+
+  const { width, height } = parseResolution(outputResolution);
 
   const videoFilters = [];
 
-  if (config.resize) {
-    videoFilters.push(`scale=${config.resize}`);
+  // Trim to short duration
+  args.push("-t", String(shortDuration));
+
+  // Playback speed
+  if (playbackSpeed !== 1) {
+    const speedFilter = `setpts=${1 / playbackSpeed}*PTS`;
+    const audioFilter = `atempo=${playbackSpeed}`;
+    videoFilters.push(speedFilter);
+    args.push("-af", audioFilter);
   }
 
-  if (config.watermark_text) {
-    const pos = config.watermark_position || "bottomright";
-    const positions = {
-      topleft: "x=10:y=10",
-      topright: "x=w-tw-10:y=10",
-      bottomleft: "x=10:y=h-th-10",
-      bottomright: "x=w-tw-10:y=h-th-10",
-      center: "x=(w-tw)/2:y=(h-th)/2",
-    };
-    const positionFilter = positions[pos] || positions.bottomright;
-    videoFilters.push(`drawtext=text='${config.watermark_text}':fontsize=24:fontcolor=white@0.7:${positionFilter}`);
+  // Aspect ratio handling
+  if (aspectRatio !== "no-crop") {
+    if (cropMode === "crop") {
+      // Crop to fill frame
+      videoFilters.push(`scale=${width}:${height}:force_original_aspect_ratio=increase`);
+      videoFilters.push(`crop=${width}:${height}`);
+    } else {
+      // Fit with black bars (letterbox/pillarbox)
+      videoFilters.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease`);
+      videoFilters.push(`pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`);
+    }
   }
 
-  if (config.overlay_text) {
-    const pos = config.overlay_position || "center";
-    const positions = {
-      topleft: "x=50:y=50",
-      topright: "x=w-tw-50:y=50",
-      bottomleft: "x=50:y=h-th-50",
-      bottomright: "x=w-tw-50:y=h-th-50",
-      center: "x=(w-tw)/2:y=(h-th)/2",
-    };
-    const positionFilter = positions[pos] || positions.center;
-    videoFilters.push(`drawtext=text='${config.overlay_text}':fontsize=48:fontcolor=white:borderw=3:bordercolor=black:${positionFilter}`);
+  // Top tagline overlay
+  if (topTagline) {
+    const escapedText = topTagline.replace(/'/g, "'\\''").replace(/:/g, "\\:");
+    videoFilters.push(
+      `drawtext=text='${escapedText}':fontsize=36:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=30`
+    );
   }
 
-  if (config.fps) {
-    videoFilters.push(`fps=${config.fps}`);
+  // Bottom tagline overlay
+  if (bottomTagline) {
+    const escapedText = bottomTagline.replace(/'/g, "'\\''").replace(/:/g, "\\:");
+    videoFilters.push(
+      `drawtext=text='${escapedText}':fontsize=28:fontcolor=white:borderw=2:bordercolor=black:x=(w-tw)/2:y=h-th-30`
+    );
   }
 
   if (videoFilters.length > 0) {
     args.push("-vf", videoFilters.join(","));
   }
 
-  if (config.codec) {
-    args.push("-c:v", config.codec);
+  // Codec
+  args.push("-c:v", codec);
+  args.push("-c:a", "aac");
+
+  // Quality settings
+  const quality = process.env.OUTPUT_QUALITY || "high";
+  if (quality === "low") {
+    args.push("-crf", "28");
+  } else if (quality === "medium") {
+    args.push("-crf", "23");
   } else {
-    args.push("-c:v", "libx264");
-  }
-
-  if (config.audio_codec) {
-    args.push("-c:a", config.audio_codec);
-  }
-
-  if (config.custom_args) {
-    args.push(...config.custom_args.split(" ").filter(Boolean));
+    args.push("-crf", "18");
   }
 
   args.push("-y", OUTPUT_FILE);
@@ -75,33 +90,17 @@ function buildFFmpegCommand(config) {
 }
 
 function main() {
-  const configJson = process.env.FFMPEG_CONFIG;
-
-  if (!configJson) {
-    console.error("FFMPEG_CONFIG environment variable is required");
-    process.exit(1);
-  }
-
   if (!fs.existsSync(INPUT_FILE)) {
     console.error("Input video not found:", INPUT_FILE);
     process.exit(1);
   }
 
-  let config;
-  try {
-    const parsed = JSON.parse(configJson);
-    config = parsed.ffmpeg_config || parsed;
-  } catch (err) {
-    console.error("Invalid FFMPEG_CONFIG JSON:", err.message);
-    process.exit(1);
-  }
-
-  console.log("FFmpeg Config:", JSON.stringify(config, null, 2));
-
-  const ffmpegArgs = buildFFmpegCommand(config);
+  console.log("Building FFmpeg command...");
+  const ffmpegArgs = buildFFmpegCommand();
   const command = `ffmpeg ${ffmpegArgs.join(" ")}`;
 
   console.log("Executing:", command);
+  console.log("");
 
   try {
     execSync(command, { stdio: "inherit", timeout: 600000 });
@@ -116,7 +115,7 @@ function main() {
   }
 
   const stats = fs.statSync(OUTPUT_FILE);
-  console.log(`Video processed successfully: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+  console.log(`\nVideo processed successfully: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 }
 
 main();

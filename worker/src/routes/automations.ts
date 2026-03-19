@@ -1,4 +1,4 @@
-import { Env, ApiResponse, Automation } from "../types";
+import { Env, ApiResponse, Automation, GithubSettings, PostformeSettings } from "../types";
 
 function jsonResponse<T>(data: ApiResponse<T>, status: number = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -114,14 +114,102 @@ export async function handleAutomationsRoutes(
       return jsonResponse({ success: false, error: "Automation not found" }, 404);
     }
 
+    // Create job
     const jobResult = await env.DB.prepare(
-      "INSERT INTO jobs (automation_id, status, input_data) VALUES (?, 'queued', ?)"
+      "INSERT INTO jobs (automation_id, status, input_data, started_at) VALUES (?, 'queued', ?, CURRENT_TIMESTAMP)"
     ).bind(id, automation.config).run();
+    const jobId = jobResult.meta.last_row_id;
 
-    return jsonResponse({
-      success: true,
-      data: { job_id: jobResult.meta.last_row_id },
-      message: "Job queued. Trigger GitHub workflow to execute."
+    // Get GitHub settings
+    const githubSettings = await env.DB.prepare("SELECT * FROM settings_github LIMIT 1").first<GithubSettings>();
+    if (!githubSettings) {
+      return jsonResponse({ success: false, error: "GitHub settings not configured. Go to Settings → GitHub Runner" }, 400);
+    }
+
+    // Get Postforme settings
+    const postformeSettings = await env.DB.prepare("SELECT * FROM settings_postforme LIMIT 1").first<PostformeSettings>();
+
+    // Parse automation config
+    let config;
+    try {
+      config = JSON.parse(automation.config);
+    } catch {
+      return jsonResponse({ success: false, error: "Invalid automation config" }, 400);
+    }
+
+    // Trigger GitHub workflow dispatch
+    try {
+      const workflowInputs: Record<string, string> = {
+        job_id: String(jobId),
+        automation_id: String(id),
+        video_source: config.video_source || "direct",
+        video_url: config.video_url || "",
+        channel_url: config.channel_url || "",
+        multiple_urls: JSON.stringify(config.multiple_urls || []),
+        videos_per_run: String(config.fetch_config?.videos_per_run || 1),
+        short_duration: String(config.short_settings?.max_duration || 60),
+        playback_speed: String(config.short_settings?.playback_speed || 1),
+        aspect_ratio: config.short_settings?.aspect_ratio || "9:16",
+        crop_mode: config.short_settings?.crop_mode || "crop",
+        split_enabled: String(config.split?.enabled || false),
+        combine_enabled: String(config.combine?.enabled || false),
+        codec: config.ffmpeg_config?.codec || "libx264",
+        output_format: config.output_format || "mp4",
+        output_quality: config.output_quality || "high",
+        output_resolution: config.output_resolution || "1080x1920",
+        auto_publish: String(config.publish?.auto_publish ?? true),
+        platforms: JSON.stringify(config.platforms || []),
+        top_tagline: config.taglines?.top_tagline || "",
+        bottom_tagline: config.taglines?.bottom_tagline || "",
+      };
+
+      if (postformeSettings?.api_key) {
+        workflowInputs.postforme_api_key = postformeSettings.api_key;
+      }
+
+      const githubResponse = await fetch(
+        `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/video-automation.yml/dispatches`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${githubSettings.pat_token}`,
+            Accept: "application/vnd.github.v3+json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            ref: "master",
+            inputs: workflowInputs,
+          }),
+        }
+      );
+
+      if (githubResponse.ok) {
+        await env.DB.prepare("UPDATE jobs SET status = 'running' WHERE id = ?").bind(jobId).run();
+        return jsonResponse({
+          success: true,
+          data: { job_id: jobId },
+          message: "Automation triggered! Running on GitHub Actions.",
+        });
+      } else {
+        const errorText = await githubResponse.text();
+        await env.DB.prepare(
+          "UPDATE jobs SET status = 'failed', error_message = ? WHERE id = ?"
+        ).bind(`GitHub API error: ${errorText}`, jobId).run();
+
+        return jsonResponse({
+          success: false,
+          error: `GitHub workflow dispatch failed: ${errorText}`,
+        }, 500);
+      }
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      await env.DB.prepare(
+        "UPDATE jobs SET status = 'failed', error_message = ? WHERE id = ?"
+      ).bind(errorMsg, jobId).run();
+
+      return jsonResponse({ success: false, error: errorMsg }, 500);
+    }
+  }
     });
   }
 
