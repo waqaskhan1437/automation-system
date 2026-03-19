@@ -1,0 +1,23 @@
+﻿2026-03-19T20:33:31.9436014Z ##[group]Run node download-video.js
+2026-03-19T20:33:31.9436307Z [36;1mnode download-video.js[0m
+2026-03-19T20:33:31.9463184Z shell: /usr/bin/bash -e {0}
+2026-03-19T20:33:31.9463410Z env:
+2026-03-19T20:33:31.9463574Z   VIDEO_SOURCE: youtube
+2026-03-19T20:33:31.9463760Z   VIDEO_URL: 
+2026-03-19T20:33:31.9463914Z   CHANNEL_URL: 
+2026-03-19T20:33:31.9464194Z   MULTIPLE_URLS: ["https://photos.app.goo.gl/E2nUkRFQr4thve5BA"]
+2026-03-19T20:33:31.9464514Z   VIDEOS_PER_RUN: 1
+2026-03-19T20:33:31.9464680Z ##[endgroup]
+2026-03-19T20:33:31.9730613Z URL: https://photos.app.goo.gl/E2nUkRFQr4thve5BA
+2026-03-19T20:33:31.9732419Z yt-dlp: https://photos.app.goo.gl/E2nUkRFQr4thve5BA
+2026-03-19T20:33:33.4396794Z [generic] Extracting URL: https://photos.app.goo.gl/E2nUkRFQr4thve5BA
+2026-03-19T20:33:33.4398359Z [generic] E2nUkRFQr4thve5BA: Downloading webpage
+2026-03-19T20:33:33.8728927Z [redirect] Following redirect to https://photos.google.com/share/AF1QipN_JnhYI7x-yWRD9stnUAbMmlq90gw_Wb0IAmqgYYigjR9B9z36sp2nuSYvG4RGeA?key=N2xSUXlPUzNTZ29sYjBudGo2aFNpeVlTUldobmln
+2026-03-19T20:33:33.8778536Z [generic] Extracting URL: https://photos.google.com/share/AF1QipN_JnhYI7x-yWRD9stnUAbMmlq90gw_Wb0IAmqgYYigjR9B9z36sp2nuSYvG...dGo2aFNpeVlTUldobmln
+2026-03-19T20:33:33.8780761Z [generic] AF1QipN_JnhYI7x-yWRD9stnUAbMmlq90gw_Wb0IAmqgYYigjR9B9z36sp2nuSYvG4RGeA?key=N2xSUXlPUzNTZ29sYjBudGo2aFNpeVlTUldobmln: Downloading webpage
+2026-03-19T20:33:34.0243332Z WARNING: [generic] Falling back on generic information extractor
+2026-03-19T20:33:34.1578133Z [generic] AF1QipN_JnhYI7x-yWRD9stnUAbMmlq90gw_Wb0IAmqgYYigjR9B9z36sp2nuSYvG4RGeA?key=N2xSUXlPUzNTZ29sYjBudGo2aFNpeVlTUldobmln: Extracting information
+2026-03-19T20:33:36.6860946Z ERROR: Unsupported URL: https://photos.google.com/share/AF1QipN_JnhYI7x-yWRD9stnUAbMmlq90gw_Wb0IAmqgYYigjR9B9z36sp2nuSYvG4RGeA?key=N2xSUXlPUzNTZ29sYjBudGo2aFNpeVlTUldobmln
+2026-03-19T20:33:36.7906500Z Download FAILED!
+2026-03-19T20:33:36.7908432Z yt-dlp failed: Command failed: yt-dlp -f "best[ext=mp4]/best" --no-check-certificates -o "/home/runner/work/automation-system/automation-system/runner-scripts/output/input-video.mp4" "https://photos.app.goo.gl/E2nUkRFQr4thve5BA"
+2026-03-19T20:33:36.7947891Z ##[error]Process completed with exit code 1.

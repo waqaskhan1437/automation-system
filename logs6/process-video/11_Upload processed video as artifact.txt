@@ -1,0 +1,16 @@
+﻿2026-03-19T20:33:36.8054882Z ##[group]Run actions/upload-artifact@v4
+2026-03-19T20:33:36.8055137Z with:
+2026-03-19T20:33:36.8055320Z   name: processed-video-6
+2026-03-19T20:33:36.8055537Z   path: output/
+runner-scripts/output/
+
+2026-03-19T20:33:36.8055764Z   retention-days: 7
+2026-03-19T20:33:36.8055952Z   if-no-files-found: warn
+2026-03-19T20:33:36.8056143Z   compression-level: 6
+2026-03-19T20:33:36.8056330Z   overwrite: false
+2026-03-19T20:33:36.8056508Z   include-hidden-files: false
+2026-03-19T20:33:36.8056724Z ##[endgroup]
+2026-03-19T20:33:37.0161346Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-03-19T20:33:37.0165374Z The least common ancestor is /home/runner/work/automation-system/automation-system. This will be the root directory of the artifact
+2026-03-19T20:33:37.0192292Z ##[warning]No files were found with the provided path: output/
+runner-scripts/output/. No artifacts will be uploaded.

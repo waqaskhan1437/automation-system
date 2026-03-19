@@ -1,0 +1,72 @@
+﻿2026-03-19T20:33:27.3237658Z ##[group]Run actions/checkout@v4
+2026-03-19T20:33:27.3238921Z with:
+2026-03-19T20:33:27.3239856Z   repository: waqaskhan1437/automation-system
+2026-03-19T20:33:27.3241038Z   token: ***
+2026-03-19T20:33:27.3241579Z   ssh-strict: true
+2026-03-19T20:33:27.3242133Z   ssh-user: git
+2026-03-19T20:33:27.3242729Z   persist-credentials: true
+2026-03-19T20:33:27.3243388Z   clean: true
+2026-03-19T20:33:27.3243915Z   sparse-checkout-cone-mode: true
+2026-03-19T20:33:27.3244602Z   fetch-depth: 1
+2026-03-19T20:33:27.3245146Z   fetch-tags: false
+2026-03-19T20:33:27.3245754Z   show-progress: true
+2026-03-19T20:33:27.3246313Z   lfs: false
+2026-03-19T20:33:27.3246852Z   submodules: false
+2026-03-19T20:33:27.3247418Z   set-safe-directory: true
+2026-03-19T20:33:27.3248617Z ##[endgroup]
+2026-03-19T20:33:27.5135387Z Syncing repository: waqaskhan1437/automation-system
+2026-03-19T20:33:27.5138555Z ##[group]Getting Git version info
+2026-03-19T20:33:27.5140644Z Working directory is '/home/runner/work/automation-system/automation-system'
+2026-03-19T20:33:27.5142509Z [command]/usr/bin/git version
+2026-03-19T20:33:27.5143252Z git version 2.53.0
+2026-03-19T20:33:27.5145448Z ##[endgroup]
+2026-03-19T20:33:27.5152145Z Temporarily overriding HOME='/home/runner/work/_temp/c8b0994e-40f5-4cd5-8744-640eaf9344f9' before making global git config changes
+2026-03-19T20:33:27.5154185Z Adding repository directory to the temporary git global config as a safe directory
+2026-03-19T20:33:27.5155975Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/automation-system/automation-system
+2026-03-19T20:33:27.5158568Z Deleting the contents of '/home/runner/work/automation-system/automation-system'
+2026-03-19T20:33:27.5162170Z ##[group]Initializing the repository
+2026-03-19T20:33:27.5163311Z [command]/usr/bin/git init /home/runner/work/automation-system/automation-system
+2026-03-19T20:33:27.5164732Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-03-19T20:33:27.5166469Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-03-19T20:33:27.5167902Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-03-19T20:33:27.5168877Z hint: call:
+2026-03-19T20:33:27.5169637Z hint:
+2026-03-19T20:33:27.5170331Z hint: 	git config --global init.defaultBranch <name>
+2026-03-19T20:33:27.5171182Z hint:
+2026-03-19T20:33:27.5171916Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-03-19T20:33:27.5172721Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-03-19T20:33:27.5173310Z hint:
+2026-03-19T20:33:27.5173637Z hint: 	git branch -m <name>
+2026-03-19T20:33:27.5174022Z hint:
+2026-03-19T20:33:27.5174512Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-03-19T20:33:27.5175683Z Initialized empty Git repository in /home/runner/work/automation-system/automation-system/.git/
+2026-03-19T20:33:27.5177202Z [command]/usr/bin/git remote add origin https://github.com/waqaskhan1437/automation-system
+2026-03-19T20:33:27.5178807Z ##[endgroup]
+2026-03-19T20:33:27.5179649Z ##[group]Disabling automatic garbage collection
+2026-03-19T20:33:27.5180185Z [command]/usr/bin/git config --local gc.auto 0
+2026-03-19T20:33:27.5181435Z ##[endgroup]
+2026-03-19T20:33:27.5181959Z ##[group]Setting up auth
+2026-03-19T20:33:27.5182521Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-03-19T20:33:27.5185120Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-03-19T20:33:27.5287758Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-03-19T20:33:27.5313025Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-03-19T20:33:27.5510332Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-03-19T20:33:27.5542563Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-03-19T20:33:27.5763412Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-03-19T20:33:27.5793121Z ##[endgroup]
+2026-03-19T20:33:27.5793821Z ##[group]Fetching the repository
+2026-03-19T20:33:27.5809399Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +8077a848d7f7cbae1aadd57879bfe354c8bb5045:refs/remotes/origin/master
+2026-03-19T20:33:27.9450746Z From https://github.com/waqaskhan1437/automation-system
+2026-03-19T20:33:27.9452596Z  * [new ref]         8077a848d7f7cbae1aadd57879bfe354c8bb5045 -> origin/master
+2026-03-19T20:33:27.9493613Z ##[endgroup]
+2026-03-19T20:33:27.9494932Z ##[group]Determining the checkout info
+2026-03-19T20:33:27.9496268Z ##[endgroup]
+2026-03-19T20:33:27.9498657Z [command]/usr/bin/git sparse-checkout disable
+2026-03-19T20:33:27.9564333Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-03-19T20:33:27.9612060Z ##[group]Checking out the ref
+2026-03-19T20:33:27.9617616Z [command]/usr/bin/git checkout --progress --force -B master refs/remotes/origin/master
+2026-03-19T20:33:27.9711556Z Reset branch 'master'
+2026-03-19T20:33:27.9718822Z branch 'master' set up to track 'origin/master'.
+2026-03-19T20:33:27.9727095Z ##[endgroup]
+2026-03-19T20:33:27.9758700Z [command]/usr/bin/git log -1 --format=%H
+2026-03-19T20:33:27.9778754Z 8077a848d7f7cbae1aadd57879bfe354c8bb5045

@@ -1,0 +1,11 @@
+﻿2026-03-19T20:33:37.3521277Z ##[group]Run node update-job-status.js
+2026-03-19T20:33:37.3521595Z [36;1mnode update-job-status.js[0m
+2026-03-19T20:33:37.3549589Z shell: /usr/bin/bash -e {0}
+2026-03-19T20:33:37.3549839Z env:
+2026-03-19T20:33:37.3550197Z   WORKER_WEBHOOK_URL: https://automation-api.waqaskhan1437.workers.dev/api/webhook/github
+2026-03-19T20:33:37.3550604Z   JOB_ID: 6
+2026-03-19T20:33:37.3550766Z   JOB_STATUS: failed
+2026-03-19T20:33:37.3550940Z ##[endgroup]
+2026-03-19T20:33:37.3843817Z Updating job 6 to status: failed
+2026-03-19T20:33:37.6934729Z Response: {"success":true,"message":"Job updated"}
+2026-03-19T20:33:37.6945887Z Job status updated successfully
