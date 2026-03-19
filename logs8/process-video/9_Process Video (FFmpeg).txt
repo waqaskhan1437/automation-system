@@ -1,0 +1,62 @@
+﻿2026-03-19T20:42:32.4586607Z ##[group]Run node process-video.js
+2026-03-19T20:42:32.4587098Z [36;1mnode process-video.js[0m
+2026-03-19T20:42:32.4654396Z shell: /usr/bin/bash -e {0}
+2026-03-19T20:42:32.4654661Z env:
+2026-03-19T20:42:32.4654854Z   INPUT_FILE: ../output/input-video.mp4
+2026-03-19T20:42:32.4655141Z   OUTPUT_FILE: ../output/processed-video.mp4
+2026-03-19T20:42:32.4655400Z   SHORT_DURATION: 60
+2026-03-19T20:42:32.4655591Z   PLAYBACK_SPEED: 1
+2026-03-19T20:42:32.4655776Z   ASPECT_RATIO: 9:16
+2026-03-19T20:42:32.4655945Z   CROP_MODE: fit
+2026-03-19T20:42:32.4656119Z   SPLIT_ENABLED: false
+2026-03-19T20:42:32.4656306Z   COMBINE_ENABLED: false
+2026-03-19T20:42:32.4656496Z   CODEC: libx264
+2026-03-19T20:42:32.4656656Z   OUTPUT_FORMAT: mp4
+2026-03-19T20:42:32.4656839Z   TOP_TAGLINE: 
+2026-03-19T20:42:32.4657001Z   BOTTOM_TAGLINE: 
+2026-03-19T20:42:32.4657187Z ##[endgroup]
+2026-03-19T20:42:32.4959145Z Input: 0.06 MB
+2026-03-19T20:42:32.4964580Z Processing...
+2026-03-19T20:42:32.5000236Z ffmpeg version 6.0-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2023 the FFmpeg developers
+2026-03-19T20:42:32.5002449Z   built with gcc 8 (Debian 8.3.0-6)
+2026-03-19T20:42:32.5008203Z   configuration: --enable-gpl --enable-version3 --enable-static --disable-debug --disable-ffplay --disable-indev=sndio --disable-outdev=sndio --cc=gcc --enable-fontconfig --enable-frei0r --enable-gnutls --enable-gmp --enable-libgme --enable-gray --enable-libaom --enable-libfribidi --enable-libass --enable-libvmaf --enable-libfreetype --enable-libmp3lame --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-librubberband --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libvorbis --enable-libopus --enable-libtheora --enable-libvidstab --enable-libvo-amrwbenc --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libdav1d --enable-libxvid --enable-libzvbi --enable-libzimg
+2026-03-19T20:42:32.5013306Z   libavutil      58.  2.100 / 58.  2.100
+2026-03-19T20:42:32.5013790Z   libavcodec     60.  3.100 / 60.  3.100
+2026-03-19T20:42:32.5014238Z   libavformat    60.  3.100 / 60.  3.100
+2026-03-19T20:42:32.5014703Z   libavdevice    60.  1.100 / 60.  1.100
+2026-03-19T20:42:32.5015156Z   libavfilter     9.  3.100 /  9.  3.100
+2026-03-19T20:42:32.5015626Z   libswscale      7.  1.100 /  7.  1.100
+2026-03-19T20:42:32.5021419Z   libswresample   4. 10.100 /  4. 10.100
+2026-03-19T20:42:32.5021921Z   libpostproc    57.  1.100 / 57.  1.100
+2026-03-19T20:42:32.5023107Z Input #0, jpeg_pipe, from '/home/runner/work/automation-system/automation-system/runner-scripts/output/input-video.mp4':
+2026-03-19T20:42:32.5024055Z   Duration: N/A, bitrate: N/A
+2026-03-19T20:42:32.5025025Z   Stream #0:0: Video: mjpeg (Baseline), yuvj444p(pc, bt470bg/unknown/unknown), 512x288 [SAR 1:1 DAR 16:9], 25 fps, 25 tbr, 25 tbn
+2026-03-19T20:42:32.5025903Z Stream mapping:
+2026-03-19T20:42:32.5026367Z   Stream #0:0 -> #0:0 (mjpeg (native) -> h264 (libx264))
+2026-03-19T20:42:32.5026925Z Press [q] to stop, [?] for help
+2026-03-19T20:42:32.5040728Z [swscaler @ 0x31d51cc0] deprecated pixel format used, make sure you did set range correctly
+2026-03-19T20:42:32.5127712Z     Last message repeated 3 times
+2026-03-19T20:42:32.5128776Z [libx264 @ 0x31d04640] using SAR=1216/1215
+2026-03-19T20:42:32.5132276Z [libx264 @ 0x31d04640] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2
+2026-03-19T20:42:32.5155655Z [libx264 @ 0x31d04640] profile High, level 4.0, 4:2:0, 8-bit
+2026-03-19T20:42:32.5163016Z [libx264 @ 0x31d04640] 264 - core 164 r3106 eaa68fa - H.264/MPEG-4 AVC codec - Copyleft 2003-2023 - http://www.videolan.org/x264.html - options: cabac=1 ref=2 deblock=1:0:0 analyse=0x3:0x113 me=hex subme=6 psy=1 psy_rd=1.00:0.00 mixed_ref=1 me_range=16 chroma_me=1 trellis=1 8x8dct=1 cqm=0 deadzone=21,11 fast_pskip=1 chroma_qp_offset=-2 threads=3 lookahead_threads=1 sliced_threads=0 nr=0 decimate=1 interlaced=0 bluray_compat=0 constrained_intra=0 bframes=3 b_pyramid=2 b_adapt=1 b_bias=0 direct=1 weightb=1 open_gop=0 weightp=1 keyint=250 keyint_min=25 scenecut=40 intra_refresh=0 rc_lookahead=30 rc=crf mbtree=1 crf=23.0 qcomp=0.60 qpmin=0 qpmax=69 qpstep=4 ip_ratio=1.40 aq=1:1.00
+2026-03-19T20:42:32.5168511Z Output #0, mp4, to '/home/runner/work/automation-system/automation-system/runner-scripts/output/processed-video.mp4':
+2026-03-19T20:42:32.5169403Z   Metadata:
+2026-03-19T20:42:32.5169733Z     encoder         : Lavf60.3.100
+2026-03-19T20:42:32.5170924Z   Stream #0:0: Video: h264 (avc1 / 0x31637661), yuv420p(tv, bt470bg/unknown/unknown, progressive), 1080x1920 [SAR 1216:1215 DAR 76:135], q=2-31, 25 fps, 12800 tbn
+2026-03-19T20:42:32.5171972Z     Metadata:
+2026-03-19T20:42:32.5172327Z       encoder         : Lavc60.3.100 libx264
+2026-03-19T20:42:32.5172738Z     Side data:
+2026-03-19T20:42:32.5173259Z       cpb: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A
+2026-03-19T20:42:32.5372262Z frame=    0 fps=0.0 q=0.0 size=       0kB time=-577014:32:22.77 bitrate=  -0.0kbits/s speed=N/A    
+2026-03-19T20:42:32.5388368Z frame=    1 fps=0.0 q=28.0 Lsize=       2kB time=00:00:00.00 bitrate=N/A speed=   0x    
+2026-03-19T20:42:32.5389588Z video:1kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 75.849731%
+2026-03-19T20:42:32.5390594Z [libx264 @ 0x31d04640] frame I:1     Avg QP:13.00  size:   429
+2026-03-19T20:42:32.5391293Z [libx264 @ 0x31d04640] mb I  I16..4: 100.0%  0.0%  0.0%
+2026-03-19T20:42:32.5391922Z [libx264 @ 0x31d04640] 8x8 transform intra:0.0%
+2026-03-19T20:42:32.5392589Z [libx264 @ 0x31d04640] coded y,uvDC,uvAC intra: 0.0% 0.0% 0.0%
+2026-03-19T20:42:32.5393254Z [libx264 @ 0x31d04640] i16 v,h,dc,p: 99%  0%  1%  0%
+2026-03-19T20:42:32.5393883Z [libx264 @ 0x31d04640] i8c dc,h,v,p: 100%  0%  0%  0%
+2026-03-19T20:42:32.5394404Z [libx264 @ 0x31d04640] kb/s:85.80
+2026-03-19T20:42:32.5406601Z Output: 0.00 MB
+2026-03-19T20:42:32.5407486Z SUCCESS!

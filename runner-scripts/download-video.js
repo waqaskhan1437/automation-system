@@ -46,20 +46,30 @@ async function downloadGooglePhotos(url) {
   try {
     const html = await fetchPage(url);
     
-    // Find all googleusercontent URLs
-    const allMatches = html.match(/https:\/\/[^"'\s\\]*googleusercontent\.com\/[^"'\s\\]+/g) || [];
+    // FIRST: Look for video-downloads.googleusercontent.com (actual video URL)
+    const videoDownloadMatch = html.match(/https:\/\/video-downloads\.googleusercontent\.com\/[^"'\s\\]+/g);
+    if (videoDownloadMatch && videoDownloadMatch.length > 0) {
+      const videoUrl = videoDownloadMatch[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+      console.log("Found video URL!");
+      if (downloadWithCurl(videoUrl)) {
+        return true;
+      }
+    }
     
+    // SECOND: Look for lh3 URLs without size params (might be video)
+    const allMatches = html.match(/https:\/\/lh3\.googleusercontent\.com\/[^"'\s\\]+/g) || [];
     for (const match of allMatches) {
       const cleanUrl = match.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+      // Skip thumbnails (have size params like =w100-h100)
+      if (cleanUrl.match(/=w\d+-h\d+/)) continue;
+      if (cleanUrl.match(/=s\d+/)) continue;
+      if (cleanUrl.match(/=w\d+-h\d+-p-k-no/)) continue;
+      if (cleanUrl.match(/=w\d+-h\d+-k-no/)) continue;
       
-      // Skip tiny thumbnails
-      if (cleanUrl.match(/=s\d+$/)) continue;
-      if (cleanUrl.match(/=w\d+-h\d+-p-k-no$/)) continue;
-      
-      console.log("Trying: " + cleanUrl.substring(0, 80) + "...");
+      console.log("Trying media URL...");
       if (downloadWithCurl(cleanUrl)) {
         const size = fs.statSync(VIDEO_FILE).size;
-        if (size > 50000) { // At least 50KB
+        if (size > 50000) {
           console.log("Downloaded: " + (size / 1024 / 1024).toFixed(2) + " MB");
           return true;
         }
