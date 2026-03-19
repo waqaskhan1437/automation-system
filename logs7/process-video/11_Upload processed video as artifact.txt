@@ -1,0 +1,25 @@
+﻿2026-03-19T20:36:28.4579360Z ##[group]Run actions/upload-artifact@v4
+2026-03-19T20:36:28.4579618Z with:
+2026-03-19T20:36:28.4579804Z   name: processed-video-7
+2026-03-19T20:36:28.4580026Z   path: output/
+runner-scripts/output/
+
+2026-03-19T20:36:28.4580415Z   retention-days: 7
+2026-03-19T20:36:28.4580605Z   if-no-files-found: warn
+2026-03-19T20:36:28.4580798Z   compression-level: 6
+2026-03-19T20:36:28.4580986Z   overwrite: false
+2026-03-19T20:36:28.4581166Z   include-hidden-files: false
+2026-03-19T20:36:28.4581380Z ##[endgroup]
+2026-03-19T20:36:28.6651228Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-03-19T20:36:28.6654813Z The least common ancestor is /home/runner/work/automation-system/automation-system. This will be the root directory of the artifact
+2026-03-19T20:36:28.6656277Z With the provided path, there will be 2 files uploaded
+2026-03-19T20:36:28.6660549Z Artifact name is valid!
+2026-03-19T20:36:28.6663066Z Root directory input is valid!
+2026-03-19T20:36:28.9228632Z Beginning upload of artifact content to blob storage
+2026-03-19T20:36:29.4015532Z Uploaded bytes 83238
+2026-03-19T20:36:29.5165295Z Finished uploading artifact content to blob storage!
+2026-03-19T20:36:29.5168942Z SHA256 digest of uploaded artifact zip is 3b3cf4180d8f1ae990e48d8f320fb44e86eaa8cf58661c07f180cdb7176b4e19
+2026-03-19T20:36:29.5171145Z Finalizing artifact upload
+2026-03-19T20:36:29.6430605Z Artifact processed-video-7.zip successfully finalized. Artifact ID 6014744426
+2026-03-19T20:36:29.6432069Z Artifact processed-video-7 has been successfully uploaded! Final size is 83238 bytes. Artifact ID is 6014744426
+2026-03-19T20:36:29.6434179Z Artifact download URL: https://github.com/waqaskhan1437/automation-system/actions/runs/23315762570/artifacts/6014744426

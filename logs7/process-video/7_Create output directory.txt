@@ -1,0 +1,4 @@
+﻿2026-03-19T20:36:26.5010629Z ##[group]Run mkdir -p output
+2026-03-19T20:36:26.5010902Z [36;1mmkdir -p output[0m
+2026-03-19T20:36:26.5038561Z shell: /usr/bin/bash -e {0}
+2026-03-19T20:36:26.5038811Z ##[endgroup]

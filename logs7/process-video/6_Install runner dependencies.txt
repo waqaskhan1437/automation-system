@@ -1,0 +1,11 @@
+﻿2026-03-19T20:36:25.4604890Z ##[group]Run npm ci
+2026-03-19T20:36:25.4605139Z [36;1mnpm ci[0m
+2026-03-19T20:36:25.4632555Z shell: /usr/bin/bash -e {0}
+2026-03-19T20:36:25.4632809Z ##[endgroup]
+2026-03-19T20:36:26.4888238Z 
+2026-03-19T20:36:26.4890461Z added 23 packages, and audited 24 packages in 964ms
+2026-03-19T20:36:26.4891859Z 
+2026-03-19T20:36:26.4892988Z 6 packages are looking for funding
+2026-03-19T20:36:26.4893897Z   run `npm fund` for details
+2026-03-19T20:36:26.4900806Z 
+2026-03-19T20:36:26.4916568Z found 0 vulnerabilities

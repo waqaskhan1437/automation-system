@@ -1,0 +1,17 @@
+﻿2026-03-19T20:36:23.2526706Z ##[group]Run sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+2026-03-19T20:36:23.2527915Z [36;1msudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp[0m
+2026-03-19T20:36:23.2528602Z [36;1msudo chmod a+rx /usr/local/bin/yt-dlp[0m
+2026-03-19T20:36:23.2528991Z [36;1myt-dlp --version[0m
+2026-03-19T20:36:23.2568941Z shell: /usr/bin/bash -e {0}
+2026-03-19T20:36:23.2569325Z ##[endgroup]
+2026-03-19T20:36:23.2747363Z   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+2026-03-19T20:36:23.2748376Z                                  Dload  Upload   Total   Spent    Left  Speed
+2026-03-19T20:36:23.2748697Z 
+2026-03-19T20:36:23.4360999Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-03-19T20:36:23.4362068Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-03-19T20:36:23.4863941Z 
+2026-03-19T20:36:23.4865413Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-03-19T20:36:23.6368276Z 
+2026-03-19T20:36:23.6389046Z  81 3129k   81 2547k    0     0  7009k      0 --:--:-- --:--:-- --:--:-- 7009k
+2026-03-19T20:36:23.6391562Z 100 3129k  100 3129k    0     0  8561k      0 --:--:-- --:--:-- --:--:--  284M
+2026-03-19T20:36:24.4182758Z 2026.03.17

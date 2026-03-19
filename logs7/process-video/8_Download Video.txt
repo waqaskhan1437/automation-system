@@ -1,0 +1,23 @@
+﻿2026-03-19T20:36:26.5137240Z ##[group]Run node download-video.js
+2026-03-19T20:36:26.5137528Z [36;1mnode download-video.js[0m
+2026-03-19T20:36:26.5163442Z shell: /usr/bin/bash -e {0}
+2026-03-19T20:36:26.5163681Z env:
+2026-03-19T20:36:26.5163849Z   VIDEO_SOURCE: youtube
+2026-03-19T20:36:26.5164041Z   VIDEO_URL: 
+2026-03-19T20:36:26.5164200Z   CHANNEL_URL: 
+2026-03-19T20:36:26.5164479Z   MULTIPLE_URLS: ["https://photos.app.goo.gl/E2nUkRFQr4thve5BA"]
+2026-03-19T20:36:26.5164806Z   VIDEOS_PER_RUN: 1
+2026-03-19T20:36:26.5164977Z ##[endgroup]
+2026-03-19T20:36:26.5453989Z URL: https://photos.app.goo.gl/E2nUkRFQr4thve5BA
+2026-03-19T20:36:26.5459488Z Google Photos: extracting video URL...
+2026-03-19T20:36:27.4183338Z Trying: https://lh3.googleusercontent.com/pw/AP1GczMbPRJ-kMqkJ9Q3mU2wY7qsJRHHurtq0gmSsu77DJ6y7NAqJKOE6iWfmMRM3aFV4ejjV2VoM_xYfo_gSWuK77_tQyxcRspKoRB7Xh90Ln4wPE4TAYgY=w600-h315-p-k-no
+2026-03-19T20:36:27.4189010Z curl: https://lh3.googleusercontent.com/pw/AP1GczMbPRJ-kMqkJ9Q3mU2wY7qsJRHHurtq0gmSsu77DJ6y7NAqJKOE6iWfmMRM3aFV4ejjV2VoM_xYfo_gSWuK77_tQyxcRspKoRB7Xh90Ln4wPE4TAYgY=w600-h315-p-k-no
+2026-03-19T20:36:27.4295785Z   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+2026-03-19T20:36:27.4300398Z                                  Dload  Upload   Total   Spent    Left  Speed
+2026-03-19T20:36:27.4300819Z 
+2026-03-19T20:36:27.6476655Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-03-19T20:36:28.3572554Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-03-19T20:36:28.3573627Z 100 82143  100 82143    0     0  88540      0 --:--:-- --:--:-- --:--:-- 88516
+2026-03-19T20:36:28.3606611Z Downloaded from Google Photos!
+2026-03-19T20:36:28.3610335Z Downloaded: 0.08 MB
+2026-03-19T20:36:28.3613554Z Done!
