@@ -127,7 +127,7 @@ export default {
     }
 
     // Serve video stream (for playing in browser)
-    if (path.startsWith("/api/stream/") && method === "GET") {
+    if (path.startsWith("/api/video/") && method === "GET") {
       const segments = path.split("/").filter(Boolean);
       const jobId = segments[2] ? parseInt(segments[2]) : null;
       if (!jobId) {
@@ -145,7 +145,6 @@ export default {
       }
 
       try {
-        // Get artifacts
         const artRes = await fetch(
           `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}/artifacts`,
           {
@@ -161,15 +160,16 @@ export default {
           return jsonResponse({ success: false, error: "Failed to fetch artifacts" }, 500);
         }
 
-        const artData = await artRes.json() as { artifacts?: Array<{ name: string; archive_download_url: string }> };
+        const artData = await artRes.json() as { artifacts?: Array<{ id: number; name: string; archive_download_url: string }> };
         const artifacts = artData.artifacts || [];
 
         if (artifacts.length === 0) {
           return jsonResponse({ success: false, error: "No artifacts found" }, 404);
         }
 
-        // Download the artifact
         const artifact = artifacts[0];
+
+        // Download the artifact and serve as video
         const fileRes = await fetch(artifact.archive_download_url, {
           headers: {
             Authorization: `Bearer ${githubSettings.pat_token}`,
@@ -183,12 +183,12 @@ export default {
           return jsonResponse({ success: false, error: "Failed to download" }, 500);
         }
 
-        // Return as zip for now (video files inside will need extraction)
+        // Return the zip file for download
         return new Response(fileRes.body, {
           status: 200,
           headers: {
             "Content-Type": "application/zip",
-            "Content-Disposition": `inline; filename="${artifact.name}.zip"`,
+            "Content-Disposition": `attachment; filename="video-job${jobId}.zip"`,
             "Access-Control-Allow-Origin": "*",
           },
         });
@@ -196,6 +196,54 @@ export default {
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
         return jsonResponse({ success: false, error: errorMsg }, 500);
       }
+    }
+
+    // Redirect to GitHub artifact download
+    if (path.startsWith("/api/download/") && method === "GET") {
+      const segments = path.split("/").filter(Boolean);
+      const jobId = segments[2] ? parseInt(segments[2]) : null;
+      if (!jobId) {
+        return jsonResponse({ success: false, error: "Job ID required" }, 400);
+      }
+
+      const job = await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(jobId).first<Job>();
+      if (!job) {
+        return jsonResponse({ success: false, error: "Job not found" }, 404);
+      }
+
+      const githubSettings = await env.DB.prepare("SELECT * FROM settings_github LIMIT 1").first<GithubSettings>();
+      if (!githubSettings || !job.github_run_id) {
+        return jsonResponse({ success: false, error: "No GitHub run" }, 400);
+      }
+
+      try {
+        const artRes = await fetch(
+          `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}/artifacts`,
+          {
+            headers: {
+              Authorization: `Bearer ${githubSettings.pat_token}`,
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": "AutomationSystem/1.0",
+            },
+          }
+        );
+
+        const artData = await artRes.json() as { artifacts?: Array<{ archive_download_url: string }> };
+        const artifact = artData.artifacts?.[0];
+
+        if (artifact) {
+          // Redirect to download URL
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: artifact.archive_download_url,
+              "Access-Control-Allow-Origin": "*",
+            },
+          });
+        }
+      } catch {}
+
+      return jsonResponse({ success: false, error: "No artifact found" }, 404);
     }
 
     if (path === "/api/webhook/github" && method === "POST") {
