@@ -1,0 +1,66 @@
+name: "Image Automation Template"
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID from worker'
+        required: true
+        type: number
+      image_source:
+        description: 'Image source type: url|placeholder'
+        required: true
+      image_url:
+        description: 'Image URL (for url source)'
+        required: false
+      placeholder_text:
+        description: 'Text for placeholder image'
+        required: false
+      image_config:
+        description: 'Image processing config JSON'
+        required: true
+      platforms:
+        description: 'Target platforms JSON'
+        required: true
+
+jobs:
+  process:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: runner-scripts
+
+      - name: Generate/Fetch Image
+        env:
+          IMAGE_SOURCE: ${{ github.event.inputs.image_source }}
+          IMAGE_URL: ${{ github.event.inputs.image_url }}
+          PLACEHOLDER_TEXT: ${{ github.event.inputs.placeholder_text }}
+          IMAGE_CONFIG: ${{ github.event.inputs.image_config }}
+        run: node generate-image.js
+        working-directory: runner-scripts
+
+      - name: Post to Social Media
+        env:
+          POSTFORME_API_KEY: ${{ secrets.POSTFORME_API_KEY }}
+          PLATFORMS: ${{ github.event.inputs.platforms }}
+          WORKER_WEBHOOK_URL: ${{ secrets.WORKER_WEBHOOK_URL }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+        run: node post-via-postforme.js
+        working-directory: runner-scripts
+
+      - name: Update Job Status
+        if: always()
+        env:
+          WORKER_WEBHOOK_URL: ${{ secrets.WORKER_WEBHOOK_URL }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+          JOB_STATUS: ${{ job.status }}
+        run: node update-job-status.js
+        working-directory: runner-scripts
