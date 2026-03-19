@@ -1432,7 +1432,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
               Next
             </button>
           ) : (
-            <button onClick={handleCreate} disabled={creating || !name || !videoUrl} className="glass-button-primary text-sm">
+            <button onClick={handleCreate} disabled={creating || !name || (!videoUrl && !channelUrl && !multipleUrls)} className="glass-button-primary text-sm">
               {creating ? "Creating..." : "Create Automation"}
             </button>
           )}
