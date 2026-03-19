@@ -30,6 +30,7 @@ export default function AutomationsPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "video" | "image">("all");
   const [modalType, setModalType] = useState<"video" | "image" | null>(null);
+  const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null);
 
   useEffect(() => {
     fetchAutomations();
@@ -130,6 +131,15 @@ export default function AutomationsPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setEditingAutomation(auto);
+                    setModalType(auto.type);
+                  }}
+                  className="glass-button text-sm py-2 px-4"
+                >
+                  Edit
+                </button>
                 {auto.status === "active" && (
                   <button onClick={() => handleAction(auto.id, "run")} className="glass-button-primary text-sm py-2 px-4">
                     Run Now
@@ -154,19 +164,27 @@ export default function AutomationsPage() {
       )}
 
       {modalType === "video" && (
-        <VideoModal onClose={() => setModalType(null)} onCreated={() => { setModalType(null); fetchAutomations(); }} />
+        <VideoModal
+          onClose={() => { setModalType(null); setEditingAutomation(null); }}
+          onCreated={() => { setModalType(null); setEditingAutomation(null); fetchAutomations(); }}
+          editData={editingAutomation}
+        />
       )}
       {modalType === "image" && (
-        <ImageModal onClose={() => setModalType(null)} onCreated={() => { setModalType(null); fetchAutomations(); }} />
+        <ImageModal
+          onClose={() => { setModalType(null); setEditingAutomation(null); }}
+          onCreated={() => { setModalType(null); setEditingAutomation(null); fetchAutomations(); }}
+          editData={editingAutomation}
+        />
       )}
     </div>
   );
 }
 
 /* ========== VIDEO MODAL ========== */
-function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function VideoModal({ onClose, onCreated, editData }: { onClose: () => void; onCreated: () => void; editData?: Automation | null }) {
   const [activeTab, setActiveTab] = useState<"basic" | "video" | "taglines" | "social" | "publish">("basic");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(editData?.name || "");
   const [description, setDescription] = useState("");
   const [videoSource, setVideoSource] = useState<"direct" | "youtube" | "bunny">("youtube");
   const [videoUrl, setVideoUrl] = useState("");
@@ -187,7 +205,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [outputFormat, setOutputFormat] = useState("mp4");
   const [outputQuality, setOutputQuality] = useState("high");
   const [outputResolution, setOutputResolution] = useState("1080x1920");
-  const [schedule, setSchedule] = useState("once");
+  const [schedule, setSchedule] = useState(editData?.schedule || "once");
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
@@ -234,6 +252,55 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [syncedAccounts, setSyncedAccounts] = useState<Array<{ platform: string; username: string; id: string; connected: boolean }>>([]);
 
   const allPlatforms = ["instagram", "youtube", "tiktok", "facebook", "x"];
+
+  useEffect(() => {
+    if (editData?.config) {
+      try {
+        const cfg = JSON.parse(editData.config);
+        setVideoSource(cfg.video_source || "youtube");
+        setVideoUrl(cfg.video_url || "");
+        setChannelUrl(cfg.channel_url || "");
+        setMultipleUrls((cfg.multiple_urls || []).join("\n"));
+        setSchedule(editData.schedule || "once");
+        if (cfg.ffmpeg_config) {
+          setCodec(cfg.ffmpeg_config.codec || "libx264");
+          setAudioCodec(cfg.ffmpeg_config.audio_codec || "aac");
+        }
+        if (cfg.taglines) {
+          setWatermarkText(cfg.taglines.watermark?.text || "");
+          setWatermarkPosition(cfg.taglines.watermark?.position || "bottomright");
+          setSelectedTopTagline(cfg.taglines.top_tagline || "");
+          setSelectedBottomTagline(cfg.taglines.bottom_tagline || "");
+        }
+        if (cfg.social_content) {
+          setCaption(cfg.social_content.caption || "");
+          setPostDescription(cfg.social_content.description || "");
+          setHashtags((cfg.social_content.hashtags || []).join(", "));
+        }
+        if (cfg.short_settings) {
+          setAspectRatio(cfg.short_settings.aspect_ratio || "9:16");
+          setCropMode(cfg.short_settings.crop_mode || "crop");
+          setPlaybackSpeed(String(cfg.short_settings.playback_speed || "1"));
+          setConvertToShorts(cfg.short_settings.convert_to_shorts ?? true);
+        }
+        if (cfg.fetch_mode) setFetchMode(cfg.fetch_mode);
+        if (cfg.fetch_config) {
+          setLastDays(String(cfg.fetch_config.last_days || "7"));
+          setVideosPerRun(String(cfg.fetch_config.videos_per_run || "1"));
+        }
+        if (cfg.split) setSplitEnabled(cfg.split.enabled || false);
+        if (cfg.combine) setCombineVideos(cfg.combine.enabled || false);
+        if (cfg.output_format) setOutputFormat(cfg.output_format);
+        if (cfg.output_quality) setOutputQuality(cfg.output_quality);
+        if (cfg.output_resolution) setOutputResolution(cfg.output_resolution);
+        if (cfg.publish) {
+          setAutoPublish(cfg.publish.auto_publish ?? true);
+          setPublishSchedule(cfg.publish.schedule_type || "immediate");
+        }
+        if (cfg.platforms) setPlatforms(cfg.platforms);
+      } catch {}
+    }
+  }, [editData]);
 
   useEffect(() => {
     // Fetch AI settings
@@ -433,15 +500,17 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
       },
     };
     try {
-      const res = await fetch("/api/automations", {
-        method: "POST",
+      const url = editData?.id ? `/api/automations/${editData.id}` : "/api/automations";
+      const method = editData?.id ? "PUT" : "POST";
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, type: "video", config: JSON.stringify(config), schedule: schedule === "once" ? null : schedule }),
       });
       const data = await res.json();
       if (data.success) onCreated();
       else alert("Failed: " + data.error);
-    } catch { alert("Failed to create"); }
+    } catch { alert("Failed to save"); }
     setCreating(false);
   };
 
@@ -450,7 +519,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
       <div className="glass-card max-w-3xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between p-6 pb-0">
-          <h3 className="text-xl font-bold">Create Video Automation</h3>
+          <h3 className="text-xl font-bold">{editData ? "Edit Video Automation" : "Create Video Automation"}</h3>
           <button onClick={onClose} className="glass-button py-1 px-3 text-sm">Close</button>
         </div>
 
@@ -1433,7 +1502,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
             </button>
           ) : (
             <button onClick={handleCreate} disabled={creating || !name || (!videoUrl && !channelUrl && !multipleUrls)} className="glass-button-primary text-sm">
-              {creating ? "Creating..." : "Create Automation"}
+              {creating ? "Saving..." : (editData ? "Update Automation" : "Create Automation")}
             </button>
           )}
         </div>
@@ -1443,9 +1512,9 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 }
 
 /* ========== IMAGE MODAL ========== */
-function ImageModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function ImageModal({ onClose, onCreated, editData }: { onClose: () => void; onCreated: () => void; editData?: Automation | null }) {
   const [step, setStep] = useState(1);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(editData?.name || "");
   const [imageSource, setImageSource] = useState<"url" | "placeholder">("url");
   const [imageUrl, setImageUrl] = useState("");
   const [placeholderText, setPlaceholderText] = useState("");
@@ -1475,15 +1544,17 @@ function ImageModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
       platforms,
     };
     try {
-      const res = await fetch("/api/automations", {
-        method: "POST",
+      const url = editData?.id ? `/api/automations/${editData.id}` : "/api/automations";
+      const method = editData?.id ? "PUT" : "POST";
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, type: "image", config: JSON.stringify(config), schedule: schedule === "once" ? null : schedule }),
       });
       const data = await res.json();
       if (data.success) onCreated();
       else alert("Failed: " + data.error);
-    } catch { alert("Failed to create"); }
+    } catch { alert("Failed to save"); }
     setCreating(false);
   };
 
@@ -1491,7 +1562,7 @@ function ImageModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="glass-card p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto scrollbar-thin" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-bold">Create Image Automation</h3>
+          <h3 className="text-xl font-bold">{editData ? "Edit Image Automation" : "Create Image Automation"}</h3>
           <button onClick={onClose} className="glass-button py-1 px-3 text-sm">Close</button>
         </div>
 
