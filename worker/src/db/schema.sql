@@ -26,6 +26,18 @@ CREATE TABLE IF NOT EXISTS settings_video_sources (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS settings_ai (
+  id INTEGER PRIMARY KEY,
+  gemini_key TEXT,
+  grok_key TEXT,
+  cohere_key TEXT,
+  openrouter_key TEXT,
+  openai_key TEXT,
+  default_provider TEXT DEFAULT 'openai',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS automations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,

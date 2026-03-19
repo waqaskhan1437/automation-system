@@ -32,6 +32,18 @@ export interface VideoSourceSettings {
   updated_at?: string;
 }
 
+export interface AISettings {
+  id?: number;
+  gemini_key: string | null;
+  grok_key: string | null;
+  cohere_key: string | null;
+  openrouter_key: string | null;
+  openai_key: string | null;
+  default_provider: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Automation {
   id?: number;
   name: string;

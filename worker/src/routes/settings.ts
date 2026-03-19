@@ -1,4 +1,4 @@
-import { Env, ApiResponse, PostformeSettings, GithubSettings, VideoSourceSettings } from "../types";
+import { Env, ApiResponse, PostformeSettings, GithubSettings, VideoSourceSettings, AISettings } from "../types";
 
 function jsonResponse<T>(data: ApiResponse<T>, status: number = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -92,6 +92,91 @@ export async function handleSettingsRoutes(
         ).bind(body.bunny_api_key || null, body.bunny_library_id || null, body.youtube_cookies || null).run();
       }
       return jsonResponse({ success: true, message: "Video source settings saved" });
+    }
+  }
+
+  // AI SETTINGS
+  if (path === "/api/settings/ai") {
+    if (method === "GET") {
+      const result = await env.DB.prepare("SELECT * FROM settings_ai LIMIT 1").first<AISettings>();
+      return jsonResponse({ success: true, data: result || null });
+    }
+
+    if (method === "POST") {
+      const body = await request.json() as Partial<AISettings>;
+
+      const existing = await env.DB.prepare("SELECT id FROM settings_ai LIMIT 1").first();
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE settings_ai SET gemini_key = ?, grok_key = ?, cohere_key = ?, openrouter_key = ?, openai_key = ?, default_provider = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        ).bind(body.gemini_key || null, body.grok_key || null, body.cohere_key || null, body.openrouter_key || null, body.openai_key || null, body.default_provider || "openai", existing.id).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO settings_ai (gemini_key, grok_key, cohere_key, openrouter_key, openai_key, default_provider) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind(body.gemini_key || null, body.grok_key || null, body.cohere_key || null, body.openrouter_key || null, body.openai_key || null, body.default_provider || "openai").run();
+      }
+      return jsonResponse({ success: true, message: "AI settings saved" });
+    }
+  }
+
+  // AI KEY TEST
+  if (path === "/api/settings/ai/test" && method === "POST") {
+    const body = await request.json() as { provider: string; api_key: string };
+    if (!body.provider || !body.api_key) {
+      return jsonResponse({ success: false, error: "provider and api_key required" }, 400);
+    }
+
+    try {
+      let testResult = false;
+      let message = "";
+
+      switch (body.provider) {
+        case "openai": {
+          const res = await fetch("https://api.openai.com/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "OpenAI connected successfully" : `OpenAI error: ${res.status}`;
+          break;
+        }
+        case "gemini": {
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${body.api_key}`);
+          testResult = res.ok;
+          message = res.ok ? "Gemini connected successfully" : `Gemini error: ${res.status}`;
+          break;
+        }
+        case "grok": {
+          const res = await fetch("https://api.x.ai/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "Grok connected successfully" : `Grok error: ${res.status}`;
+          break;
+        }
+        case "cohere": {
+          const res = await fetch("https://api.cohere.ai/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "Cohere connected successfully" : `Cohere error: ${res.status}`;
+          break;
+        }
+        case "openrouter": {
+          const res = await fetch("https://openrouter.ai/api/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "OpenRouter connected successfully" : `OpenRouter error: ${res.status}`;
+          break;
+        }
+        default:
+          return jsonResponse({ success: false, error: "Unknown provider" }, 400);
+      }
+
+      return jsonResponse({ success: testResult, message });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Connection failed";
+      return jsonResponse({ success: false, error: errorMsg });
     }
   }
 
