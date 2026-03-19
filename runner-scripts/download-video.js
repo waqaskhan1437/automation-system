@@ -80,14 +80,14 @@ function main() {
   let success = false;
   const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
   const isGooglePhotos = url.includes("photos.google") || url.includes("photos.app.goo.gl");
+  const isDirectUrl = url.endsWith(".mp4") || url.endsWith(".mov") || url.endsWith(".webm");
 
-  if (isYouTube || isGooglePhotos) {
-    success = downloadYtDlp(url);
-  } else {
+  if (isDirectUrl) {
+    // Direct URL - use curl
     success = download(url);
-    if (!success) {
-      success = downloadYtDlp(url);
-    }
+  } else {
+    // YouTube, Google Photos, etc - use yt-dlp
+    success = downloadYtDlp(url);
   }
 
   // Verify
