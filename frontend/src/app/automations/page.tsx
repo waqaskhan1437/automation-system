@@ -74,7 +74,7 @@ export default function AutomationsPage() {
           const job = latestJobs[parseInt(autoId)];
           if (job.status === "running" || job.status === "queued") {
             try {
-              const statusRes = await fetch(`/api/jobs/${job.id}/logs`);
+              const statusRes = await fetch(`/api/jobs/${job.id}/logs?t=${Date.now()}`);
               const statusData = await statusRes.json();
               if (statusData.success) {
                 const steps: StepInfo[] = statusData.data.steps || [];
