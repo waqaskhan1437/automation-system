@@ -215,6 +215,14 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [selectedBottomTagline, setSelectedBottomTagline] = useState("");
   const [taglinePrompt, setTaglinePrompt] = useState("");
 
+  // Social Content AI state
+  const [socialSelectedAI, setSocialSelectedAI] = useState("openai");
+  const [socialGenerating, setSocialGenerating] = useState(false);
+  const [generatedTitles, setGeneratedTitles] = useState<string[]>([]);
+  const [generatedDescriptions, setGeneratedDescriptions] = useState<string[]>([]);
+  const [generatedHashtags, setGeneratedHashtags] = useState<string[][]>([]);
+  const [socialPrompt, setSocialPrompt] = useState("");
+
   const allPlatforms = ["instagram", "youtube", "tiktok", "facebook", "x"];
 
   useEffect(() => {
@@ -274,6 +282,49 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
       setSelectedBottomTagline("Follow for more!");
     }
     setGenerating(false);
+  };
+
+  const generateSocialContent = async () => {
+    setSocialGenerating(true);
+    setGeneratedTitles([]);
+    setGeneratedDescriptions([]);
+    setGeneratedHashtags([]);
+
+    const prompt = socialPrompt || `For a social media video about "${name || "social media content"}", generate 3 title options, 3 description options, and 3 hashtag sets.
+    Return JSON format: {"titles": ["title1", "title2", "title3"], "descriptions": ["desc1", "desc2", "desc3"], "hashtags": [["#tag1","#tag2"],["#tag3","#tag4"],["#tag5","#tag6"]]}`;
+
+    try {
+      const res = await fetch("/api/settings/ai/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: socialSelectedAI, prompt }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setGeneratedTitles(data.data.titles || []);
+        setGeneratedDescriptions(data.data.descriptions || []);
+        setGeneratedHashtags(data.data.hashtags || []);
+        if (data.data.titles?.[0]) setCaption(data.data.titles[0]);
+        if (data.data.descriptions?.[0]) setPostDescription(data.data.descriptions[0]);
+        if (data.data.hashtags?.[0]) setHashtags(data.data.hashtags[0].join(", "));
+      } else {
+        // Fallback
+        setGeneratedTitles(["You Won't Believe What Happens Next!", "This Will Change Your Life!", "The Secret Nobody Tells You!"]);
+        setGeneratedDescriptions(["Check out this amazing video that will blow your mind!", "An incredible journey you need to see to believe!", "Discover the hidden truth in this viral video!"]);
+        setGeneratedHashtags([["#viral", "#trending", "#fyp"], ["#mustwatch", "#explore", "#discover"], ["#trend", "#share", "#follow"]]);
+        setCaption("You Won't Believe What Happens Next!");
+        setPostDescription("Check out this amazing video that will blow your mind!");
+        setHashtags("#viral, #trending, #fyp");
+      }
+    } catch {
+      setGeneratedTitles(["You Won't Believe What Happens Next!", "This Will Change Your Life!", "The Secret Nobody Tells You!"]);
+      setGeneratedDescriptions(["Check out this amazing video that will blow your mind!", "An incredible journey you need to see to believe!", "Discover the hidden truth in this viral video!"]);
+      setGeneratedHashtags([["#viral", "#trending", "#fyp"], ["#mustwatch", "#explore", "#discover"], ["#trend", "#share", "#follow"]]);
+      setCaption("You Won't Believe What Happens Next!");
+      setPostDescription("Check out this amazing video that will blow your mind!");
+      setHashtags("#viral, #trending, #fyp");
+    }
+    setSocialGenerating(false);
   };
 
   const tabs = [
@@ -908,24 +959,150 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 
           {activeTab === "social" && (
             <div className="space-y-5">
+              {/* AI Generate Section */}
               <div className="glass-card p-5">
-                <p className="text-sm font-medium mb-4">Default Content (applies to all platforms)</p>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Caption</label>
-                    <textarea className="glass-input text-sm min-h-[60px] resize-none" placeholder="Write your post caption..." value={caption} onChange={(e) => setCaption(e.target.value)} />
+                <p className="text-sm font-medium mb-4">Generate with AI</p>
+                <div className="space-y-3">
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs text-[#a1a1aa] mb-1">AI Provider</label>
+                      <select className="glass-select text-sm" value={socialSelectedAI} onChange={(e) => setSocialSelectedAI(e.target.value)}>
+                        {aiProviders.length > 0 ? (
+                          aiProviders.map((p) => (
+                            <option key={p.id} value={p.id}>{p.label}</option>
+                          ))
+                        ) : (
+                          <option value="">No AI configured</option>
+                        )}
+                      </select>
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        onClick={generateSocialContent}
+                        disabled={socialGenerating || aiProviders.length === 0}
+                        className="glass-button-primary text-sm h-[42px] px-6 whitespace-nowrap"
+                      >
+                        {socialGenerating ? (
+                          <span className="flex items-center gap-2">
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            Generating...
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-2">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                            Generate All
+                          </span>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div>
-                    <label className="block text-xs text-[#a1a1aa] mb-1">Hashtags (comma separated)</label>
-                    <input className="glass-input text-sm" placeholder="#trending, #viral, #shorts" value={hashtags} onChange={(e) => setHashtags(e.target.value)} />
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Custom Prompt (optional)</label>
+                    <textarea
+                      className="glass-input text-xs min-h-[40px] resize-none"
+                      placeholder="e.g., Generate engaging content for a fitness motivation video..."
+                      value={socialPrompt}
+                      onChange={(e) => setSocialPrompt(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Generated Titles */}
+              {generatedTitles.length > 0 && (
+                <div className="glass-card p-5">
+                  <p className="text-sm font-medium mb-3">Generated Titles</p>
+                  <div className="space-y-2">
+                    {generatedTitles.map((title, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setCaption(title)}
+                        className={`w-full p-3 rounded-xl text-left text-sm transition-all ${
+                          caption === title
+                            ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white"
+                            : "glass-button"
+                        }`}
+                      >
+                        {title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Generated Descriptions */}
+              {generatedDescriptions.length > 0 && (
+                <div className="glass-card p-5">
+                  <p className="text-sm font-medium mb-3">Generated Descriptions</p>
+                  <div className="space-y-2">
+                    {generatedDescriptions.map((desc, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setPostDescription(desc)}
+                        className={`w-full p-3 rounded-xl text-left text-sm transition-all ${
+                          postDescription === desc
+                            ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white"
+                            : "glass-button"
+                        }`}
+                      >
+                        {desc}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Generated Hashtags */}
+              {generatedHashtags.length > 0 && (
+                <div className="glass-card p-5">
+                  <p className="text-sm font-medium mb-3">Generated Hashtag Sets</p>
+                  <div className="space-y-2">
+                    {generatedHashtags.map((tagSet, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setHashtags(tagSet.join(", "))}
+                        className={`w-full p-3 rounded-xl text-left text-sm transition-all ${
+                          hashtags === tagSet.join(", ")
+                            ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white"
+                            : "glass-button"
+                        }`}
+                      >
+                        <div className="flex flex-wrap gap-1">
+                          {tagSet.map((tag, j) => (
+                            <span key={j} className="badge badge-active text-[10px]">{tag}</span>
+                          ))}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Default Content (Manual) */}
+              <div className="glass-card p-5">
+                <p className="text-sm font-medium mb-4">Selected Content</p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Caption / Title</label>
+                    <textarea className="glass-input text-sm min-h-[60px] resize-none" placeholder="Write your post caption..." value={caption} onChange={(e) => setCaption(e.target.value)} />
                   </div>
                   <div>
                     <label className="block text-xs text-[#a1a1aa] mb-1">Description</label>
                     <textarea className="glass-input text-sm min-h-[60px] resize-none" placeholder="Detailed description for the post..." value={postDescription} onChange={(e) => setPostDescription(e.target.value)} />
                   </div>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Hashtags (comma separated)</label>
+                    <input className="glass-input text-sm" placeholder="#trending, #viral, #shorts" value={hashtags} onChange={(e) => setHashtags(e.target.value)} />
+                  </div>
                 </div>
               </div>
 
+              {/* Platform Specific */}
               {platforms.length > 0 && (
                 <div>
                   <p className="text-sm font-medium mb-3">Platform-Specific Content</p>
