@@ -55,49 +55,59 @@ export default function AutomationsPage() {
       const autoData = await autoRes.json();
       if (autoData.success) setAutomations(autoData.data || []);
 
-      // Check for running jobs in DB
-      const jobsRes = await fetch("/api/jobs?status=running");
+      // Get all recent jobs (last 10)
+      const jobsRes = await fetch("/api/jobs?limit=10");
       const jobsData = await jobsRes.json();
       if (jobsData.success && jobsData.data) {
         const running: Record<number, RunningJob> = {};
+
+        // Group by automation_id, keep only latest
+        const latestJobs: Record<number, Job> = {};
         for (const job of jobsData.data) {
-          // Fetch live status from GitHub
-          try {
-            const statusRes = await fetch(`/api/jobs/${job.id}/logs`);
-            const statusData = await statusRes.json();
-            if (statusData.success) {
-              const steps: StepInfo[] = statusData.data.steps || [];
-              const completedSteps = steps.filter((s: StepInfo) => s.conclusion === "success").length || 0;
-              const totalSteps = steps.length || 1;
+          if (!latestJobs[job.automation_id] || job.id > latestJobs[job.automation_id].id) {
+            latestJobs[job.automation_id] = job;
+          }
+        }
 
-              // Check if core steps succeeded (Download + Process)
-              const downloadStep = steps.find((s: StepInfo) => s.name.includes("Download"));
-              const processStep = steps.find((s: StepInfo) => s.name.includes("Process") || s.name.includes("FFmpeg"));
-              const coreSuccess = downloadStep?.conclusion === "success" && (processStep?.conclusion === "success" || !processStep);
+        // Check status of latest jobs
+        for (const autoId of Object.keys(latestJobs)) {
+          const job = latestJobs[parseInt(autoId)];
+          if (job.status === "running" || job.status === "queued") {
+            try {
+              const statusRes = await fetch(`/api/jobs/${job.id}/logs`);
+              const statusData = await statusRes.json();
+              if (statusData.success) {
+                const steps: StepInfo[] = statusData.data.steps || [];
+                const completedSteps = steps.filter((s: StepInfo) => s.conclusion === "success").length || 0;
+                const totalSteps = steps.length || 1;
 
-              // Determine actual status
-              let actualStatus = statusData.data.run_status || "running";
-              if (statusData.data.run_status === "completed") {
-                if (coreSuccess) {
-                  actualStatus = "success"; // Core work done, even if posting failed
-                } else if (statusData.data.run_conclusion === "success") {
-                  actualStatus = "success";
-                } else {
-                  actualStatus = "failed";
+                const downloadStep = steps.find((s: StepInfo) => s.name.includes("Download"));
+                const processStep = steps.find((s: StepInfo) => s.name.includes("Process") || s.name.includes("FFmpeg"));
+                const coreSuccess = downloadStep?.conclusion === "success" && (processStep?.conclusion === "success" || !processStep);
+
+                let actualStatus = statusData.data.run_status || "running";
+                if (statusData.data.run_status === "completed") {
+                  if (coreSuccess) {
+                    actualStatus = "success";
+                  } else if (statusData.data.run_conclusion === "success") {
+                    actualStatus = "success";
+                  } else {
+                    actualStatus = "failed";
+                  }
                 }
-              }
 
-              running[job.automation_id] = {
-                jobId: job.id,
-                status: actualStatus,
-                githubRunId: statusData.data.run_id,
-                githubRunUrl: statusData.data.run_url,
-                steps: steps,
-                error: job.error_message,
-                progress: Math.round((completedSteps / totalSteps) * 100),
-              };
-            }
-          } catch {}
+                running[job.automation_id] = {
+                  jobId: job.id,
+                  status: actualStatus,
+                  githubRunId: statusData.data.run_id,
+                  githubRunUrl: statusData.data.run_url,
+                  steps: steps,
+                  error: job.error_message,
+                  progress: Math.round((completedSteps / totalSteps) * 100),
+                };
+              }
+            } catch {}
+          }
         }
         setRunningJobs(running);
       }
