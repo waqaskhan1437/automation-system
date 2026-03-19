@@ -17,8 +17,8 @@ export async function handleJobsRoutes(
 ): Promise<Response> {
   const method = request.method;
   const segments = path.split("/").filter(Boolean);
-  const id = segments[3] ? parseInt(segments[3]) : null;
-  const action = segments[4];
+  const id = segments[2] ? parseInt(segments[2]) : null;
+  const action = segments[3];
 
   // GET /api/jobs - List all
   if (path === "/api/jobs" && method === "GET") {
