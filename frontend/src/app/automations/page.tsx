@@ -502,6 +502,7 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                     { value: "16:9", label: "16:9", desc: "YouTube/Horizontal" },
                     { value: "1:1", label: "1:1", desc: "Square/Instagram" },
                     { value: "4:5", label: "4:5", desc: "Instagram Feed" },
+                    { value: "no-crop", label: "No Crop", desc: "Original ratio + black bars" },
                   ].map((ar) => (
                     <button
                       key={ar.value}
