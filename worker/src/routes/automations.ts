@@ -175,6 +175,7 @@ export async function handleAutomationsRoutes(
             Authorization: `Bearer ${githubSettings.pat_token}`,
             Accept: "application/vnd.github.v3+json",
             "Content-Type": "application/json",
+            "User-Agent": "AutomationSystem/1.0",
           },
           body: JSON.stringify({
             ref: "master",
