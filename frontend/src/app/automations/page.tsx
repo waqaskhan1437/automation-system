@@ -229,10 +229,12 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [publishDelay, setPublishDelay] = useState("5");
   const [publishDate, setPublishDate] = useState("");
   const [publishTime, setPublishTime] = useState("");
+  const [syncedAccounts, setSyncedAccounts] = useState<Array<{ platform: string; username: string; id: string; connected: boolean }>>([]);
 
   const allPlatforms = ["instagram", "youtube", "tiktok", "facebook", "x"];
 
   useEffect(() => {
+    // Fetch AI settings
     fetch("/api/settings/ai")
       .then((r) => r.json())
       .then((data) => {
@@ -247,6 +249,26 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
           ];
           setAiProviders(providers.filter((p) => p.hasKey));
           if (d.default_provider) setSelectedAI(d.default_provider);
+        }
+      })
+      .catch(() => {});
+
+    // Fetch synced Postforme accounts
+    fetch("/api/settings/postforme")
+      .then((r) => r.json())
+      .then(async (data) => {
+        if (data.success && data.data?.api_key) {
+          try {
+            const syncRes = await fetch("/api/settings/postforme/sync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ api_key: data.data.api_key }),
+            });
+            const syncData = await syncRes.json();
+            if (syncData.success && syncData.data) {
+              setSyncedAccounts(syncData.data);
+            }
+          } catch {}
         }
       })
       .catch(() => {});
@@ -1166,23 +1188,43 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                 </div>
               </div>
 
-              {/* Platforms */}
+              {/* Platforms from Synced Accounts */}
               <div>
-                <label className="block text-sm font-medium mb-3">Target Platforms</label>
-                <div className="flex flex-wrap gap-2">
-                  {allPlatforms.map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setPlatforms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]))}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium capitalize transition-all ${
-                        platforms.includes(p) ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"
-                      }`}
-                    >
-                      <span className={`w-2 h-2 rounded-full ${p === "instagram" ? "bg-[#E1306C]" : p === "youtube" ? "bg-[#FF0000]" : p === "tiktok" ? "bg-white" : p === "facebook" ? "bg-[#1877F2]" : "bg-[#1DA1F2]"}`} />
-                      {p}
-                    </button>
-                  ))}
-                </div>
+                <label className="block text-sm font-medium mb-3">Select Accounts to Publish</label>
+                {syncedAccounts.length > 0 ? (
+                  <div className="space-y-2">
+                    {syncedAccounts.map((account) => (
+                      <label key={account.id} className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${
+                        platforms.includes(account.platform) ? "bg-gradient-to-r from-[#6366f1]/20 to-[#8b5cf6]/20 border border-[rgba(99,102,241,0.3)]" : "glass-button"
+                      }`}>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={platforms.includes(account.platform)}
+                            onChange={() => setPlatforms((prev) => prev.includes(account.platform) ? prev.filter((x) => x !== account.platform) : [...prev, account.platform])}
+                            className="w-4 h-4 rounded accent-[#6366f1]"
+                          />
+                          <span className={`w-2 h-2 rounded-full ${
+                            account.platform === "instagram" ? "bg-[#E1306C]" :
+                            account.platform === "youtube" ? "bg-[#FF0000]" :
+                            account.platform === "tiktok" ? "bg-white" :
+                            account.platform === "facebook" ? "bg-[#1877F2]" :
+                            "bg-[#1DA1F2]"
+                          }`} />
+                          <span className="text-sm font-medium capitalize">{account.platform}</span>
+                          <span className="text-xs text-[#a1a1aa]">@{account.username}</span>
+                        </div>
+                        <span className={`badge text-[10px] ${account.connected ? "badge-success" : "badge-failed"}`}>
+                          {account.connected ? "Active" : "Inactive"}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="glass-card p-4 text-center text-[#a1a1aa] text-sm">
+                    No accounts synced. Go to <span className="text-[#6366f1]">Settings → Postforme API</span> and click "Sync Accounts"
+                  </div>
+                )}
               </div>
 
               {/* Scheduled Posting */}
