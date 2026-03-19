@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 interface Automation {
   id: number;
@@ -25,12 +25,24 @@ interface FFmpegConfig {
   custom_args: string;
 }
 
+interface RunningJob {
+  automationId: number;
+  jobId: number;
+  status: "queued" | "running" | "success" | "failed";
+  githubRunId: number | null;
+  githubRunUrl: string | null;
+  steps: Array<{ name: string; status: string; conclusion: string | null }>;
+  error: string | null;
+}
+
 export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "video" | "image">("all");
   const [modalType, setModalType] = useState<"video" | "image" | null>(null);
   const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null);
+  const [runningJobs, setRunningJobs] = useState<Record<number, RunningJob>>({});
+  const [logsModal, setLogsModal] = useState<RunningJob | null>(null);
 
   useEffect(() => {
     fetchAutomations();
@@ -49,15 +61,108 @@ export default function AutomationsPage() {
     setLoading(false);
   };
 
+  const pollJobStatus = useCallback(async (automationId: number, jobId: number) => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/status`);
+      const data = await res.json();
+      if (data.success) {
+        const statusData = data.data;
+        setRunningJobs(prev => ({
+          ...prev,
+          [automationId]: {
+            ...prev[automationId],
+            status: statusData.status,
+            githubRunUrl: statusData.run_url,
+            error: statusData.error,
+          }
+        }));
+
+        // Fetch steps/logs
+        const logsRes = await fetch(`/api/jobs/${jobId}/logs`);
+        const logsData = await logsRes.json();
+        if (logsData.success) {
+          setRunningJobs(prev => ({
+            ...prev,
+            [automationId]: {
+              ...prev[automationId],
+              steps: logsData.data.steps || [],
+              githubRunId: logsData.data.run_id,
+              githubRunUrl: logsData.data.run_url,
+            }
+          }));
+        }
+
+        if (statusData.status === "success" || statusData.status === "failed") {
+          setTimeout(() => {
+            setRunningJobs(prev => {
+              const newJobs = { ...prev };
+              delete newJobs[automationId];
+              return newJobs;
+            });
+            fetchAutomations();
+          }, 5000);
+          return false;
+        }
+        return true;
+      }
+    } catch {}
+    return true;
+  }, []);
+
+  useEffect(() => {
+    const runningAutomationIds = Object.keys(runningJobs).map(Number);
+    if (runningAutomationIds.length === 0) return;
+
+    const interval = setInterval(async () => {
+      for (const autoId of runningAutomationIds) {
+        const job = runningJobs[autoId];
+        if (job && job.status !== "success" && job.status !== "failed") {
+          await pollJobStatus(autoId, job.jobId);
+        }
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [runningJobs, pollJobStatus]);
+
   const handleAction = async (id: number, action: "run" | "pause" | "resume" | "delete") => {
     try {
       if (action === "run") {
+        setRunningJobs(prev => ({
+          ...prev,
+          [id]: {
+            automationId: id,
+            jobId: 0,
+            status: "queued",
+            githubRunId: null,
+            githubRunUrl: null,
+            steps: [],
+            error: null,
+          }
+        }));
+
         const res = await fetch(`/api/automations/${id}/run`, { method: "POST" });
         const data = await res.json();
         if (data.success) {
-          alert("Automation started! Check GitHub Actions: https://github.com/waqaskhan1437/automation-system/actions");
+          setRunningJobs(prev => ({
+            ...prev,
+            [id]: {
+              ...prev[id],
+              jobId: data.data.job_id,
+              status: "running",
+              githubRunId: data.data.github_run_id,
+            }
+          }));
+          pollJobStatus(id, data.data.job_id);
         } else {
-          alert("Failed: " + data.error);
+          setRunningJobs(prev => ({
+            ...prev,
+            [id]: {
+              ...prev[id],
+              status: "failed",
+              error: data.error,
+            }
+          }));
         }
       } else if (action === "delete") {
         await fetch(`/api/automations/${id}`, { method: "DELETE" });
@@ -66,8 +171,18 @@ export default function AutomationsPage() {
       }
       fetchAutomations();
     } catch (err) {
-      alert("Action failed: " + (err instanceof Error ? err.message : "Unknown error"));
+      if (action === "run") {
+        setRunningJobs(prev => ({
+          ...prev,
+          [id]: {
+            ...prev[id],
+            status: "failed",
+            error: "Action failed",
+          }
+        }));
+      }
     }
+  };
   };
 
   const filtered = filter === "all" ? automations : automations.filter((a) => a.type === filter);
@@ -148,24 +263,78 @@ export default function AutomationsPage() {
                 >
                   Edit
                 </button>
-                {auto.status === "active" && (
+                {runningJobs[auto.id] ? (
+                  <button
+                    onClick={() => setLogsModal(runningJobs[auto.id])}
+                    className="glass-button-primary text-sm py-2 px-4 flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    {runningJobs[auto.id].status === "queued" ? "Queued..." : runningJobs[auto.id].status === "running" ? "Running..." : runningJobs[auto.id].status === "success" ? "Done!" : "Failed"}
+                  </button>
+                ) : auto.status === "active" ? (
                   <button onClick={() => handleAction(auto.id, "run")} className="glass-button-primary text-sm py-2 px-4">
                     Run Now
                   </button>
-                )}
-                {auto.status === "active" ? (
+                ) : null}
+                {auto.status === "active" && !runningJobs[auto.id] ? (
                   <button onClick={() => handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">
                     Pause
                   </button>
-                ) : (
+                ) : auto.status !== "active" && !runningJobs[auto.id] ? (
                   <button onClick={() => handleAction(auto.id, "resume")} className="glass-button text-sm py-2 px-4">
                     Resume
                   </button>
-                )}
+                ) : null}
                 <button onClick={() => handleAction(auto.id, "delete")} className="glass-button text-sm py-2 px-4 text-[#ef4444]">
                   Delete
                 </button>
               </div>
+              {/* Progress Bar */}
+              {runningJobs[auto.id] && (
+                <div className="mt-3 pt-3 border-t border-[rgba(255,255,255,0.05)]">
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-2 rounded-full bg-[rgba(255,255,255,0.1)] overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          runningJobs[auto.id].status === "success" ? "bg-[#10b981] w-full" :
+                          runningJobs[auto.id].status === "failed" ? "bg-[#ef4444] w-full" :
+                          runningJobs[auto.id].status === "running" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] w-2/3 animate-pulse" :
+                          "bg-[#6366f1] w-1/4"
+                        }`}
+                      />
+                    </div>
+                    <button
+                      onClick={() => setLogsModal(runningJobs[auto.id])}
+                      className="text-xs text-[#6366f1] hover:underline whitespace-nowrap"
+                    >
+                      View Logs
+                    </button>
+                  </div>
+                  {runningJobs[auto.id].steps.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {runningJobs[auto.id].steps.map((step, i) => (
+                        <span
+                          key={i}
+                          className={`text-[10px] px-2 py-0.5 rounded-full ${
+                            step.conclusion === "success" ? "bg-[rgba(16,185,129,0.15)] text-[#10b981]" :
+                            step.conclusion === "failure" ? "bg-[rgba(239,68,68,0.15)] text-[#ef4444]" :
+                            step.status === "in_progress" ? "bg-[rgba(99,102,241,0.15)] text-[#6366f1]" :
+                            "bg-[rgba(255,255,255,0.05)] text-[#a1a1aa]"
+                          }`}
+                        >
+                          {step.status === "in_progress" ? "..." : step.conclusion === "success" ? "✓" : step.conclusion === "failure" ? "✗" : "○"} {step.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {runningJobs[auto.id].error && (
+                    <p className="text-xs text-[#ef4444] mt-1">{runningJobs[auto.id].error}</p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -184,6 +353,168 @@ export default function AutomationsPage() {
           onCreated={() => { setModalType(null); setEditingAutomation(null); fetchAutomations(); }}
           editData={editingAutomation}
         />
+      )}
+
+      {/* Logs Modal */}
+      {logsModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setLogsModal(null)}>
+          <div className="glass-card max-w-3xl w-full max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 pb-4 border-b border-[rgba(255,255,255,0.08)]">
+              <div>
+                <h3 className="text-lg font-bold">GitHub Actions Runner Logs</h3>
+                <p className="text-xs text-[#a1a1aa] mt-1">Automation #{logsModal.automationId} • Job #{logsModal.jobId}</p>
+              </div>
+              <button onClick={() => setLogsModal(null)} className="glass-button py-1 px-3 text-sm">Close</button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 scrollbar-thin space-y-4">
+              {/* Status Badge */}
+              <div className="flex items-center gap-3">
+                <span className={`badge ${
+                  logsModal.status === "success" ? "badge-success" :
+                  logsModal.status === "failed" ? "badge-failed" :
+                  logsModal.status === "running" ? "badge-running" :
+                  "badge-queued"
+                }`}>
+                  {logsModal.status === "queued" ? "Queued" :
+                   logsModal.status === "running" ? "Running" :
+                   logsModal.status === "success" ? "Success" : "Failed"}
+                </span>
+                {logsModal.githubRunUrl && (
+                  <a href={logsModal.githubRunUrl} target="_blank" rel="noopener" className="text-xs text-[#6366f1] hover:underline">
+                    View on GitHub →
+                  </a>
+                )}
+              </div>
+
+              {/* Progress Steps */}
+              {logsModal.steps.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Workflow Steps</p>
+                  {logsModal.steps.map((step, i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-[rgba(255,255,255,0.03)]">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                        step.conclusion === "success" ? "bg-[rgba(16,185,129,0.2)] text-[#10b981]" :
+                        step.conclusion === "failure" ? "bg-[rgba(239,68,68,0.2)] text-[#ef4444]" :
+                        step.status === "in_progress" ? "bg-[rgba(99,102,241,0.2)] text-[#6366f1]" :
+                        "bg-[rgba(255,255,255,0.05)] text-[#a1a1aa]"
+                      }`}>
+                        {step.conclusion === "success" ? "✓" :
+                         step.conclusion === "failure" ? "✗" :
+                         step.status === "in_progress" ? (
+                           <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                           </svg>
+                         ) : "○"}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm">{step.name}</p>
+                        <p className="text-xs text-[#a1a1aa] capitalize">{step.status.replace("_", " ")}</p>
+                      </div>
+                      <span className={`text-xs ${
+                        step.conclusion === "success" ? "text-[#10b981]" :
+                        step.conclusion === "failure" ? "text-[#ef4444]" :
+                        step.status === "in_progress" ? "text-[#6366f1]" :
+                        "text-[#a1a1aa]"
+                      }`}>
+                        {step.conclusion === "success" ? "Completed" :
+                         step.conclusion === "failure" ? "Failed" :
+                         step.status === "in_progress" ? "In Progress" : "Pending"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Progress Bar */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Progress</p>
+                <div className="h-3 rounded-full bg-[rgba(255,255,255,0.1)] overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      logsModal.status === "success" ? "bg-[#10b981] w-full" :
+                      logsModal.status === "failed" ? "bg-[#ef4444] w-full" :
+                      logsModal.status === "running" ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] animate-pulse" :
+                      "bg-[#6366f1]"
+                    }`}
+                    style={{
+                      width: logsModal.status === "success" || logsModal.status === "failed" ? "100%" :
+                             logsModal.steps.length > 0 ?
+                               `${(logsModal.steps.filter(s => s.conclusion === "success").length / logsModal.steps.length) * 100}%` :
+                               "10%"
+                    }}
+                  />
+                </div>
+                {logsModal.steps.length > 0 && (
+                  <p className="text-xs text-[#a1a1aa]">
+                    {logsModal.steps.filter(s => s.conclusion === "success").length} / {logsModal.steps.length} steps completed
+                  </p>
+                )}
+              </div>
+
+              {/* Error Message */}
+              {logsModal.error && (
+                <div className="p-4 rounded-xl bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.2)]">
+                  <p className="text-xs text-[#ef4444] font-medium mb-1">Error</p>
+                  <p className="text-sm text-[#ef4444]">{logsModal.error}</p>
+                </div>
+              )}
+
+              {/* Simulated Console Output */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Runner Output</p>
+                <div className="bg-[#0d0d14] rounded-xl p-4 font-mono text-xs overflow-x-auto max-h-64 overflow-y-auto scrollbar-thin">
+                  {logsModal.steps.length > 0 ? (
+                    <>
+                      <p className="text-[#10b981]">$ Starting GitHub Actions workflow...</p>
+                      {logsModal.steps.map((step, i) => (
+                        <div key={i}>
+                          <p className={`mt-1 ${step.status === "in_progress" ? "text-[#6366f1]" : step.conclusion === "success" ? "text-[#10b981]" : step.conclusion === "failure" ? "text-[#ef4444]" : "text-[#a1a1aa]"}`}>
+                            {step.status === "in_progress" ? "⟳" : step.conclusion === "success" ? "✓" : step.conclusion === "failure" ? "✗" : "○"} Step {i + 1}: {step.name}
+                          </p>
+                          {step.conclusion === "success" && (
+                            <p className="text-[#a1a1aa] ml-4">  Completed successfully</p>
+                          )}
+                          {step.conclusion === "failure" && (
+                            <p className="text-[#ef4444] ml-4">  Step failed - check GitHub Actions for details</p>
+                          )}
+                        </div>
+                      ))}
+                      {logsModal.status === "success" && (
+                        <p className="text-[#10b981] mt-2">$ Workflow completed successfully!</p>
+                      )}
+                      {logsModal.status === "failed" && (
+                        <p className="text-[#ef4444] mt-2">$ Workflow failed. Check error above.</p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-[#a1a1aa]">$ Waiting for runner to start...</p>
+                      <p className="text-[#a1a1aa]">$ GitHub Actions is provisioning the runner</p>
+                      <p className="text-[#6366f1] mt-2">⟳ This may take 1-2 minutes</p>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex gap-3">
+                {logsModal.githubRunUrl && (
+                  <a href={logsModal.githubRunUrl} target="_blank" rel="noopener" className="glass-button-primary text-sm py-2 px-4 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    Open in GitHub
+                  </a>
+                )}
+                <button onClick={() => setLogsModal(null)} className="glass-button text-sm py-2 px-4">
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

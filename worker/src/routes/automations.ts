@@ -185,10 +185,39 @@ export async function handleAutomationsRoutes(
       );
 
       if (githubResponse.ok) {
-        await env.DB.prepare("UPDATE jobs SET status = 'running' WHERE id = ?").bind(jobId).run();
+        // Wait a moment for the run to be created
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Get the latest run to store github_run_id
+        let githubRunId = null;
+        let githubRunUrl = null;
+        try {
+          const runsRes = await fetch(
+            `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs?per_page=1`,
+            {
+              headers: {
+                Authorization: `Bearer ${githubSettings.pat_token}`,
+                Accept: "application/vnd.github.v3+json",
+                "User-Agent": "AutomationSystem/1.0",
+              },
+            }
+          );
+          if (runsRes.ok) {
+            const runsData = await runsRes.json() as { workflow_runs?: Array<{ id: number; html_url: string }> };
+            if (runsData.workflow_runs && runsData.workflow_runs.length > 0) {
+              githubRunId = runsData.workflow_runs[0].id;
+              githubRunUrl = runsData.workflow_runs[0].html_url;
+            }
+          }
+        } catch {}
+
+        await env.DB.prepare(
+          "UPDATE jobs SET status = 'running', github_run_id = ?, github_run_url = ? WHERE id = ?"
+        ).bind(githubRunId, githubRunUrl, jobId).run();
+
         return jsonResponse({
           success: true,
-          data: { job_id: jobId },
+          data: { job_id: jobId, github_run_id: githubRunId },
           message: "Automation triggered! Running on GitHub Actions.",
         });
       } else {

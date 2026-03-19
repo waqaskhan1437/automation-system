@@ -111,5 +111,140 @@ export async function handleJobsRoutes(
     }
   }
 
+  // GET /api/jobs/:id/logs - Get GitHub Actions run logs
+  if (id && action === "logs" && method === "GET") {
+    const job = await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(id).first<Job>();
+    if (!job) {
+      return jsonResponse({ success: false, error: "Job not found" }, 404);
+    }
+
+    const githubSettings = await env.DB.prepare("SELECT * FROM settings_github LIMIT 1").first<GithubSettings>();
+    if (!githubSettings) {
+      return jsonResponse({ success: false, error: "GitHub settings not configured" }, 400);
+    }
+
+    if (!job.github_run_id) {
+      return jsonResponse({ success: false, error: "No GitHub run associated with this job" }, 400);
+    }
+
+    try {
+      // First get run details
+      const runRes = await fetch(
+        `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}`,
+        {
+          headers: {
+            Authorization: `Bearer ${githubSettings.pat_token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "AutomationSystem/1.0",
+          },
+        }
+      );
+
+      let runStatus = "unknown";
+      let runConclusion = null;
+      let runUrl = job.github_run_url || "";
+
+      if (runRes.ok) {
+        const runData = await runRes.json() as { status: string; conclusion: string | null; html_url: string };
+        runStatus = runData.status;
+        runConclusion = runData.conclusion;
+        runUrl = runData.html_url;
+      }
+
+      // Get jobs list for step details
+      const jobsRes = await fetch(
+        `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}/jobs`,
+        {
+          headers: {
+            Authorization: `Bearer ${githubSettings.pat_token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "AutomationSystem/1.0",
+          },
+        }
+      );
+
+      let steps: Array<{ name: string; status: string; conclusion: string | null; number: number }> = [];
+      if (jobsRes.ok) {
+        const jobsData = await jobsRes.json() as { jobs?: Array<{ name: string; status: string; conclusion: string | null; steps?: Array<{ name: string; status: string; conclusion: string | null; number: number }> }> };
+        if (jobsData.jobs && jobsData.jobs.length > 0) {
+          steps = jobsData.jobs[0].steps || [];
+        }
+      }
+
+      // Get log URL (actual logs require download)
+      const logUrl = `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}/logs`;
+
+      return jsonResponse({
+        success: true,
+        data: {
+          run_id: job.github_run_id,
+          run_status: runStatus,
+          run_conclusion: runConclusion,
+          run_url: runUrl,
+          steps: steps,
+          log_url: logUrl,
+        },
+      });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
+  // GET /api/jobs/:id/status - Get real-time job status
+  if (id && action === "status" && method === "GET") {
+    const job = await env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(id).first<Job>();
+    if (!job) {
+      return jsonResponse({ success: false, error: "Job not found" }, 404);
+    }
+
+    const githubSettings = await env.DB.prepare("SELECT * FROM settings_github LIMIT 1").first<GithubSettings>();
+    if (!githubSettings || !job.github_run_id) {
+      return jsonResponse({ success: true, data: { status: job.status, error: job.error_message } });
+    }
+
+    try {
+      const runRes = await fetch(
+        `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/runs/${job.github_run_id}`,
+        {
+          headers: {
+            Authorization: `Bearer ${githubSettings.pat_token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "AutomationSystem/1.0",
+          },
+        }
+      );
+
+      if (runRes.ok) {
+        const runData = await runRes.json() as { status: string; conclusion: string | null; html_url: string };
+        
+        // Update job status in DB based on GitHub run status
+        let dbStatus = job.status;
+        if (runData.status === "completed") {
+          dbStatus = runData.conclusion === "success" ? "success" : "failed";
+          await env.DB.prepare(
+            "UPDATE jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?"
+          ).bind(dbStatus, id).run();
+        } else if (runData.status === "in_progress") {
+          dbStatus = "running";
+          await env.DB.prepare("UPDATE jobs SET status = 'running' WHERE id = ?").bind(id).run();
+        }
+
+        return jsonResponse({
+          success: true,
+          data: {
+            status: dbStatus,
+            github_status: runData.status,
+            github_conclusion: runData.conclusion,
+            run_url: runData.html_url,
+            error: job.error_message,
+          },
+        });
+      }
+    } catch {}
+
+    return jsonResponse({ success: true, data: { status: job.status, error: job.error_message } });
+  }
+
   return jsonResponse({ success: false, error: "Job route not found" }, 404);
 }
