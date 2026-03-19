@@ -223,6 +223,13 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [generatedHashtags, setGeneratedHashtags] = useState<string[][]>([]);
   const [socialPrompt, setSocialPrompt] = useState("");
 
+  // Publish state
+  const [autoPublish, setAutoPublish] = useState(true);
+  const [publishSchedule, setPublishSchedule] = useState("immediate");
+  const [publishDelay, setPublishDelay] = useState("5");
+  const [publishDate, setPublishDate] = useState("");
+  const [publishTime, setPublishTime] = useState("");
+
   const allPlatforms = ["instagram", "youtube", "tiktok", "facebook", "x"];
 
   useEffect(() => {
@@ -391,6 +398,13 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
       output_quality: outputQuality,
       output_resolution: outputResolution,
       platforms,
+      publish: {
+        auto_publish: autoPublish,
+        schedule_type: publishSchedule,
+        delay_minutes: publishSchedule === "delay" ? parseInt(publishDelay) : null,
+        specific_date: publishSchedule === "specific" ? publishDate : null,
+        specific_time: publishSchedule === "specific" ? publishTime : null,
+      },
     };
     try {
       const res = await fetch("/api/automations", {
@@ -1139,6 +1153,20 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 
           {activeTab === "publish" && (
             <div className="space-y-5">
+              {/* Auto Publish */}
+              <div className="glass-card p-5">
+                <div className="flex items-center justify-between mb-1">
+                  <div>
+                    <label className="text-sm font-medium">Auto-Publish via Postforme</label>
+                    <p className="text-xs text-[#a1a1aa]">Automatically publish to social media after processing</p>
+                  </div>
+                  <button onClick={() => setAutoPublish(!autoPublish)} className={`w-11 h-6 rounded-full transition-all ${autoPublish ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6]" : "bg-[rgba(255,255,255,0.1)]"}`}>
+                    <div className={`w-5 h-5 rounded-full bg-white transition-transform ${autoPublish ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Platforms */}
               <div>
                 <label className="block text-sm font-medium mb-3">Target Platforms</label>
                 <div className="flex flex-wrap gap-2">
@@ -1157,8 +1185,65 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                 </div>
               </div>
 
-              <div className="border-t border-[rgba(255,255,255,0.08)] pt-4">
-                <label className="block text-sm font-medium mb-3">Output Settings</label>
+              {/* Scheduled Posting */}
+              {autoPublish && (
+                <div className="glass-card p-5">
+                  <p className="text-sm font-medium mb-4">Scheduled Posting</p>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs text-[#a1a1aa] mb-1">When to Publish</label>
+                      <select className="glass-select" value={publishSchedule} onChange={(e) => setPublishSchedule(e.target.value)}>
+                        <option value="immediate">Post Immediately (after processing)</option>
+                        <option value="delay">Delay After Processing</option>
+                        <option value="specific">Schedule Specific Time & Date</option>
+                      </select>
+                    </div>
+
+                    {publishSchedule === "delay" && (
+                      <div>
+                        <label className="block text-xs text-[#a1a1aa] mb-1">Delay Duration</label>
+                        <select className="glass-select" value={publishDelay} onChange={(e) => setPublishDelay(e.target.value)}>
+                          <option value="1">1 minute after processing</option>
+                          <option value="5">5 minutes after processing</option>
+                          <option value="10">10 minutes after processing</option>
+                          <option value="15">15 minutes after processing</option>
+                          <option value="30">30 minutes after processing</option>
+                          <option value="60">1 hour after processing</option>
+                          <option value="120">2 hours after processing</option>
+                          <option value="360">6 hours after processing</option>
+                          <option value="1440">24 hours after processing</option>
+                        </select>
+                      </div>
+                    )}
+
+                    {publishSchedule === "specific" && (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs text-[#a1a1aa] mb-1">Date</label>
+                          <input type="date" className="glass-input text-sm" value={publishDate} onChange={(e) => setPublishDate(e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-[#a1a1aa] mb-1">Time</label>
+                          <input type="time" className="glass-input text-sm" value={publishTime} onChange={(e) => setPublishTime(e.target.value)} />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="text-xs text-[#a1a1aa] flex items-center gap-2">
+                      <svg className="w-4 h-4 text-[#10b981]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {publishSchedule === "immediate" && "Post will go live as soon as processing completes"}
+                      {publishSchedule === "delay" && `Post will go live ${publishDelay} minute(s) after processing`}
+                      {publishSchedule === "specific" && (publishDate && publishTime ? `Post scheduled for ${publishDate} at ${publishTime}` : "Select date and time above")}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Output Settings */}
+              <div className="glass-card p-5">
+                <label className="text-sm font-medium mb-3 block">Output Settings</label>
                 <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs text-[#a1a1aa] mb-1">Format</label>
@@ -1187,22 +1272,19 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                 </div>
               </div>
 
-              <div className="border-t border-[rgba(255,255,255,0.08)] pt-4">
-                <p className="text-xs text-[#a1a1aa]">
-                  Schedule: <span className="text-white font-medium capitalize">{schedule === "once" ? "Manual" : schedule}</span> (configured in Basic tab)
-                </p>
-              </div>
-
-              {/* Review Summary */}
-              <div className="border-t border-[rgba(255,255,255,0.08)] pt-4">
+              {/* Summary */}
+              <div className="glass-card p-5">
                 <p className="text-sm font-medium mb-3">Summary</p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <span className="text-[#a1a1aa]">Name:</span><span>{name || "-"}</span>
                   <span className="text-[#a1a1aa]">Source:</span><span className="capitalize">{videoSource}</span>
                   <span className="text-[#a1a1aa]">Output:</span><span>{outputFormat.toUpperCase()} | {outputQuality} | {outputResolution}</span>
                   <span className="text-[#a1a1aa]">Platforms:</span><span>{platforms.length > 0 ? platforms.join(", ") : "-"}</span>
-                  {watermarkText && <><span className="text-[#a1a1aa]">Watermark:</span><span>{watermarkText}</span></>}
-                  {overlayText && <><span className="text-[#a1a1aa]">Overlay:</span><span>{overlayText}</span></>}
+                  <span className="text-[#a1a1aa]">Auto-Publish:</span><span>{autoPublish ? "Yes (Postforme)" : "No"}</span>
+                  <span className="text-[#a1a1aa]">Publish:</span><span className="capitalize">{publishSchedule === "immediate" ? "Immediately" : publishSchedule === "delay" ? `${publishDelay}min delay` : `${publishDate} ${publishTime}`}</span>
+                  {selectedTopTagline && <><span className="text-[#a1a1aa]">Top:</span><span>{selectedTopTagline}</span></>}
+                  {selectedBottomTagline && <><span className="text-[#a1a1aa]">Bottom:</span><span>{selectedBottomTagline}</span></>}
+                  {caption && <><span className="text-[#a1a1aa]">Title:</span><span className="truncate">{caption}</span></>}
                 </div>
               </div>
             </div>
