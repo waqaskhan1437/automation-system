@@ -170,6 +170,8 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [description, setDescription] = useState("");
   const [videoSource, setVideoSource] = useState<"direct" | "youtube" | "bunny">("youtube");
   const [videoUrl, setVideoUrl] = useState("");
+  const [channelUrl, setChannelUrl] = useState("");
+  const [multipleUrls, setMultipleUrls] = useState("");
   const [codec, setCodec] = useState("libx264");
   const [audioCodec, setAudioCodec] = useState("aac");
   const [watermarkText, setWatermarkText] = useState("");
@@ -376,6 +378,8 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
     const config = {
       video_source: videoSource,
       video_url: videoUrl,
+      channel_url: channelUrl,
+      multiple_urls: multipleUrls.split("\n").map((u) => u.trim()).filter(Boolean),
       fetch_mode: fetchMode,
       fetch_config: {
         last_days: fetchMode === "last_days" ? parseInt(lastDays) : null,
@@ -486,12 +490,85 @@ function VideoModal({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                   <option value="direct">Direct Links (.mp4)</option>
                   <option value="bunny">Bunny CDN</option>
                 </select>
-                <p className="text-xs text-[#a1a1aa] mt-1.5">
-                  {videoSource === "youtube" && "Fetch latest video from YouTube channel or paste specific video links"}
-                  {videoSource === "direct" && "Provide direct .mp4 video links"}
-                  {videoSource === "bunny" && "Fetch video from Bunny CDN library"}
-                </p>
               </div>
+
+              {/* YouTube Source Fields */}
+              {videoSource === "youtube" && (
+                <div className="glass-card p-5 space-y-4">
+                  <p className="text-sm font-medium">YouTube Source</p>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Channel URL (fetch latest videos)</label>
+                    <input
+                      className="glass-input text-sm"
+                      placeholder="https://www.youtube.com/@channelname"
+                      value={channelUrl}
+                      onChange={(e) => setChannelUrl(e.target.value)}
+                    />
+                    <p className="text-[10px] text-[#a1a1aa] mt-1">Automation will fetch latest videos from this channel</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Multiple Video URLs (one per line)</label>
+                    <textarea
+                      className="glass-input text-sm min-h-[80px] resize-none"
+                      placeholder={"https://youtube.com/watch?v=abc123\nhttps://youtube.com/watch?v=def456\nhttps://youtube.com/watch?v=ghi789"}
+                      value={multipleUrls}
+                      onChange={(e) => setMultipleUrls(e.target.value)}
+                    />
+                    <p className="text-[10px] text-[#a1a1aa] mt-1">Paste multiple YouTube video URLs, each on a new line</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Direct Source Fields */}
+              {videoSource === "direct" && (
+                <div className="glass-card p-5 space-y-4">
+                  <p className="text-sm font-medium">Direct Video URLs</p>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Single Video URL</label>
+                    <input
+                      className="glass-input text-sm"
+                      placeholder="https://example.com/video.mp4"
+                      value={videoUrl}
+                      onChange={(e) => setVideoUrl(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Multiple Video URLs (one per line)</label>
+                    <textarea
+                      className="glass-input text-sm min-h-[80px] resize-none"
+                      placeholder={"https://example.com/video1.mp4\nhttps://example.com/video2.mp4"}
+                      value={multipleUrls}
+                      onChange={(e) => setMultipleUrls(e.target.value)}
+                    />
+                    <p className="text-[10px] text-[#a1a1aa] mt-1">Paste multiple .mp4 URLs, each on a new line</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Bunny Source Fields */}
+              {videoSource === "bunny" && (
+                <div className="glass-card p-5 space-y-4">
+                  <p className="text-sm font-medium">Bunny CDN Source</p>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Video URL or ID</label>
+                    <input
+                      className="glass-input text-sm"
+                      placeholder="https://iframe.mediadelivery.net/embed/12345/abc-def"
+                      value={videoUrl}
+                      onChange={(e) => setVideoUrl(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#a1a1aa] mb-1">Multiple Video IDs (one per line)</label>
+                    <textarea
+                      className="glass-input text-sm min-h-[80px] resize-none"
+                      placeholder={"video-id-1\nvideo-id-2"}
+                      value={multipleUrls}
+                      onChange={(e) => setMultipleUrls(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium mb-2">Schedule</label>
