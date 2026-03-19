@@ -128,10 +128,12 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
           yt-dlp --version
 
-      - name: Install FFmpeg
+      - name: Install FFmpeg (Fast)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          curl -L https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-x64.gz -o ffmpeg.gz
+          gunzip ffmpeg.gz
+          chmod +x ffmpeg
+          sudo mv ffmpeg /usr/local/bin/ffmpeg
           ffmpeg -version
 
       - name: Install runner dependencies
