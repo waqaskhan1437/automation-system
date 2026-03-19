@@ -6,116 +6,82 @@ const OUTPUT_DIR = path.join(__dirname, "..", "output");
 const INPUT_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 const OUTPUT_FILE = path.join(OUTPUT_DIR, "processed-video.mp4");
 
-function parseResolution(resStr) {
-  const parts = resStr.split("x");
-  return { width: parseInt(parts[0]), height: parseInt(parts[1]) };
-}
+function main() {
+  if (!fs.existsSync(INPUT_FILE)) {
+    console.error("Input not found: " + INPUT_FILE);
+    process.exit(1);
+  }
 
-function buildFFmpegCommand() {
-  const args = ["-i", INPUT_FILE];
+  const stats = fs.statSync(INPUT_FILE);
+  console.log("Input: " + (stats.size / 1024 / 1024).toFixed(2) + " MB");
 
-  const shortDuration = parseInt(process.env.SHORT_DURATION || "60");
-  const playbackSpeed = parseFloat(process.env.PLAYBACK_SPEED || "1");
+  const duration = parseInt(process.env.SHORT_DURATION || "60");
+  const speed = parseFloat(process.env.PLAYBACK_SPEED || "1");
   const aspectRatio = process.env.ASPECT_RATIO || "9:16";
   const cropMode = process.env.CROP_MODE || "crop";
   const codec = process.env.CODEC || "libx264";
-  const outputResolution = process.env.OUTPUT_RESOLUTION || "1080x1920";
-  const topTagline = process.env.TOP_TAGLINE || "";
-  const bottomTagline = process.env.BOTTOM_TAGLINE || "";
 
-  const { width, height } = parseResolution(outputResolution);
+  let width = 1080, height = 1920;
+  if (aspectRatio === "16:9") { width = 1920; height = 1080; }
+  else if (aspectRatio === "1:1") { width = 1080; height = 1080; }
 
-  const videoFilters = [];
+  const filters = [];
 
-  // Trim to short duration
-  args.push("-t", String(shortDuration));
-
-  // Playback speed
-  if (playbackSpeed !== 1) {
-    const speedFilter = `setpts=${1 / playbackSpeed}*PTS`;
-    const audioFilter = `atempo=${playbackSpeed}`;
-    videoFilters.push(speedFilter);
-    args.push("-af", audioFilter);
+  // Scale
+  if (cropMode === "crop") {
+    filters.push("scale=" + width + ":" + height + ":force_original_aspect_ratio=increase");
+    filters.push("crop=" + width + ":" + height);
+  } else {
+    filters.push("scale=" + width + ":" + height + ":force_original_aspect_ratio=decrease");
+    filters.push("pad=" + width + ":" + height + ":(ow-iw)/2:(oh-ih)/2:black");
   }
 
-  // Aspect ratio handling
-  if (aspectRatio !== "no-crop") {
-    if (cropMode === "crop") {
-      // Crop to fill frame
-      videoFilters.push(`scale=${width}:${height}:force_original_aspect_ratio=increase`);
-      videoFilters.push(`crop=${width}:${height}`);
-    } else {
-      // Fit with black bars (letterbox/pillarbox)
-      videoFilters.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease`);
-      videoFilters.push(`pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`);
+  // Speed
+  if (speed !== 1) {
+    filters.push("setpts=" + (1 / speed) + "*PTS");
+  }
+
+  // Fade
+  if (duration > 1) {
+    filters.push("fade=t=in:st=0:d=0.5");
+    filters.push("fade=t=out:st=" + (duration - 0.5) + ":d=0.5");
+  }
+
+  const vf = filters.join(",");
+
+  let cmd = 'ffmpeg -y -i "' + INPUT_FILE + '"';
+  if (vf) cmd += ' -vf "' + vf + '"';
+  cmd += ' -t ' + duration;
+  if (speed !== 1) cmd += ' -af atempo=' + speed;
+  cmd += ' -c:v ' + codec + ' -c:a aac -crf 23 -pix_fmt yuv420p';
+  cmd += ' "' + OUTPUT_FILE + '"';
+
+  console.log("Running: " + cmd);
+
+  try {
+    execSync(cmd, { stdio: "inherit", timeout: 300000 });
+  } catch (e) {
+    console.error("FFmpeg failed: " + e.message);
+    
+    // Try simpler command
+    console.log("Trying simpler command...");
+    try {
+      execSync('ffmpeg -y -i "' + INPUT_FILE + '" -t ' + duration + ' -c copy "' + OUTPUT_FILE + '"', {
+        stdio: "inherit", timeout: 120000
+      });
+    } catch (e2) {
+      console.error("Simple FFmpeg also failed: " + e2.message);
+      process.exit(1);
     }
   }
 
-  // Top tagline overlay
-  if (topTagline) {
-    const escapedText = topTagline.replace(/'/g, "'\\''").replace(/:/g, "\\:");
-    videoFilters.push(
-      `drawtext=text='${escapedText}':fontsize=36:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=30`
-    );
-  }
-
-  // Bottom tagline overlay
-  if (bottomTagline) {
-    const escapedText = bottomTagline.replace(/'/g, "'\\''").replace(/:/g, "\\:");
-    videoFilters.push(
-      `drawtext=text='${escapedText}':fontsize=28:fontcolor=white:borderw=2:bordercolor=black:x=(w-tw)/2:y=h-th-30`
-    );
-  }
-
-  if (videoFilters.length > 0) {
-    args.push("-vf", videoFilters.join(","));
-  }
-
-  // Codec
-  args.push("-c:v", codec);
-  args.push("-c:a", "aac");
-
-  // Quality settings
-  const quality = process.env.OUTPUT_QUALITY || "high";
-  if (quality === "low") {
-    args.push("-crf", "28");
-  } else if (quality === "medium") {
-    args.push("-crf", "23");
+  if (fs.existsSync(OUTPUT_FILE)) {
+    const outStats = fs.statSync(OUTPUT_FILE);
+    console.log("Output: " + (outStats.size / 1024 / 1024).toFixed(2) + " MB");
   } else {
-    args.push("-crf", "18");
-  }
-
-  args.push("-y", OUTPUT_FILE);
-  return args;
-}
-
-function main() {
-  if (!fs.existsSync(INPUT_FILE)) {
-    console.error("Input video not found:", INPUT_FILE);
+    console.error("Output not created!");
     process.exit(1);
   }
-
-  console.log("Building FFmpeg command...");
-  const ffmpegArgs = buildFFmpegCommand();
-  const command = `ffmpeg ${ffmpegArgs.join(" ")}`;
-
-  console.log("Executing:", command);
-  console.log("");
-
-  try {
-    execSync(command, { stdio: "inherit", timeout: 600000 });
-  } catch (err) {
-    console.error("FFmpeg processing failed:", err.message);
-    process.exit(1);
-  }
-
-  if (!fs.existsSync(OUTPUT_FILE)) {
-    console.error("Output video not created");
-    process.exit(1);
-  }
-
-  const stats = fs.statSync(OUTPUT_FILE);
-  console.log(`\nVideo processed successfully: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 }
 
 main();
