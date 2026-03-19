@@ -51,14 +51,14 @@ export async function handleSettingsRoutes(
       return jsonResponse({ success: false, error: "api_key required" }, 400);
     }
     try {
-      const res = await fetch("https://api.postforme.io/v1/me", {
+      const res = await fetch("https://api.postforme.dev/v1/social-accounts", {
         headers: { Authorization: `Bearer ${body.api_key}` },
       });
       if (res.ok) {
-        const data = await res.json() as Record<string, unknown>;
-        return jsonResponse({ success: true, message: "Postforme API connected successfully" });
+        return jsonResponse({ success: true, message: "Postforme API connected successfully!" });
       }
-      return jsonResponse({ success: false, message: `Postforme error: ${res.status} - Invalid API key` });
+      const errText = await res.text();
+      return jsonResponse({ success: false, message: `Error ${res.status}: ${errText || "Invalid API key"}` });
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : "Connection failed";
       return jsonResponse({ success: false, error: errorMsg });
@@ -72,12 +72,18 @@ export async function handleSettingsRoutes(
       return jsonResponse({ success: false, error: "api_key required" }, 400);
     }
     try {
-      const res = await fetch("https://api.postforme.io/v1/accounts", {
+      const res = await fetch("https://api.postforme.dev/v1/social-accounts", {
         headers: { Authorization: `Bearer ${body.api_key}` },
       });
       if (res.ok) {
-        const data = await res.json() as { accounts?: Array<{ platform: string; username: string; connected: boolean }> };
-        return jsonResponse({ success: true, data: data.accounts || [] });
+        const data = await res.json() as { data?: Array<{ platform: string; username: string; id: string }> };
+        const accounts = (data.data || []).map((a) => ({
+          platform: a.platform,
+          username: a.username,
+          connected: true,
+          id: a.id,
+        }));
+        return jsonResponse({ success: true, data: accounts });
       }
       return jsonResponse({ success: false, error: `Postforme error: ${res.status}` });
     } catch (err: unknown) {
