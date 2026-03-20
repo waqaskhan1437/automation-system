@@ -10,101 +10,16 @@ on:
         description: 'Automation ID'
         required: true
         type: string
-      video_source:
-        description: 'Video source: youtube, direct, bunny'
+      automation_config:
+        description: 'Full automation config as JSON'
         required: true
         type: string
-      video_url:
-        description: 'Single video URL'
+      worker_webhook_url:
+        description: 'Worker webhook URL'
         required: false
-        type: string
-      channel_url:
-        description: 'YouTube channel URL'
-        required: false
-        type: string
-      multiple_urls:
-        description: 'Multiple video URLs (JSON array)'
-        required: false
-        type: string
-      videos_per_run:
-        description: 'Number of videos to process'
-        required: false
-        default: '1'
-        type: string
-      short_duration:
-        description: 'Max short duration in seconds'
-        required: false
-        default: '60'
-        type: string
-      playback_speed:
-        description: 'Playback speed'
-        required: false
-        default: '1'
-        type: string
-      aspect_ratio:
-        description: 'Aspect ratio (9:16, 16:9, 1:1, 4:5, no-crop)'
-        required: false
-        default: '9:16'
-        type: string
-      crop_mode:
-        description: 'Crop mode: crop or fit'
-        required: false
-        default: 'crop'
-        type: string
-      split_enabled:
-        description: 'Split enabled'
-        required: false
-        default: 'false'
-        type: string
-      combine_enabled:
-        description: 'Combine videos enabled'
-        required: false
-        default: 'false'
-        type: string
-      codec:
-        description: 'Video codec'
-        required: false
-        default: 'libx264'
-        type: string
-      output_format:
-        description: 'Output format'
-        required: false
-        default: 'mp4'
-        type: string
-      output_quality:
-        description: 'Output quality'
-        required: false
-        default: 'high'
-        type: string
-      output_resolution:
-        description: 'Output resolution'
-        required: false
-        default: '1080x1920'
-        type: string
-      auto_publish:
-        description: 'Auto publish to social media'
-        required: false
-        default: 'true'
-        type: string
-      platforms:
-        description: 'Target platforms (JSON array)'
-        required: false
-        default: '[]'
         type: string
       postforme_api_key:
-        description: 'Postforme API key'
-        required: false
-        type: string
-      worker_webhook_url:
-        description: 'Worker webhook URL for status updates'
-        required: false
-        type: string
-      top_tagline:
-        description: 'Top tagline text'
-        required: false
-        type: string
-      bottom_tagline:
-        description: 'Bottom tagline text'
+        description: 'PostForMe API key'
         required: false
         type: string
 
@@ -128,9 +43,9 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
           yt-dlp --version
 
-      - name: Install FFmpeg (Fast)
+      - name: Install FFmpeg
         run: |
-          curl -L https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-x64.gz -o ffmpeg.gz
+          curl -L https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-x64 -o ffmpeg.gz
           gunzip ffmpeg.gz
           chmod +x ffmpeg
           sudo mv ffmpeg /usr/local/bin/ffmpeg
@@ -143,70 +58,38 @@ jobs:
       - name: Create output directory
         run: mkdir -p output
 
+      - name: Save config to file
+        run: |
+          echo '${{ github.event.inputs.automation_config }}' > automation-config.json
+
       - name: Download Video
         env:
-          VIDEO_SOURCE: ${{ github.event.inputs.video_source }}
-          VIDEO_URL: ${{ github.event.inputs.video_url }}
-          CHANNEL_URL: ${{ github.event.inputs.channel_url }}
-          MULTIPLE_URLS: ${{ github.event.inputs.multiple_urls }}
-          VIDEOS_PER_RUN: ${{ github.event.inputs.videos_per_run }}
-        run: node download-video.js
+          VIDEO_SOURCE: ${{ github.event.inputs.automation_config && fromJson(github.event.inputs.automation_config).video_source || 'youtube_channel' }}
+        run: |
+          echo "Downloading video with source: $VIDEO_SOURCE"
+          node runner-scripts/download-video.js
         working-directory: runner-scripts
 
-      - name: Process Video (FFmpeg)
-        env:
-          INPUT_FILE: ../output/input-video.mp4
-          OUTPUT_FILE: ../output/processed-video.mp4
-          SHORT_DURATION: ${{ github.event.inputs.short_duration }}
-          PLAYBACK_SPEED: ${{ github.event.inputs.playback_speed }}
-          ASPECT_RATIO: ${{ github.event.inputs.aspect_ratio }}
-          CROP_MODE: ${{ github.event.inputs.crop_mode }}
-          SPLIT_ENABLED: ${{ github.event.inputs.split_enabled }}
-          COMBINE_ENABLED: ${{ github.event.inputs.combine_enabled }}
-          CODEC: ${{ github.event.inputs.codec }}
-          OUTPUT_FORMAT: ${{ github.event.inputs.output_format }}
-          TOP_TAGLINE: ${{ github.event.inputs.top_tagline }}
-          BOTTOM_TAGLINE: ${{ github.event.inputs.bottom_tagline }}
-        run: node process-video.js
+      - name: Process Video
+        run: node runner-scripts/process-video.js
         working-directory: runner-scripts
 
       - name: Post to Social Media
-        if: github.event.inputs.auto_publish == 'true' && github.event.inputs.postforme_api_key != ''
+        if: github.event.inputs.postforme_api_key != ''
         continue-on-error: true
-        env:
-          POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
-          PLATFORMS: ${{ github.event.inputs.platforms }}
-          MEDIA_FILE: ../output/processed-video.mp4
-          WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
-          JOB_ID: ${{ github.event.inputs.job_id }}
-        run: node post-via-postforme.js
+        run: node runner-scripts/post-via-postforme.js
         working-directory: runner-scripts
 
-      - name: Upload processed video as artifact
+      - name: Upload processed video
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: processed-video-${{ github.event.inputs.job_id }}
-          path: |
-            output/
-            runner-scripts/output/
+          path: runner-scripts/output/
           retention-days: 7
           if-no-files-found: warn
 
-      - name: Update Job Status - Success
+      - name: Update Job Status
         if: always()
-        env:
-          WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
-          JOB_ID: ${{ github.event.inputs.job_id }}
-          JOB_STATUS: success
-        run: node update-job-status.js
-        working-directory: runner-scripts
-
-      - name: Update Job Status - Failed
-        if: failure()
-        env:
-          WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
-          JOB_ID: ${{ github.event.inputs.job_id }}
-          JOB_STATUS: failed
-        run: node update-job-status.js
+        run: node runner-scripts/update-job-status.js
         working-directory: runner-scripts
