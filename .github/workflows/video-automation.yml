@@ -54,8 +54,8 @@ jobs:
 
       - name: Download Video
         run: |
-          echo '${{ github.event.inputs.automation_config }}' > runner-scripts/automation-config.json
-          node runner-scripts/download-video.js
+          echo '${{ github.event.inputs.automation_config }}' > automation-config.json
+          node download-video.js
         working-directory: runner-scripts
 
       - name: Process Video
