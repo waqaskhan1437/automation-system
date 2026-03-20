@@ -84,27 +84,50 @@ async function downloadGooglePhotos(url) {
 function main() {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
+  const videoSource = process.env.VIDEO_SOURCE || "youtube_channel";
   const videoUrl = process.env.VIDEO_URL || "";
-  const channelUrl = process.env.CHANNEL_URL || "";
-  let multipleUrls = [];
-  try { multipleUrls = JSON.parse(process.env.MULTIPLE_URLS || "[]"); } catch {
-    multipleUrls = (process.env.MULTIPLE_URLS || "").split("\n").filter(u => u.trim());
-  }
+  const channelUrl = process.env.YOUTUBE_CHANNEL_URL || "";
+  const manualLinksRaw = process.env.MANUAL_LINKS || "";
+  const videoDays = parseInt(process.env.VIDEO_DAYS || "7");
+  const dateFrom = process.env.DATE_FROM || "";
+  const dateTo = process.env.DATE_TO || "";
+  const videoSelection = process.env.VIDEO_SELECTION || "days";
 
+  // Parse manual links
+  let multipleUrls = manualLinksRaw.split("\n").filter(u => u.trim());
   let urls = [];
-  if (videoUrl) urls.push(videoUrl);
-  if (multipleUrls.length > 0) urls = urls.concat(multipleUrls);
-  
-  if (urls.length === 0 && channelUrl) {
-    try {
-      const out = execSync('yt-dlp --flat-playlist --playlist-end 1 --print url "' + channelUrl + '"', {
-        encoding: "utf-8", timeout: 30000
-      });
-      urls = out.trim().split("\n").filter(u => u.trim());
-    } catch { console.error("Channel fetch failed"); process.exit(1); }
+
+  if (videoSource === "manual_links" && multipleUrls.length > 0) {
+    urls = multipleUrls;
+  } else if (videoSource === "bunny") {
+    // Bunny CDN - videoUrl contains the bunny library URL
+    if (videoUrl) urls.push(videoUrl);
+  } else if (videoSource === "ftp") {
+    // FTP - handled by separate script
+    console.log("FTP source - using FTP download method");
+    urls.push("ftp://placeholder"); // Placeholder, actual FTP download handled separately
+  } else if (videoSource === "youtube" || videoSource === "youtube_channel") {
+    // YouTube - use direct VIDEO_URL if provided, otherwise fetch from channel
+    if (videoUrl) {
+      urls.push(videoUrl);
+    } else if (channelUrl) {
+      console.log("Fetching from YouTube channel...");
+      try {
+        const out = execSync('yt-dlp --flat-playlist --playlist-end 20 --print url --dateafter now-' + videoDays + 'd "' + channelUrl + '"', {
+          encoding: "utf-8", timeout: 60000
+        });
+        urls = out.trim().split("\n").filter(u => u.trim());
+        if (urls.length > 0) {
+          console.log("Found " + urls.length + " videos from channel");
+        }
+      } catch (e) {
+        console.error("Channel fetch failed: " + e.message);
+        process.exit(1);
+      }
+    }
   }
 
-  if (urls.length === 0) { console.error("No URLs!"); process.exit(1); }
+  if (urls.length === 0) { console.error("No URLs! VIDEO_SOURCE=" + videoSource); process.exit(1); }
 
   const url = urls[0];
   console.log("URL: " + url);
