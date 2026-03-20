@@ -22,6 +22,101 @@ on:
         description: 'PostForMe API key'
         required: false
         type: string
+      video_source:
+        description: 'Video source'
+        required: false
+        type: string
+        default: "youtube"
+      video_url:
+        description: 'Video URL'
+        required: false
+        type: string
+        default: ""
+      channel_url:
+        description: 'Channel URL'
+        required: false
+        type: string
+        default: ""
+      multiple_urls:
+        description: 'Multiple URLs'
+        required: false
+        type: string
+        default: "[]"
+      videos_per_run:
+        description: 'Videos per run'
+        required: false
+        type: string
+        default: "1"
+      short_duration:
+        description: 'Short duration'
+        required: false
+        type: string
+        default: "60"
+      playback_speed:
+        description: 'Playback speed'
+        required: false
+        type: string
+        default: "1.0"
+      aspect_ratio:
+        description: 'Aspect ratio'
+        required: false
+        type: string
+        default: "9:16"
+      crop_mode:
+        description: 'Crop mode'
+        required: false
+        type: string
+        default: "crop"
+      split_enabled:
+        description: 'Split enabled'
+        required: false
+        type: string
+        default: "false"
+      combine_enabled:
+        description: 'Combine enabled'
+        required: false
+        type: string
+        default: "false"
+      codec:
+        description: 'Codec'
+        required: false
+        type: string
+        default: "libx264"
+      output_format:
+        description: 'Output format'
+        required: false
+        type: string
+        default: "mp4"
+      output_quality:
+        description: 'Output quality'
+        required: false
+        type: string
+        default: "high"
+      output_resolution:
+        description: 'Output resolution'
+        required: false
+        type: string
+        default: "1080x1920"
+      auto_publish:
+        description: 'Auto publish'
+        required: false
+        type: string
+        default: "true"
+      platforms:
+        description: 'Platforms'
+        required: false
+        type: string
+        default: "[]"
+      top_tagline:
+        description: 'Top tagline'
+        required: false
+        type: string
+        default: ""
+      bottom_tagline:
+        description: 'Bottom tagline'
+        required: false
+        type: string
+        default: ""
 
 jobs:
   process-video:
