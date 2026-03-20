@@ -52,20 +52,9 @@ jobs:
         run: npm ci && mkdir -p output
         working-directory: runner-scripts
 
-      - name: Save config file
-        run: echo '${{ github.event.inputs.automation_config }}' > automation-config.json
-
       - name: Download Video
-        env:
-          VIDEO_SOURCE: ${{ fromJson(github.event.inputs.automation_config).video_source || 'youtube' }}
-          VIDEO_URL: ${{ fromJson(github.event.inputs.automation_config).video_url || '' }}
-          YOUTUBE_CHANNEL_URL: ${{ fromJson(github.event.inputs.automation_config).youtube_channel_url || '' }}
-          MANUAL_LINKS: ${{ fromJson(github.event.inputs.automation_config).manual_links || '' }}
         run: |
-          echo "VIDEO_SOURCE=$VIDEO_SOURCE"
-          echo "VIDEO_URL=$VIDEO_URL"
-          echo "YOUTUBE_CHANNEL_URL=$YOUTUBE_CHANNEL_URL"
-          echo "MANUAL_LINKS=$MANUAL_LINKS"
+          echo '${{ github.event.inputs.automation_config }}' > automation-config.json
           node runner-scripts/download-video.js
         working-directory: runner-scripts
 

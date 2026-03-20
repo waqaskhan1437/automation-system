@@ -84,14 +84,20 @@ async function downloadGooglePhotos(url) {
 function main() {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-  const videoSource = process.env.VIDEO_SOURCE || "youtube_channel";
-  const videoUrl = process.env.VIDEO_URL || "";
-  const channelUrl = process.env.YOUTUBE_CHANNEL_URL || "";
-  const manualLinksRaw = process.env.MANUAL_LINKS || "";
-  const videoDays = parseInt(process.env.VIDEO_DAYS || "7");
-  const dateFrom = process.env.DATE_FROM || "";
-  const dateTo = process.env.DATE_TO || "";
-  const videoSelection = process.env.VIDEO_SELECTION || "days";
+  let config = { video_source: 'youtube', video_url: '', manual_links: '', youtube_channel_url: '' };
+  try {
+    const configPath = path.join(process.cwd(), 'automation-config.json');
+    if (fs.existsSync(configPath)) {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  } catch (e) {
+    console.log("Could not read config file: " + e.message);
+  }
+
+  const videoSource = process.env.VIDEO_SOURCE || config.video_source || "youtube";
+  const videoUrl = process.env.VIDEO_URL || config.video_url || "";
+  const channelUrl = process.env.YOUTUBE_CHANNEL_URL || config.youtube_channel_url || "";
+  const manualLinksRaw = process.env.MANUAL_LINKS || config.manual_links || "";
 
   // Parse manual links
   let multipleUrls = manualLinksRaw.split("\n").filter(u => u.trim());
