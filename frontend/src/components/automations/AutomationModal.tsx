@@ -2,9 +2,9 @@
 import { useState, useEffect } from "react";
 import { Automation } from "./types";
 import BasicTab from "./BasicTab";
-import VideoTab from "./VideoTab";
-import TaglinesTab from "./TaglinesTab";
-import SocialTab from "./SocialTab";
+import VideoTab from "./tabs/VideoTab";
+import TaglinesTab from "./tabs/TaglinesTab";
+import SocialTab from "./tabs/SocialTab";
 import PublishTab from "./PublishTab";
 
 interface Props {
