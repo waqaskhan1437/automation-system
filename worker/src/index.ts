@@ -255,18 +255,21 @@ export default {
       const body = await request.json() as Record<string, unknown>;
       const jobId = body.job_id as number;
       const status = body.status as string;
+      const videoUrl = body.video_url as string | undefined;
       
       if (jobId && status) {
         await env.DB.prepare(
           "UPDATE jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?"
         ).bind(status, jobId).run();
 
-        if (status === "success") {
+        if (status === "success" && videoUrl) {
+          await env.DB.prepare(
+            "INSERT INTO video_uploads (job_id, media_url, upload_status, post_status, aspect_ratio) VALUES (?, ?, 'uploaded', 'pending', '9:16')"
+          ).bind(jobId, videoUrl).run();
+          
           const postformeSettings = await env.DB.prepare("SELECT * FROM settings_postforme LIMIT 1").first<PostformeSettings>();
           
           if (postformeSettings?.api_key) {
-            const videoUrl = `https://automation-api.waqaskhan1437.workers.dev/api/output/${jobId}`;
-            
             try {
               const platforms = postformeSettings.platforms ? JSON.parse(postformeSettings.platforms) : ["instagram", "tiktok"];
               
@@ -298,9 +301,8 @@ export default {
                     const postId = postData?.id || postData?.data?.id;
                     
                     await env.DB.prepare(
-                      `INSERT INTO video_uploads (job_id, postforme_id, media_url, upload_status, post_status, platforms, aspect_ratio)
-                       VALUES (?, ?, ?, 'uploaded', 'pending', ?, '9:16')`
-                    ).bind(
+                      "UPDATE video_uploads SET postforme_id = ? WHERE job_id = ?"
+                    ).bind(postId, jobId).run();
                       jobId,
                       postId || null,
                       videoUrl,

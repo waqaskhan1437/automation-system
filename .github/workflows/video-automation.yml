@@ -177,12 +177,23 @@ jobs:
 
       - name: Upload processed video
         if: always()
+        id: upload-artifact
         uses: actions/upload-artifact@v4
         with:
           name: processed-video-${{ github.event.inputs.job_id }}
           path: runner-scripts/output/
           retention-days: 7
           if-no-files-found: warn
+
+      - name: Get Artifact Download URL
+        if: always()
+        run: |
+          ARTIFACT_URL=""
+          if [ -n "${{ steps.upload-artifact.outputs.artifact-id }}" ]; then
+            ARTIFACT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload-artifact.outputs.artifact-id }}"
+          fi
+          echo "ARTIFACT_URL=$ARTIFACT_URL"
+          echo "ARTIFACT_URL=$ARTIFACT_URL" >> $GITHUB_ENV
 
       - name: Update Job Status
         if: always()
@@ -191,9 +202,11 @@ jobs:
           WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
           JOB_ID: ${{ github.event.inputs.job_id }}
           JOB_STATUS: ${{ job.status }}
+          ARTIFACT_URL: ${{ env.ARTIFACT_URL }}
         run: |
           echo "WORKER_WEBHOOK_URL=$WORKER_WEBHOOK_URL"
           echo "JOB_ID=$JOB_ID"
           echo "JOB_STATUS=$JOB_STATUS"
+          echo "ARTIFACT_URL=$ARTIFACT_URL"
           node runner-scripts/update-job-status.js
         working-directory: runner-scripts

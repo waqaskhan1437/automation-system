@@ -147,10 +147,23 @@ export default function OutputPage() {
                 </div>
                 {getStatusBadge(item)}
               </div>
+              {item.upload?.media_url && (
+                <div className="mb-4">
+                  <div className="mb-2 text-sm text-[#a1a1aa]">Video Preview:</div>
+                  <video 
+                    controls 
+                    className="w-full max-w-md rounded-lg bg-black"
+                    src={item.upload.media_url}
+                  >
+                    Your browser does not support video playback.
+                  </video>
+                </div>
+              )}
               {item.upload && (
                 <div className="mb-4 p-3 rounded-xl bg-indigo-500/10 text-sm text-indigo-300">
                   Postforme: {item.upload.upload_status === "uploaded" ? "Just Uploaded" : item.upload.upload_status}
                   {item.upload.aspect_ratio && ` | ${item.upload.aspect_ratio}`}
+                  {item.upload.postforme_id && ` | ID: ${item.upload.postforme_id}`}
                 </div>
               )}
               <div className="flex gap-3">
