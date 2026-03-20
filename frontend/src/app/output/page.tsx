@@ -34,6 +34,27 @@ export default function OutputPage() {
   const [outputs, setOutputs] = useState<OutputItem[]>([]);
   const [uploads, setUploads] = useState<VideoUpload[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<number | null>(null);
+
+  const handleDelete = async (uploadId: number) => {
+    if (!confirm("Are you sure you want to delete this video?")) return;
+    setDeleting(uploadId);
+    try {
+      await fetch(`/api/uploads/${uploadId}`, { method: "DELETE" });
+      fetchOutputs();
+    } catch {}
+    setDeleting(null);
+  };
+
+  const handleDeleteAll = async () => {
+    if (!confirm("Are you sure you want to delete ALL videos? This cannot be undone.")) return;
+    setDeleting(-1);
+    try {
+      const res = await fetch("/api/uploads", { method: "DELETE" });
+      if (res.ok) fetchOutputs();
+    } catch {}
+    setDeleting(null);
+  };
 
   useEffect(() => {
     fetchOutputs();
@@ -119,16 +140,24 @@ export default function OutputPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h2 className="text-3xl font-bold">Output</h2>
-          <p className="text-[#a1a1aa] mt-1">Review processed videos and manage posting</p>
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h2 className="text-3xl font-bold">Output</h2>
+            <p className="text-[#a1a1aa] mt-1">Review processed videos and manage posting</p>
+          </div>
+          <div className="flex gap-2">
+            {outputs.length > 0 && (
+              <button onClick={handleDeleteAll} className="glass-button text-red-400 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                Delete All
+              </button>
+            )}
+            <button onClick={fetchOutputs} className="glass-button flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+              Refresh
+            </button>
+          </div>
         </div>
-        <button onClick={fetchOutputs} className="glass-button flex items-center gap-2">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-          Refresh
-        </button>
-      </div>
 
       {loading ? <div className="text-center py-16 text-[#a1a1aa]">Loading...</div> : outputs.length === 0 ? (
         <div className="glass-card p-12 text-center">
@@ -163,6 +192,15 @@ export default function OutputPage() {
               <div className="mt-3 flex flex-wrap gap-1">
                 {item.job.github_run_url && <a href={item.job.github_run_url} target="_blank" rel="noopener" className="glass-button text-xs py-1 px-2">GitHub</a>}
                 {getActions(item)}
+                {item.upload && (
+                  <button 
+                    onClick={() => handleDelete(item.upload!.id)} 
+                    disabled={deleting === item.upload.id}
+                    className="glass-button text-xs py-1 px-2 text-red-400"
+                  >
+                    {deleting === item.upload.id ? "..." : "Delete"}
+                  </button>
+                )}
               </div>
               {item.upload && (
                 <div className="mt-2 text-xs text-indigo-300">

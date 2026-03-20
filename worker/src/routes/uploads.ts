@@ -158,6 +158,11 @@ export async function handleUploadsRoutes(
     }
   }
 
+  if (path === "/api/uploads" && method === "DELETE") {
+    await env.DB.prepare("DELETE FROM video_uploads").run();
+    return jsonResponse({ success: true, message: "All uploads deleted" });
+  }
+
   if (id && !action) {
     if (method === "GET") {
       const result = await env.DB.prepare("SELECT * FROM video_uploads WHERE id = ?").bind(id).first<VideoUpload>();
@@ -165,6 +170,10 @@ export async function handleUploadsRoutes(
         return jsonResponse({ success: false, error: "Upload not found" }, 404);
       }
       return jsonResponse({ success: true, data: result });
+    }
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM video_uploads WHERE id = ?").bind(id).run();
+      return jsonResponse({ success: true, message: "Upload deleted" });
     }
   }
 
