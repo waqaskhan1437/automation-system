@@ -1,172 +1,260 @@
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 
-function postToPostforme(apiKey, platform, filePath) {
-  return new Promise((resolve, reject) => {
-    const fileData = fs.readFileSync(filePath);
-    const fileName = path.basename(filePath);
-    const boundary = "----FormBoundary" + Date.now();
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    const platformEndpoints = {
-      instagram: "/api/v1/post/instagram",
-      youtube: "/api/v1/post/youtube",
-      tiktok: "/api/v1/post/tiktok",
-      facebook: "/api/v1/post/facebook",
-      x: "/api/v1/post/twitter",
-      twitter: "/api/v1/post/twitter",
-    };
+function getRandomFromArray(arr) {
+  if (!arr || arr.length === 0) return "";
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
-    const endpoint = platformEndpoints[platform.toLowerCase()];
-    if (!endpoint) {
-      return reject(new Error(`Unknown platform: ${platform}`));
-    }
-
-    const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\n`),
-      Buffer.from(`Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n`),
-      Buffer.from(`Content-Type: video/mp4\r\n\r\n`),
-      fileData,
-      Buffer.from(`\r\n--${boundary}--\r\n`),
-    ]);
-
-    const options = {
-      hostname: "api.postforme.io",
-      port: 443,
-      path: endpoint,
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-        "Content-Length": body.length,
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk) => (data += chunk));
-      res.on("end", () => {
-        try {
-          const result = JSON.parse(data);
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(result);
-          } else {
-            reject(new Error(`Postforme API error (${res.statusCode}): ${data}`));
-          }
-        } catch (err) {
-          reject(new Error(`Failed to parse response: ${data}`));
-        }
-      });
-    });
-
-    req.on("error", reject);
-    req.write(body);
-    req.end();
+async function uploadMediaToPostforme(apiKey, filePath) {
+  const fileName = path.basename(filePath);
+  const fileData = fs.readFileSync(filePath);
+  
+  console.log(`Generating upload URL for ${fileName} (${(fileData.length / 1024 / 1024).toFixed(2)} MB)...`);
+  
+  const createUrlBody = JSON.stringify({
+    filename: fileName,
+    content_type: filePath.endsWith(".webm") ? "video/webm" : "video/mp4"
   });
+  
+  const createUrlResponse = await fetch("https://api.postforme.dev/v1/media/create-upload-url", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(createUrlBody)
+    },
+    body: createUrlBody
+  });
+  
+  if (!createUrlResponse.ok) {
+    const errorText = await createUrlResponse.text();
+    throw new Error(`Failed to create upload URL: ${errorText}`);
+  }
+  
+  const urlData = await createUrlResponse.json();
+  const { upload_url, media_url } = urlData;
+  
+  console.log(`Uploading to PostForMe storage...`);
+  
+  const uploadResponse = await fetch(upload_url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": filePath.endsWith(".webm") ? "video/webm" : "video/mp4"
+    },
+    body: fileData
+  });
+  
+  if (!uploadResponse.ok) {
+    throw new Error(`Failed to upload media: ${uploadResponse.status}`);
+  }
+  
+  console.log(`Media uploaded: ${media_url}`);
+  return media_url;
+}
+
+async function createSocialPost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt = null) {
+  const postBody = {
+    caption: caption,
+    media: [{ url: media_url }],
+    social_accounts: socialAccounts
+  };
+  
+  if (scheduledAt) {
+    postBody.scheduled_at = scheduledAt;
+    console.log(`Scheduling for: ${scheduledAt}`);
+  }
+  
+  const response = await fetch("https://api.postforme.dev/v1/social-posts", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(JSON.stringify(postBody))
+    },
+    body: JSON.stringify(postBody)
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create post: ${errorText}`);
+  }
+  
+  return await response.json();
 }
 
 async function main() {
+  console.log("=== PostForMe Posting ===");
+  
   const apiKey = process.env.POSTFORME_API_KEY;
-  const platformsJson = process.env.PLATFORMS;
   const workerUrl = process.env.WORKER_WEBHOOK_URL;
   const jobId = process.env.JOB_ID;
-
+  
   if (!apiKey) {
-    console.error("POSTFORME_API_KEY environment variable is required");
+    console.error("POSTFORME_API_KEY is required");
     process.exit(1);
   }
-
-  if (!platformsJson) {
-    console.error("PLATFORMS environment variable is required");
-    process.exit(1);
-  }
-
-  let platforms;
+  
+  let config = {};
   try {
-    platforms = JSON.parse(platformsJson);
-  } catch (err) {
-    console.error("Invalid PLATFORMS JSON:", err.message);
-    process.exit(1);
+    const configPath = path.join(process.cwd(), "automation-config.json");
+    if (fs.existsSync(configPath)) {
+      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    }
+  } catch (e) {
+    console.log("Could not read config file");
   }
-
+  
+  const autoPublish = config.auto_publish || false;
+  const publishMode = config.publish_mode || "immediate";
+  const socialAccounts = config.postforme_account_ids || [];
+  const topTaglines = Array.isArray(config.top_taglines) ? config.top_taglines : [];
+  const bottomTaglines = Array.isArray(config.bottom_taglines) ? config.bottom_taglines : [];
+  const titles = Array.isArray(config.titles) ? config.titles : [];
+  const descriptions = Array.isArray(config.descriptions) ? config.descriptions : [];
+  const hashtags = Array.isArray(config.hashtags) ? config.hashtags : [];
+  const scheduleDate = config.schedule_date || "";
+  const scheduleTime = config.schedule_time || "";
+  const scheduleTimezone = config.postforme_schedule_timezone || "UTC";
+  const staggerEnabled = config.postforme_account_stagger_enabled === true;
+  const staggerMin = parseInt(config.postforme_account_stagger_min || "1");
+  const staggerMax = parseInt(config.postforme_account_stagger_max || "60");
+  
+  if (!autoPublish) {
+    console.log("Auto-publish is disabled, skipping PostForMe posting");
+    if (workerUrl && jobId) {
+      await notifyWorker(workerUrl, jobId, "success", { skipped: true, reason: "auto_publish_disabled" });
+    }
+    process.exit(0);
+    return;
+  }
+  
+  if (!socialAccounts || socialAccounts.length === 0) {
+    console.log("No social accounts configured for posting");
+    if (workerUrl && jobId) {
+      await notifyWorker(workerUrl, jobId, "success", { skipped: true, reason: "no_accounts" });
+    }
+    process.exit(0);
+    return;
+  }
+  
   const videoFile = path.join(OUTPUT_DIR, "processed-video.mp4");
-  const imageFile = path.join(OUTPUT_DIR, "processed-image.png");
-
+  const videoWebmFile = path.join(OUTPUT_DIR, "processed-video.webm");
+  
   let mediaFile;
   if (fs.existsSync(videoFile)) {
     mediaFile = videoFile;
-  } else if (fs.existsSync(imageFile)) {
-    mediaFile = imageFile;
+  } else if (fs.existsSync(videoWebmFile)) {
+    mediaFile = videoWebmFile;
   } else {
-    console.error("No processed media file found");
+    console.error("No processed video file found");
     process.exit(1);
   }
-
-  console.log(`Posting ${path.basename(mediaFile)} to: ${platforms.join(", ")}`);
-
-  const results = [];
-
-  for (const platform of platforms) {
-    console.log(`\nPosting to ${platform}...`);
-    try {
-      const result = await postToPostforme(apiKey, platform, mediaFile);
-      console.log(`  Success: ${JSON.stringify(result)}`);
-      results.push({ platform, status: "success", result });
-    } catch (err) {
-      console.error(`  Failed: ${err.message}`);
-      results.push({ platform, status: "failed", error: err.message });
+  
+  console.log(`Video file: ${path.basename(mediaFile)}`);
+  console.log(`Social accounts: ${socialAccounts.length}`);
+  console.log(`Publish mode: ${publishMode}`);
+  
+  try {
+    const mediaUrl = await uploadMediaToPostforme(apiKey, mediaFile);
+    
+    const topTagline = getRandomFromArray(topTaglines);
+    const bottomTagline = getRandomFromArray(bottomTaglines);
+    const title = getRandomFromArray(titles);
+    const description = getRandomFromArray(descriptions);
+    const hashtagsStr = Array.isArray(hashtags) ? hashtags.join(" ") : "";
+    
+    const caption = [topTagline, title, description, hashtagsStr, bottomTagline]
+      .filter(Boolean)
+      .join("\n\n");
+    
+    console.log(`Caption preview: ${caption.substring(0, 100)}...`);
+    
+    let scheduledAt = null;
+    if (publishMode === "scheduled" && scheduleDate && scheduleTime) {
+      const dateTimeStr = `${scheduleDate}T${scheduleTime}:00`;
+      scheduledAt = new Date(dateTimeStr).toISOString();
     }
-  }
-
-  const allFailed = results.every((r) => r.status === "failed");
-  const status = allFailed ? "failed" : "success";
-
-  if (workerUrl && jobId) {
-    try {
-      const webhookBody = JSON.stringify({
-        job_id: parseInt(jobId),
-        status: status,
-        output_data: JSON.stringify(results),
-      });
-
-      await new Promise((resolve, reject) => {
-        const url = new URL(workerUrl);
-        const req = https.request(
-          {
-            hostname: url.hostname,
-            port: 443,
-            path: url.pathname,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(webhookBody),
-            },
-          },
-          (res) => {
-            let data = "";
-            res.on("data", (chunk) => (data += chunk));
-            res.on("end", resolve);
-          }
-        );
-        req.on("error", reject);
-        req.write(webhookBody);
-        req.end();
-      });
-      console.log("\nWorker webhook notified");
-    } catch (err) {
-      console.error("Failed to notify worker:", err.message);
+    
+    const postResult = await createSocialPost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt);
+    
+    console.log(`Post created successfully!`);
+    console.log(`Post ID: ${postResult.id}`);
+    console.log(`Status: ${postResult.status || 'posted'}`);
+    
+    const outputData = {
+      success: true,
+      post_id: postResult.id,
+      post_url: postResult.url || `https://app.postforme.dev/social-posts/${postResult.id}`,
+      media_url: mediaUrl,
+      platforms: socialAccounts.length,
+      scheduled: !!scheduledAt,
+      scheduled_at: scheduledAt
+    };
+    
+    if (workerUrl && jobId) {
+      await notifyWorker(workerUrl, jobId, "success", outputData);
     }
-  }
-
-  console.log(`\nPosting complete. Status: ${status}`);
-  if (status === "failed") {
+    
+    console.log("=== SUCCESS ===");
+    process.exit(0);
+    
+  } catch (err) {
+    console.error(`PostForMe error: ${err.message}`);
+    
+    if (workerUrl && jobId) {
+      await notifyWorker(workerUrl, jobId, "failed", { error: err.message });
+    }
+    
     process.exit(1);
   }
 }
 
-main().catch((err) => {
-  console.error("Posting failed:", err.message);
+async function notifyWorker(workerUrl, jobId, status, outputData) {
+  try {
+    const webhookBody = JSON.stringify({
+      job_id: parseInt(jobId),
+      status: status,
+      output_data: JSON.stringify(outputData)
+    });
+    
+    const url = new URL(workerUrl);
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(webhookBody)
+        }
+      }, (res) => {
+        let data = "";
+        res.on("data", c => data += c);
+        res.on("end", () => {
+          console.log(`Worker notified: ${res.statusCode}`);
+          resolve();
+        });
+      });
+      req.on("error", reject);
+      req.write(webhookBody);
+      req.end();
+    });
+  } catch (err) {
+    console.error(`Failed to notify worker: ${err.message}`);
+  }
+}
+
+main().catch(err => {
+  console.error("Fatal error:", err.message);
   process.exit(1);
 });

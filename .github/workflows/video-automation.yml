@@ -71,6 +71,8 @@ jobs:
       - name: Post to Social Media
         if: github.event.inputs.postforme_api_key != ''
         continue-on-error: true
+        env:
+          POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
         run: node runner-scripts/post-via-postforme.js
         working-directory: runner-scripts
 
