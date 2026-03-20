@@ -25,37 +25,53 @@ export async function handleUploadsRoutes(
   };
 
   const postformeUpload = async (apiKey: string, videoUrl: string, platforms: string[]) => {
-    const response = await fetch("https://api.postforme.com/v1/media/upload", {
+    const accountRes = await fetch("https://api.postforme.dev/v1/social-accounts", {
+      headers: { "Authorization": `Bearer ${apiKey}` },
+    });
+    
+    if (!accountRes.ok) {
+      throw new Error("Failed to get social accounts");
+    }
+    
+    const accountData = await accountRes.json() as { data?: Array<{ id: string; platform: string }> };
+    const accounts = accountData.data || [];
+    const platformMap: Record<string, string> = { instagram: "instagram", tiktok: "tiktok", youtube: "youtube", facebook: "facebook", x: "x" };
+    const selectedAccounts = accounts.filter((a: any) => platforms.some((p: string) => a.platform === platformMap[p])).map((a: any) => a.id);
+    
+    if (selectedAccounts.length === 0) {
+      throw new Error("No matching social accounts found");
+    }
+    
+    const postRes = await fetch("https://api.postforme.dev/v1/social-posts", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        url: videoUrl,
-        platforms: platforms,
+        media: [{ url: videoUrl }],
+        social_accounts: selectedAccounts,
+        caption: "Automated video post",
       }),
     });
     
-    if (!response.ok) {
-      const errorText = await response.text();
+    if (!postRes.ok) {
+      const errorText = await postRes.text();
       throw new Error(`Postforme upload failed: ${errorText}`);
     }
     
-    return await response.json();
+    return await postRes.json();
   };
 
-  const postformePost = async (apiKey: string, mediaId: string, scheduledAt?: string) => {
-    const body: Record<string, unknown> = {
-      media_id: mediaId,
-    };
+  const postformePost = async (apiKey: string, postId: string, scheduledAt?: string) => {
+    const body: Record<string, unknown> = {};
     
     if (scheduledAt) {
       body.scheduled_at = scheduledAt;
     }
     
-    const response = await fetch("https://api.postforme.com/v1/media/publish", {
-      method: "POST",
+    const response = await fetch(`https://api.postforme.dev/v1/social-posts/${postId}`, {
+      method: "PATCH",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
@@ -230,7 +246,7 @@ export async function handleUploadsRoutes(
     }
 
     try {
-      const statusRes = await fetch(`https://api.postforme.com/v1/media/${upload.postforme_id}/status`, {
+      const statusRes = await fetch(`https://api.postforme.dev/v1/media/${upload.postforme_id}/status`, {
         headers: {
           "Authorization": `Bearer ${postformeSettings.api_key}`,
         },

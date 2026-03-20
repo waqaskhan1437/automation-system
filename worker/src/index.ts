@@ -270,30 +270,44 @@ export default {
             try {
               const platforms = postformeSettings.platforms ? JSON.parse(postformeSettings.platforms) : ["instagram", "tiktok"];
               
-              const uploadRes = await fetch("https://api.postforme.com/v1/media/upload", {
-                method: "POST",
-                headers: {
-                  "Authorization": `Bearer ${postformeSettings.api_key}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  url: videoUrl,
-                  platforms: platforms,
-                }),
+              const accountRes = await fetch("https://api.postforme.dev/v1/social-accounts", {
+                headers: { "Authorization": `Bearer ${postformeSettings.api_key}` },
               });
-
-              if (uploadRes.ok) {
-                const uploadData = await uploadRes.json() as { id?: string };
+              
+              if (accountRes.ok) {
+                const accountData = await accountRes.json() as { data?: Array<{ id: string; platform: string }> };
+                const accounts = accountData.data || [];
+                const selectedAccounts = accounts.filter((a: any) => platforms.some((p: string) => a.platform === p)).map((a: any) => a.id);
                 
-                await env.DB.prepare(
-                  `INSERT INTO video_uploads (job_id, postforme_id, media_url, upload_status, post_status, platforms, aspect_ratio)
-                   VALUES (?, ?, ?, 'uploaded', 'pending', ?, '9:16')`
-                ).bind(
-                  jobId,
-                  uploadData?.id || null,
-                  videoUrl,
-                  JSON.stringify(platforms)
-                ).run();
+                if (selectedAccounts.length > 0) {
+                  const postRes = await fetch("https://api.postforme.dev/v1/social-posts", {
+                    method: "POST",
+                    headers: {
+                      "Authorization": `Bearer ${postformeSettings.api_key}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                      media: [{ url: videoUrl }],
+                      social_accounts: selectedAccounts,
+                      caption: "Automated video post",
+                    }),
+                  });
+
+                  if (postRes.ok) {
+                    const postData = await postRes.json() as { id?: string; data?: { id?: string } };
+                    const postId = postData?.id || postData?.data?.id;
+                    
+                    await env.DB.prepare(
+                      `INSERT INTO video_uploads (job_id, postforme_id, media_url, upload_status, post_status, platforms, aspect_ratio)
+                       VALUES (?, ?, ?, 'uploaded', 'pending', ?, '9:16')`
+                    ).bind(
+                      jobId,
+                      postId || null,
+                      videoUrl,
+                      JSON.stringify(platforms)
+                    ).run();
+                  }
+                }
               }
             } catch (err) {
               console.error("Auto-upload failed:", err);
