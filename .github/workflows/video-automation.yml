@@ -45,10 +45,7 @@ jobs:
 
       - name: Install FFmpeg
         run: |
-          curl -L https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-x64 -o ffmpeg.gz
-          gunzip ffmpeg.gz
-          chmod +x ffmpeg
-          sudo mv ffmpeg /usr/local/bin/ffmpeg
+          sudo apt-get update && sudo apt-get install -y ffmpeg
           ffmpeg -version
 
       - name: Install runner dependencies
