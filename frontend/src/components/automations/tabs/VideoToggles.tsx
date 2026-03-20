@@ -91,6 +91,28 @@ export default function VideoToggles({ data, onChange }: Props) {
           <option value="5">5 videos</option>
         </select>
       </ToggleCard>
+
+      {/* Mute Audio */}
+      <ToggleCard
+        icon={<svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" /></svg>}
+        title="Mute Audio"
+        subtitle="Remove sound"
+        checked={data.mute_audio === true}
+        onChange={v => onChange("mute_audio", v)}
+        color="red"
+      >
+        <select
+          value={(data.audio_fade_duration as string) || "3"}
+          onChange={e => onChange("audio_fade_duration", e.target.value)}
+          className="w-full px-2 py-1.5 bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[10px] text-white focus:border-red-500 focus:outline-none"
+        >
+          <option value="0">Instant mute</option>
+          <option value="1">Fade 1 sec</option>
+          <option value="2">Fade 2 sec</option>
+          <option value="3">Fade 3 sec</option>
+          <option value="5">Fade 5 sec</option>
+        </select>
+      </ToggleCard>
     </div>
   );
 }
