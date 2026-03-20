@@ -149,6 +149,13 @@ export async function handleJobsRoutes(
         runStatus = runData.status;
         runConclusion = runData.conclusion;
         runUrl = runData.html_url;
+
+        if (runData.status === "completed" && job.status !== "success" && job.status !== "failed") {
+          const dbStatus = runData.conclusion === "success" ? "success" : "failed";
+          await env.DB.prepare("UPDATE jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?").bind(dbStatus, id).run();
+        } else if (runData.status === "in_progress" && job.status === "queued") {
+          await env.DB.prepare("UPDATE jobs SET status = 'running' WHERE id = ?").bind(id).run();
+        }
       }
 
       // Get jobs list for step details

@@ -130,6 +130,7 @@ async function main() {
   
   if (!autoPublish) {
     console.log("Auto-publish is disabled, skipping PostForMe posting");
+    fs.writeFileSync(path.join(OUTPUT_DIR, "post_result.json"), JSON.stringify({ skipped: true, reason: "auto_publish_disabled" }));
     if (workerUrl && jobId) {
       await notifyWorker(workerUrl, jobId, "success", { skipped: true, reason: "auto_publish_disabled" });
     }
@@ -139,6 +140,7 @@ async function main() {
   
   if (!socialAccounts || socialAccounts.length === 0) {
     console.log("No social accounts configured for posting");
+    fs.writeFileSync(path.join(OUTPUT_DIR, "post_result.json"), JSON.stringify({ skipped: true, reason: "no_accounts" }));
     if (workerUrl && jobId) {
       await notifyWorker(workerUrl, jobId, "success", { skipped: true, reason: "no_accounts" });
     }
@@ -199,6 +201,9 @@ async function main() {
       scheduled: !!scheduledAt,
       scheduled_at: scheduledAt
     };
+
+    fs.writeFileSync(path.join(OUTPUT_DIR, "post_result.json"), JSON.stringify(outputData));
+    console.log("Post result saved to output/post_result.json");
     
     if (workerUrl && jobId) {
       await notifyWorker(workerUrl, jobId, "success", outputData);

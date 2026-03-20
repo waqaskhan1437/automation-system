@@ -73,7 +73,11 @@ jobs:
         continue-on-error: true
         env:
           POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
-        run: node runner-scripts/post-via-postforme.js
+        run: |
+          node runner-scripts/post-via-postforme.js || true
+          if [ -f output/post_result.json ]; then
+            echo "POSTFORME_OUTPUT=$(cat output/post_result.json)" >> $GITHUB_ENV
+          fi
         working-directory: runner-scripts
 
       - name: Upload processed video
