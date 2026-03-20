@@ -123,3 +123,22 @@ export interface ApiResponse<T = unknown> {
   error?: string;
   message?: string;
 }
+
+export interface VideoUpload {
+  id?: number;
+  job_id: number;
+  postforme_id: string | null;
+  media_url: string | null;
+  thumbnail_url: string | null;
+  upload_status: "pending" | "uploaded" | "posted" | "failed";
+  post_status: "pending" | "scheduled" | "posted" | "failed";
+  scheduled_at: string | null;
+  posted_at: string | null;
+  platforms: string;
+  aspect_ratio: string;
+  duration: number | null;
+  file_size: number | null;
+  error_message: string | null;
+  created_at?: string;
+  updated_at?: string;
+}

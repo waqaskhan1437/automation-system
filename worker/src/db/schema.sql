@@ -66,3 +66,23 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (automation_id) REFERENCES automations(id)
 );
+
+CREATE TABLE IF NOT EXISTS video_uploads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL,
+  postforme_id TEXT,
+  media_url TEXT,
+  thumbnail_url TEXT,
+  upload_status TEXT DEFAULT 'pending' CHECK(upload_status IN ('pending','uploaded','posted','failed')),
+  post_status TEXT DEFAULT 'pending' CHECK(post_status IN ('pending','scheduled','posted','failed')),
+  scheduled_at DATETIME,
+  posted_at DATETIME,
+  platforms TEXT DEFAULT '[]',
+  aspect_ratio TEXT DEFAULT '9:16',
+  duration INTEGER,
+  file_size INTEGER,
+  error_message TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (job_id) REFERENCES jobs(id)
+);

@@ -1,7 +1,8 @@
-import { Env, ApiResponse, GithubSettings, Job } from "./types";
+import { Env, ApiResponse, GithubSettings, Job, PostformeSettings } from "./types";
 import { handleSettingsRoutes } from "./routes/settings";
 import { handleAutomationsRoutes } from "./routes/automations";
 import { handleJobsRoutes } from "./routes/jobs";
+import { handleUploadsRoutes } from "./routes/uploads";
 
 function jsonResponse<T>(data: ApiResponse<T>, status: number = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -49,6 +50,10 @@ export default {
 
     if (path.startsWith("/api/jobs")) {
       return handleJobsRoutes(request, env, path);
+    }
+
+    if (path.startsWith("/api/uploads")) {
+      return handleUploadsRoutes(request, env, path);
     }
 
     // Serve video/image output files
@@ -250,10 +255,52 @@ export default {
       const body = await request.json() as Record<string, unknown>;
       const jobId = body.job_id as number;
       const status = body.status as string;
+      
       if (jobId && status) {
         await env.DB.prepare(
           "UPDATE jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?"
         ).bind(status, jobId).run();
+
+        if (status === "success") {
+          const postformeSettings = await env.DB.prepare("SELECT * FROM settings_postforme LIMIT 1").first<PostformeSettings>();
+          
+          if (postformeSettings?.api_key) {
+            const videoUrl = `https://automation-api.waqaskhan1437.workers.dev/api/output/${jobId}`;
+            
+            try {
+              const platforms = postformeSettings.platforms ? JSON.parse(postformeSettings.platforms) : ["instagram", "tiktok"];
+              
+              const uploadRes = await fetch("https://api.postforme.com/v1/media/upload", {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${postformeSettings.api_key}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  url: videoUrl,
+                  platforms: platforms,
+                }),
+              });
+
+              if (uploadRes.ok) {
+                const uploadData = await uploadRes.json() as { id?: string };
+                
+                await env.DB.prepare(
+                  `INSERT INTO video_uploads (job_id, postforme_id, media_url, upload_status, post_status, platforms, aspect_ratio)
+                   VALUES (?, ?, ?, 'uploaded', 'pending', ?, '9:16')`
+                ).bind(
+                  jobId,
+                  uploadData?.id || null,
+                  videoUrl,
+                  JSON.stringify(platforms)
+                ).run();
+              }
+            } catch (err) {
+              console.error("Auto-upload failed:", err);
+            }
+          }
+        }
+        
         return jsonResponse({ success: true, message: "Job updated" });
       }
       return jsonResponse({ success: false, error: "Missing job_id or status" }, 400);

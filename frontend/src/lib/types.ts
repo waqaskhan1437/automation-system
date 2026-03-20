@@ -1,0 +1,169 @@
+export interface Automation {
+  id: number;
+  name: string;
+  type: "video" | "image";
+  status: "active" | "paused" | "completed" | "failed";
+  schedule: string | null;
+  config: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface Job {
+  id: number;
+  automation_id: number;
+  status: "queued" | "running" | "success" | "failed";
+  github_run_id: number | null;
+  github_run_url: string | null;
+  input_data: string | null;
+  output_data: string | null;
+  logs: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface PostformeSettings {
+  id?: number;
+  api_key: string;
+  platforms: string[];
+  default_schedule: string | null;
+}
+
+export interface GithubSettings {
+  id?: number;
+  pat_token: string;
+  repo_owner: string;
+  repo_name: string;
+  runner_labels: string;
+  workflow_dispatch_url: string | null;
+}
+
+export interface VideoSourceSettings {
+  id?: number;
+  bunny_api_key: string | null;
+  bunny_library_id: string | null;
+  youtube_cookies: string | null;
+}
+
+export interface AISettings {
+  id?: number;
+  gemini_key: string | null;
+  grok_key: string | null;
+  cohere_key: string | null;
+  openrouter_key: string | null;
+  openai_key: string | null;
+  groq_key: string | null;
+  default_provider: string;
+}
+
+export interface SocialAccount {
+  platform: string;
+  username: string;
+  connected: boolean;
+  id: string;
+}
+
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+export interface JobStep {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  number?: number;
+}
+
+export interface RunningJob {
+  jobId: number;
+  status: string;
+  githubRunUrl: string | null;
+  steps: JobStep[];
+  error: string | null;
+  progress: number;
+}
+
+export interface TabProps {
+  data: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}
+
+export interface WorkflowInputs {
+  job_id: string;
+  automation_id: string;
+  video_source: string;
+  video_url: string;
+  youtube_channel_url: string;
+  manual_links: string;
+  videos_per_run: string;
+  video_days: string;
+  date_from: string;
+  date_to: string;
+  video_selection: string;
+  source_shorts_mode: string;
+  source_shorts_max_count: string;
+  short_duration: string;
+  playback_speed: string;
+  aspect_ratio: string;
+  split_enabled: string;
+  split_duration: string;
+  combine_enabled: string;
+  combine_count: string;
+  rotation_enabled: string;
+  rotation_shuffle: string;
+  rotation_auto_reset: string;
+  whisper_enabled: string;
+  whisper_language: string;
+  top_taglines: string;
+  bottom_taglines: string;
+  tagline_rotation: string;
+  branding_text_top: string;
+  branding_text_bottom: string;
+  watermark_text: string;
+  watermark_position: string;
+  watermark_fontsize: string;
+  titles: string;
+  descriptions: string;
+  hashtags: string;
+  content_rotation: string;
+  output_format: string;
+  output_quality: string;
+  output_resolution: string;
+  auto_publish: string;
+  publish_mode: string;
+  delay_minutes: string;
+  schedule_date: string;
+  schedule_time: string;
+  schedule_spread_minutes: string;
+  postforme_account_ids: string;
+  postforme_schedule_timezone: string;
+  postforme_account_stagger_enabled: string;
+  postforme_account_stagger_min: string;
+  postforme_account_stagger_max: string;
+  run_mode: string;
+  api_key_id: string;
+}
+
+export interface VideoUpload {
+  id: number;
+  job_id: number;
+  postforme_id: string | null;
+  media_url: string | null;
+  thumbnail_url: string | null;
+  upload_status: "pending" | "uploaded" | "posted" | "failed";
+  post_status: "pending" | "scheduled" | "posted" | "failed";
+  scheduled_at: string | null;
+  posted_at: string | null;
+  platforms: string;
+  aspect_ratio: string;
+  duration: number | null;
+  file_size: number | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
