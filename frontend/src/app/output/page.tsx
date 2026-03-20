@@ -43,11 +43,11 @@ export default function OutputPage() {
 
   const fetchOutputs = async () => {
     try {
-      const jobsRes = await fetch("/api/jobs?limit=20");
+      const jobsRes = await fetch("/api/jobs?limit=50");
       const jobsData = await jobsRes.json();
       const autoRes = await fetch("/api/automations");
       const autoData = await autoRes.json();
-      const uploadsRes = await fetch("/api/uploads");
+      const uploadsRes = await fetch("/api/uploads?limit=50");
       const uploadsData = await uploadsRes.json();
       
       const videoUploads: VideoUpload[] = uploadsData.success ? uploadsData.data : [];
@@ -137,39 +137,41 @@ export default function OutputPage() {
           <a href="/automations" className="glass-button-primary inline-block mt-4 px-6 py-2">Go to Automations</a>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {outputs.map((item) => (
-            <div key={item.job.id} className="glass-card p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-xl font-bold">{item.automationName}</h3>
-                  <p className="text-sm text-[#a1a1aa]">Job #{item.job.id} - {new Date(item.job.created_at).toLocaleString()}</p>
-                </div>
+            <div key={item.job.id} className="glass-card p-4 flex flex-col">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-[#a1a1aa]">Job #{item.job.id}</span>
                 {getStatusBadge(item)}
               </div>
-              {item.upload?.media_url && (
-                <div className="mb-4">
-                  <div className="mb-2 text-sm text-[#a1a1aa]">Video Preview:</div>
+              <h3 className="text-sm font-bold mb-2 truncate">{item.automationName}</h3>
+              {item.upload?.media_url ? (
+                <div className="flex-1 min-h-0">
                   <video 
                     controls 
-                    className="w-full max-w-md rounded-lg bg-black"
+                    className="w-full aspect-[9/16] rounded-lg bg-black object-contain"
                     src={item.upload.media_url}
                   >
                     Your browser does not support video playback.
                   </video>
                 </div>
-              )}
-              {item.upload && (
-                <div className="mb-4 p-3 rounded-xl bg-indigo-500/10 text-sm text-indigo-300">
-                  Postforme: {item.upload.upload_status === "uploaded" ? "Just Uploaded" : item.upload.upload_status}
-                  {item.upload.aspect_ratio && ` | ${item.upload.aspect_ratio}`}
-                  {item.upload.postforme_id && ` | ID: ${item.upload.postforme_id}`}
+              ) : (
+                <div className="flex-1 bg-black/30 rounded-lg flex items-center justify-center min-h-[200px]">
+                  <span className="text-xs text-[#a1a1aa]">{item.job.status === "running" ? "Processing..." : "No video"}</span>
                 </div>
               )}
-              <div className="flex gap-3">
-                {item.job.github_run_url && <a href={item.job.github_run_url} target="_blank" rel="noopener" className="glass-button text-sm">GitHub</a>}
+              <div className="mt-3 flex flex-wrap gap-1">
+                {item.job.github_run_url && <a href={item.job.github_run_url} target="_blank" rel="noopener" className="glass-button text-xs py-1 px-2">GitHub</a>}
                 {getActions(item)}
               </div>
+              {item.upload && (
+                <div className="mt-2 text-xs text-indigo-300">
+                  {item.upload.upload_status === "uploaded" ? "Just Uploaded" : item.upload.upload_status}
+                  {item.upload.post_status === "posted" && " | Posted"}
+                  {item.upload.post_status === "scheduled" && " | Scheduled"}
+                </div>
+              )}
+              <div className="mt-1 text-xs text-[#a1a1aa]">{new Date(item.job.created_at).toLocaleString()}</div>
             </div>
           ))}
         </div>

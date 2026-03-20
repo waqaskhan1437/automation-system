@@ -90,6 +90,7 @@ export async function handleUploadsRoutes(
   if (path === "/api/uploads" && method === "GET") {
     const url = new URL(request.url);
     const jobId = url.searchParams.get("job_id");
+    const limit = parseInt(url.searchParams.get("limit") || "50");
     
     let query = "SELECT * FROM video_uploads WHERE 1=1";
     const params: (string | number)[] = [];
@@ -99,7 +100,8 @@ export async function handleUploadsRoutes(
       params.push(parseInt(jobId));
     }
     
-    query += " ORDER BY created_at DESC";
+    query += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
     
     const result = await env.DB.prepare(query).bind(...params).all<VideoUpload>();
     return jsonResponse({ success: true, data: result.results });

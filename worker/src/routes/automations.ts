@@ -139,28 +139,11 @@ export async function handleAutomationsRoutes(
 
     // Trigger GitHub workflow dispatch
     try {
+      // Send only the inputs that are defined in workflow
       const workflowInputs: Record<string, string> = {
         job_id: String(jobId),
         automation_id: String(id),
-        video_source: config.video_source || "direct",
-        video_url: config.video_url || "",
-        channel_url: config.channel_url || "",
-        multiple_urls: JSON.stringify(config.multiple_urls || []),
-        videos_per_run: String(config.fetch_config?.videos_per_run || 1),
-        short_duration: String(config.short_settings?.max_duration || 60),
-        playback_speed: String(config.short_settings?.playback_speed || 1),
-        aspect_ratio: config.short_settings?.aspect_ratio || "9:16",
-        crop_mode: config.short_settings?.crop_mode || "crop",
-        split_enabled: String(config.split?.enabled || false),
-        combine_enabled: String(config.combine?.enabled || false),
-        codec: config.ffmpeg_config?.codec || "libx264",
-        output_format: config.output_format || "mp4",
-        output_quality: config.output_quality || "high",
-        output_resolution: config.output_resolution || "1080x1920",
-        auto_publish: String(config.publish?.auto_publish ?? true),
-        platforms: JSON.stringify(config.platforms || []),
-        top_tagline: config.taglines?.top_tagline || "",
-        bottom_tagline: config.taglines?.bottom_tagline || "",
+        automation_config: JSON.stringify(config),
       };
 
       if (postformeSettings?.api_key) {

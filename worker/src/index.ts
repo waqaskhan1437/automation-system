@@ -303,11 +303,6 @@ export default {
                     await env.DB.prepare(
                       "UPDATE video_uploads SET postforme_id = ? WHERE job_id = ?"
                     ).bind(postId, jobId).run();
-                      jobId,
-                      postId || null,
-                      videoUrl,
-                      JSON.stringify(platforms)
-                    ).run();
                   }
                 }
               }
