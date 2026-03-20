@@ -49,11 +49,8 @@ jobs:
           ffmpeg -version
 
       - name: Install runner dependencies
-        run: npm ci
+        run: npm ci && mkdir -p output
         working-directory: runner-scripts
-
-      - name: Create output directory
-        run: mkdir -p output
 
       - name: Download Video
         env:
@@ -61,7 +58,12 @@ jobs:
           VIDEO_URL: ${{ fromJson(github.event.inputs.automation_config).video_url || '' }}
           CHANNEL_URL: ${{ fromJson(github.event.inputs.automation_config).youtube_channel_url || '' }}
           MANUAL_LINKS: ${{ fromJson(github.event.inputs.automation_config).manual_links || '' }}
-        run: node runner-scripts/download-video.js
+        run: |
+          echo "=== DEBUG ==="
+          echo "VIDEO_SOURCE: $VIDEO_SOURCE"
+          echo "VIDEO_URL: $VIDEO_URL"
+          echo "=== END DEBUG ==="
+          node runner-scripts/download-video.js
         working-directory: runner-scripts
 
       - name: Process Video
