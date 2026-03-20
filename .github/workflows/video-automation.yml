@@ -55,16 +55,13 @@ jobs:
       - name: Create output directory
         run: mkdir -p output
 
-      - name: Save config to file
-        run: |
-          echo '${{ github.event.inputs.automation_config }}' > automation-config.json
-
       - name: Download Video
         env:
-          VIDEO_SOURCE: ${{ github.event.inputs.automation_config && fromJson(github.event.inputs.automation_config).video_source || 'youtube_channel' }}
-        run: |
-          echo "Downloading video with source: $VIDEO_SOURCE"
-          node runner-scripts/download-video.js
+          VIDEO_SOURCE: ${{ fromJson(github.event.inputs.automation_config).video_source || 'youtube_channel' }}
+          VIDEO_URL: ${{ fromJson(github.event.inputs.automation_config).video_url || '' }}
+          CHANNEL_URL: ${{ fromJson(github.event.inputs.automation_config).youtube_channel_url || '' }}
+          MANUAL_LINKS: ${{ fromJson(github.event.inputs.automation_config).manual_links || '' }}
+        run: node runner-scripts/download-video.js
         working-directory: runner-scripts
 
       - name: Process Video
