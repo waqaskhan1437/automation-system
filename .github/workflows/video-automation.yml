@@ -59,7 +59,13 @@ jobs:
         working-directory: runner-scripts
 
       - name: Process Video
-        run: node runner-scripts/process-video.js
+        continue-on-error: true
+        run: |
+          echo "=== DEBUG ==="
+          ls -la output/ 2>&1 || echo "No output dir"
+          cat automation-config.json 2>&1 || echo "No config"
+          echo "=== END DEBUG ==="
+          node runner-scripts/process-video.js
         working-directory: runner-scripts
 
       - name: Post to Social Media
