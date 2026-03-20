@@ -85,9 +85,14 @@ jobs:
 
       - name: Update Job Status
         if: always()
+        continue-on-error: true
         env:
           WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
           JOB_ID: ${{ github.event.inputs.job_id }}
           JOB_STATUS: ${{ job.status }}
-        run: node runner-scripts/update-job-status.js
+        run: |
+          echo "WORKER_WEBHOOK_URL=$WORKER_WEBHOOK_URL"
+          echo "JOB_ID=$JOB_ID"
+          echo "JOB_STATUS=$JOB_STATUS"
+          node runner-scripts/update-job-status.js
         working-directory: runner-scripts
