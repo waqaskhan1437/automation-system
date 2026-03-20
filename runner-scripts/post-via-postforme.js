@@ -64,7 +64,7 @@ async function uploadMediaToPostforme(apiKey, filePath) {
 async function createSocialPost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt = null) {
   const postBody = {
     caption: caption,
-    media: [{ url: media_url }],
+    media: [{ url: mediaUrl }],
     social_accounts: socialAccounts
   };
   
