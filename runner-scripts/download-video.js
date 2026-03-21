@@ -10,9 +10,10 @@ const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 let cookiesPath = "";
 const repoRoot = path.join(process.cwd(), "..");
 const possiblePaths = [
+  path.join(repoRoot, "cookies (2).txt"),
   path.join(repoRoot, "photos.google.com_cookies.txt"),
-  path.join(process.cwd(), "photos.google.com_cookies.txt"),
-  path.join(__dirname, "..", "photos.google.com_cookies.txt")
+  path.join(process.cwd(), "cookies (2).txt"),
+  path.join(process.cwd(), "photos.google.com_cookies.txt")
 ];
 
 console.log("Searching for cookies file...");
