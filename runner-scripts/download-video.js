@@ -154,36 +154,29 @@ function main() {
     console.log("=== Google Photos Download ===");
     console.log("URL:", url);
     
-    // For Google Photos albums, try yt-dlp first
-    console.log("Step 1: Trying yt-dlp...");
-    let ok = downloadWithYtDlp(url);
-    console.log("yt-dlp result:", ok ? "SUCCESS" : "FAILED");
+    // Step 1: Try direct curl download first (works for direct video links)
+    console.log("Step 1: Trying direct curl download...");
+    let ok = downloadWithCurl(url);
+    console.log("Direct curl result:", ok ? "SUCCESS" : "FAILED");
     
     if (!ok) {
-      // Step 2: Try direct HTML parsing
-      console.log("Step 2: Trying HTML parsing...");
+      // Step 2: Try yt-dlp (may work with authentication)
+      console.log("Step 2: Trying yt-dlp...");
+      ok = downloadWithYtDlp(url);
+      console.log("yt-dlp result:", ok ? "SUCCESS" : "FAILED");
+    }
+    
+    if (!ok) {
+      // Step 3: Try HTML parsing
+      console.log("Step 3: Trying HTML parsing...");
       const htmlOk = await downloadGooglePhotos(url);
       console.log("HTML parsing result:", htmlOk ? "SUCCESS" : "FAILED");
-      
-      if (!htmlOk) {
-        console.log("All Google Photos methods failed!");
-        console.log("Trying curl on direct video URLs from Google Photos...");
-        // Try finding video in album by checking for common patterns
-        try {
-          const https = require('https');
-          const videoPatterns = [
-            'video-downloads.googleusercontent.com',
-            'googlevideo.com',
-            'drive.google.com'
-          ];
-          console.log("Trying to fetch album page...");
-        } catch(e) {
-          console.log("Extra attempts failed:", e.message);
-        }
-        finish(false);
-        return;
-      }
-      finish(true);
+      if (htmlOk) ok = true;
+    }
+    
+    if (!ok) {
+      console.log("All Google Photos methods failed!");
+      finish(false);
       return;
     }
     finish(ok);

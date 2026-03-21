@@ -22,9 +22,9 @@ export default function BasicTab({ data, onChange }: TabProps) {
 
       {data.video_source === "google_photos" && (
         <div>
-          <label className="block text-sm font-medium mb-1">Google Photos Album URL</label>
-          <input className="glass-input" value={data.google_photos_album_url as string || ""} onChange={e => onChange("google_photos_album_url", e.target.value)} placeholder="https://photos.google.com/u/1/album/..." />
-          <p className="text-xs text-[#a1a1aa] mt-1">Enter your Google Photos album URL to fetch videos</p>
+          <label className="block text-sm font-medium mb-1">Google Photos Video URL</label>
+          <input className="glass-input" value={data.google_photos_album_url as string || ""} onChange={e => onChange("google_photos_album_url", e.target.value)} placeholder="https://photos.google.com/share/.../photo/..." />
+          <p className="text-xs text-[#a1a1aa] mt-1">Open video in Google Photos → Share → Copy link, or use Direct Video Links option</p>
         </div>
       )}
 
