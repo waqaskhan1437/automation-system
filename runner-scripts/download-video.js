@@ -5,13 +5,14 @@ const https = require("https");
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
-// Cookies file - check multiple locations
+
+// Find cookies file - look in repo root (parent of runner-scripts)
 let cookiesPath = "";
+const repoRoot = path.join(process.cwd(), "..");
 const possiblePaths = [
+  path.join(repoRoot, "photos.google.com_cookies.txt"),
   path.join(process.cwd(), "photos.google.com_cookies.txt"),
-  path.join(process.cwd(), "..", "photos.google.com_cookies.txt"),
-  path.join(__dirname, "..", "photos.google.com_cookies.txt"),
-  path.join(process.cwd(), "..", "..", "photos.google.com_cookies.txt")
+  path.join(__dirname, "..", "photos.google.com_cookies.txt")
 ];
 
 for (const p of possiblePaths) {
@@ -20,6 +21,10 @@ for (const p of possiblePaths) {
     console.log("Found cookies at:", p);
     break;
   }
+}
+
+if (!cookiesPath) {
+  console.log("WARNING: Cookies file not found!");
 }
 
 function downloadWithCurl(url) {
