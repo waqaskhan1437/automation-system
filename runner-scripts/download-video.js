@@ -151,14 +151,23 @@ function main() {
 
   // Run synchronously
   if (isGooglePhotos) {
-    downloadGooglePhotos(url).then(ok => {
-      if (!ok) {
-        console.log("Trying yt-dlp...");
-        finish(downloadWithYtDlp(url));
-      } else {
-        finish(true);
-      }
-    });
+    // For Google Photos, first try yt-dlp (works with some album links)
+    console.log("Google Photos detected, trying yt-dlp first...");
+    let ok = downloadWithYtDlp(url);
+    if (!ok) {
+      // Fallback to direct HTML parsing
+      console.log("yt-dlp failed, trying direct download...");
+      downloadGooglePhotos(url).then(ok2 => {
+        if (!ok2) {
+          console.log("All Google Photos methods failed");
+          finish(false);
+        } else {
+          finish(true);
+        }
+      });
+      return;
+    }
+    finish(ok);
     return;
   } else if (isYouTube) {
     finish(downloadWithYtDlp(url));
