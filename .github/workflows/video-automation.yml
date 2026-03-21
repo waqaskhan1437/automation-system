@@ -46,13 +46,6 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
           sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Install Puppeteer for Google Photos
-        if: contains(github.event.inputs.automation_config, 'google_photos')
-        run: |
-          cd runner-scripts
-          npm install puppeteer-core
-          npx playwright install chromium
-
       - name: Setup directories
         run: mkdir -p runner-scripts/output videos
 

@@ -51,42 +51,51 @@ function fetchPage(url) {
 
 async function downloadGooglePhotos(url) {
   console.log("Google Photos: extracting video...");
-  try {
-    const html = await fetchPage(url);
-    
-    // FIRST: Look for video-downloads.googleusercontent.com (actual video URL)
-    const videoDownloadMatch = html.match(/https:\/\/video-downloads\.googleusercontent\.com\/[^"'\s\\]+/g);
-    if (videoDownloadMatch && videoDownloadMatch.length > 0) {
-      const videoUrl = videoDownloadMatch[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-      console.log("Found video URL!");
-      if (downloadWithCurl(videoUrl)) {
-        return true;
-      }
-    }
-    
-    // SECOND: Look for lh3 URLs without size params (might be video)
-    const allMatches = html.match(/https:\/\/lh3\.googleusercontent\.com\/[^"'\s\\]+/g) || [];
-    for (const match of allMatches) {
-      const cleanUrl = match.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-      // Skip thumbnails (have size params like =w100-h100)
-      if (cleanUrl.match(/=w\d+-h\d+/)) continue;
-      if (cleanUrl.match(/=s\d+/)) continue;
-      if (cleanUrl.match(/=w\d+-h\d+-p-k-no/)) continue;
-      if (cleanUrl.match(/=w\d+-h\d+-k-no/)) continue;
+  return new Promise((resolve) => {
+    // First try to fetch the page and look for video download URLs
+    fetchPage(url).then(html => {
+      console.log("HTML fetched, looking for video URLs...");
       
-      console.log("Trying media URL...");
-      if (downloadWithCurl(cleanUrl)) {
-        const size = fs.statSync(VIDEO_FILE).size;
-        if (size > 50000) {
-          console.log("Downloaded: " + (size / 1024 / 1024).toFixed(2) + " MB");
-          return true;
+      // Look for video-downloads.googleusercontent.com URLs
+      const videoDownloadMatches = html.match(/https:\/\/video-downloads\.googleusercontent\.com\/[^\"'\s\\]+/g);
+      if (videoDownloadMatches && videoDownloadMatches.length > 0) {
+        console.log("Found video-downloads URL!");
+        const videoUrl = videoDownloadMatches[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+        console.log("Download URL:", videoUrl.substring(0, 80) + "...");
+        if (downloadWithCurl(videoUrl)) {
+          resolve(true);
+          return;
         }
       }
-    }
-  } catch (e) {
-    console.log("Google Photos failed: " + e.message);
-  }
-  return false;
+      
+      // Look for lh3 URLs (alternative)
+      const allMatches = html.match(/https:\/\/lh3\.googleusercontent\.com\/[^"'\s\\]+/g) || [];
+      console.log("Found " + allMatches.length + " lh3 URLs");
+      
+      for (const match of allMatches) {
+        const cleanUrl = match.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+        // Skip thumbnails
+        if (cleanUrl.match(/=w\d+-h\d+/)) continue;
+        if (cleanUrl.match(/=s\d+/)) continue;
+        
+        console.log("Trying:", cleanUrl.substring(0, 60) + "...");
+        if (downloadWithCurl(cleanUrl)) {
+          const size = fs.statSync(VIDEO_FILE).size;
+          if (size > 50000) {
+            console.log("Downloaded: " + (size / 1024 / 1024).toFixed(2) + " MB");
+            resolve(true);
+            return;
+          }
+        }
+      }
+      
+      console.log("Google Photos extraction failed");
+      resolve(false);
+    }).catch(e => {
+      console.log("Google Photos fetch failed:", e.message);
+      resolve(false);
+    });
+  });
 }
 
 function main() {
@@ -162,47 +171,28 @@ function main() {
     console.log("=== Google Photos Download ===");
     console.log("URL:", url);
     
-    // Step 1: Try Playwright to extract video URL
-    console.log("Step 1: Using Playwright to extract video URL...");
+    // Step 1: Try HTML parsing to extract video-downloads.googleusercontent.com URL
+    console.log("Step 1: Extracting video URL from Google Photos page...");
+    let ok = false;
     try {
-      const { extractGooglePhotosVideoUrl } = require('./extract-google-photos.js');
-      const videoUrl = await extractGooglePhotosVideoUrl(url);
-      
-      if (videoUrl) {
-        console.log("Step 1: Got video URL, downloading...");
-        const ok = downloadWithCurl(videoUrl);
-        if (ok) {
-          finish(true);
-          return;
-        }
-      }
+      ok = await downloadGooglePhotos(url);
     } catch(e) {
-      console.log("Playwright failed:", e.message);
+      console.log("HTML parsing error:", e.message);
     }
-    
-    // Step 2: Try direct curl download 
-    console.log("Step 2: Trying direct curl download...");
-    let ok = downloadWithCurl(url);
-    console.log("Direct curl result:", ok ? "SUCCESS" : "FAILED");
+    console.log("HTML parsing result:", ok ? "SUCCESS" : "FAILED");
     
     if (!ok) {
-      // Step 3: Try yt-dlp
-      console.log("Step 3: Trying yt-dlp...");
+      // Step 2: Try yt-dlp as fallback
+      console.log("Step 2: Trying yt-dlp...");
       ok = downloadWithYtDlp(url);
       console.log("yt-dlp result:", ok ? "SUCCESS" : "FAILED");
     }
     
     if (!ok) {
-      // Step 4: Try HTML parsing
-      console.log("Step 4: Trying HTML parsing...");
-      const htmlOk = await downloadGooglePhotos(url);
-      console.log("HTML parsing result:", htmlOk ? "SUCCESS" : "FAILED");
-      if (htmlOk) ok = true;
-    }
-    
-    if (!ok) {
       console.log("All Google Photos methods failed!");
       finish(false);
+      return;
+    }
       return;
     }
     finish(ok);
