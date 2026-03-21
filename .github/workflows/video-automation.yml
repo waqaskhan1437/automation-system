@@ -37,91 +37,60 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install yt-dlp
+      - name: Install yt-dlp and FFmpeg
         run: |
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
-          yt-dlp --version
-
-      - name: Install FFmpeg
-        run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          ffmpeg -version
 
-      - name: Install runner dependencies
-        run: npm ci && mkdir -p output videos
-        working-directory: runner-scripts
+      - name: Setup directories
+        run: mkdir -p runner-scripts/output videos
 
       - name: Download Video
+        env:
+          CONFIG: ${{ github.event.inputs.automation_config }}
         run: |
-          echo '${{ github.event.inputs.automation_config }}' > automation-config.json
+          echo "$CONFIG" > runner-scripts/automation-config.json
+          cd runner-scripts
+          npm ci
           node download-video.js
-        working-directory: runner-scripts
 
       - name: Process Video
-        continue-on-error: true
         run: |
-          node runner-scripts/process-video.js
-        working-directory: runner-scripts
-
-      - name: Find processed video
-        id: find-video
-        run: |
-          # Find the processed video file
-          VIDEO_FILE=""
-          if [ -f "runner-scripts/output/processed-video.mp4" ]; then
-            VIDEO_FILE="runner-scripts/output/processed-video.mp4"
-          elif [ -f "runner-scripts/output/final.mp4" ]; then
-            VIDEO_FILE="runner-scripts/output/final.mp4"
-          elif [ -f "runner-scripts/output/video.mp4" ]; then
-            VIDEO_FILE="runner-scripts/output/video.mp4"
-          fi
-          
-          if [ -n "$VIDEO_FILE" ]; then
-            echo "Found video: $VIDEO_FILE"
-            echo "VIDEO_FILE=$VIDEO_FILE" >> $GITHUB_ENV
-            echo "VIDEO_SIZE=$(stat -c%s "$VIDEO_FILE")" >> $GITHUB_ENV
-          else
-            echo "No video file found!"
-            ls -la runner-scripts/output/ 2>/dev/null || echo "Output dir not found"
-            exit 1
-          fi
+          cd runner-scripts
+          node process-video.js
+          ls -la output/
 
       - name: Upload video to GitHub
-        if: success()
-        id: upload-video
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
         run: |
-          JOB_ID=${{ github.event.inputs.job_id }}
-          VIDEO_PATH="videos/job-$JOB_ID.mp4"
+          VIDEO_FILE=$(find runner-scripts/output -name "*.mp4" | head -1)
+          if [ -z "$VIDEO_FILE" ]; then
+            echo "ERROR: No video file found"
+            exit 1
+          fi
+          echo "Found: $VIDEO_FILE"
           
-          # Copy video to repo root with proper name
-          cp "$VIDEO_FILE" "$VIDEO_PATH"
+          VIDEO_NAME="video-job-${JOB_ID}.mp4"
+          cp "$VIDEO_FILE" "$VIDEO_NAME"
           
-          # Create commit
+          # Create videos directory if needed and commit
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
+          git add "$VIDEO_NAME"
+          git commit -m "Add video for job $JOB_ID" || echo "Already exists"
+          git push origin master
           
-          # Add file
-          git add "$VIDEO_PATH"
-          git commit -m "Add processed video for job $JOB_ID" || echo "Nothing to commit"
-          git push origin master || echo "Push failed - file may already exist"
-          
-          # Get raw URL
-          RAW_URL="https://raw.githubusercontent.com/${{ github.repository }}/master/$VIDEO_PATH"
-          echo "RAW_URL=$RAW_URL" >> $GITHUB_ENV
-          echo "VIDEO_PATH=$VIDEO_PATH" >> $GITHUB_ENV
-          echo "::set-output name=raw_url::$RAW_URL"
-          echo "::set-output name=video_path::$VIDEO_PATH"
+          echo "RAW_URL=https://raw.githubusercontent.com/${{ github.repository }}/master/$VIDEO_NAME" >> $GITHUB_ENV
 
-      - name: Update Job Status with Video URL
+      - name: Update Job Status
         if: always()
-        continue-on-error: true
         env:
           WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
           JOB_ID: ${{ github.event.inputs.job_id }}
           VIDEO_URL: ${{ env.RAW_URL || '' }}
         run: |
-          node runner-scripts/update-job-status.js
-        working-directory: runner-scripts
+          cd runner-scripts
+          node update-job-status.js
