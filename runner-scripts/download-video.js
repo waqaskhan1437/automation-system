@@ -37,7 +37,14 @@ function downloadWithYtDlp(url) {
 function fetchPage(url) {
   return new Promise((resolve, reject) => {
     https.get(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+      headers: { 
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+      }
     }, res => {
       let data = "";
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -54,10 +61,13 @@ async function downloadGooglePhotos(url) {
   return new Promise((resolve) => {
     // First try to fetch the page and look for video download URLs
     fetchPage(url).then(html => {
-      console.log("HTML fetched, looking for video URLs...");
+      console.log("HTML fetched (" + html.length + " chars), looking for video URLs...");
+      console.log("HTML sample:", html.substring(0, 200));
       
       // Look for video-downloads.googleusercontent.com URLs
       const videoDownloadMatches = html.match(/https:\/\/video-downloads\.googleusercontent\.com\/[^\"'\s\\]+/g);
+      console.log("video-downloads matches:", videoDownloadMatches);
+      
       if (videoDownloadMatches && videoDownloadMatches.length > 0) {
         console.log("Found video-downloads URL!");
         const videoUrl = videoDownloadMatches[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
