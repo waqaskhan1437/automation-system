@@ -69,7 +69,9 @@ jobs:
         run: |
           # Find the processed video file
           VIDEO_FILE=""
-          if [ -f "runner-scripts/output/final.mp4" ]; then
+          if [ -f "runner-scripts/output/processed-video.mp4" ]; then
+            VIDEO_FILE="runner-scripts/output/processed-video.mp4"
+          elif [ -f "runner-scripts/output/final.mp4" ]; then
             VIDEO_FILE="runner-scripts/output/final.mp4"
           elif [ -f "runner-scripts/output/video.mp4" ]; then
             VIDEO_FILE="runner-scripts/output/video.mp4"
