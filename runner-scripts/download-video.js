@@ -18,10 +18,20 @@ function downloadWithCurl(url) {
 
 function downloadWithYtDlp(url) {
   console.log("yt-dlp: " + url);
+  
+  // Check if it's a Google Photos URL
+  const isGooglePhotos = url.includes("photos.google") || url.includes("photos.app.goo.gl");
+  
   try {
-    execSync('yt-dlp --extractor-args "googlephotos:download=true" -f "best[ext=mp4]/best" --no-check-certificates -o "' + VIDEO_FILE + '" "' + url + '"', {
-      stdio: "inherit", timeout: 600000
-    });
+    let cmd;
+    if (isGooglePhotos) {
+      // For Google Photos, use specific options
+      cmd = 'yt-dlp --no-check-certificates --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -f "best[ext=mp4]/best" -o "' + VIDEO_FILE + '" "' + url + '"';
+    } else {
+      cmd = 'yt-dlp --no-check-certificates -f "best[ext=mp4]/best" -o "' + VIDEO_FILE + '" "' + url + '"';
+    }
+    
+    execSync(cmd, { stdio: "inherit", timeout: 600000 });
     return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
   } catch { 
     console.log("yt-dlp failed, trying alternative method...");
