@@ -9,7 +9,7 @@ const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
 function downloadWithCurl(url) {
   console.log("curl: " + url.substring(0, 60) + "...");
   try {
-    execSync('curl -L -o "' + VIDEO_FILE + '" "' + url + '" --max-time 180 -A "Mozilla/5.0"', {
+    execSync('curl -L -o "' + VIDEO_FILE + '" "' + url + '" --max-time 180 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -H "Accept: video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8" -H "Accept-Language: en-US,en;q=0.5"', {
       stdio: "inherit", timeout: 200000
     });
     return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
@@ -19,11 +19,19 @@ function downloadWithCurl(url) {
 function downloadWithYtDlp(url) {
   console.log("yt-dlp: " + url);
   try {
-    execSync('yt-dlp -f "best[ext=mp4]/best" --no-check-certificates -o "' + VIDEO_FILE + '" "' + url + '"', {
+    execSync('yt-dlp --extractor-args "googlephotos:download=true" -f "best[ext=mp4]/best" --no-check-certificates -o "' + VIDEO_FILE + '" "' + url + '"', {
       stdio: "inherit", timeout: 600000
     });
     return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
-  } catch { return false; }
+  } catch { 
+    console.log("yt-dlp failed, trying alternative method...");
+    try {
+      execSync('yt-dlp --no-check-certificates -o "' + VIDEO_FILE + '" --add-header "User-Agent: Mozilla/5.0" "' + url + '"', {
+        stdio: "inherit", timeout: 600000
+      });
+      return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
+    } catch { return false; }
+  }
 }
 
 function fetchPage(url) {
