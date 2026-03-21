@@ -64,7 +64,7 @@ jobs:
           node process-video.js
           ls -la output/
 
-      - name: Upload video to GitHub
+      - name: Upload video to GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JOB_ID: ${{ github.event.inputs.job_id }}
@@ -74,19 +74,62 @@ jobs:
             echo "ERROR: No video file found"
             exit 1
           fi
-          echo "Found: $VIDEO_FILE"
-          
+          echo "Found: $VIDEO_FILE ($(du -h "$VIDEO_FILE" | cut -f1))"
+
           VIDEO_NAME="video-job-${JOB_ID}.mp4"
           cp "$VIDEO_FILE" "$VIDEO_NAME"
-          
-          # Create videos directory if needed and commit
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add "$VIDEO_NAME"
-          git commit -m "Add video for job $JOB_ID" || echo "Already exists"
-          git push origin master
-          
-          echo "RAW_URL=https://raw.githubusercontent.com/${{ github.repository }}/master/$VIDEO_NAME" >> $GITHUB_ENV
+
+          # Create or get the 'video-outputs' release for storing videos
+          RELEASE_TAG="video-outputs"
+          EXISTING=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" | grep '"id"' | head -1 | grep -o '[0-9]*')
+
+          if [ -z "$EXISTING" ]; then
+            echo "Creating release..."
+            curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases" \
+              -d "{\"tag_name\":\"$RELEASE_TAG\",\"name\":\"Video Outputs\",\"body\":\"Auto-generated videos from automation\",\"draft\":false,\"prerelease\":false}" > /dev/null
+
+            # Need to create the tag first
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git tag -f "$RELEASE_TAG"
+            git push origin "$RELEASE_TAG" -f
+
+            sleep 2
+            EXISTING=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" | grep '"id"' | head -1 | grep -o '[0-9]*')
+          fi
+
+          echo "Release ID: $EXISTING"
+
+          # Delete old asset with same name if exists
+          OLD_ASSET=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/$EXISTING/assets" | \
+            grep -B2 "\"name\": \"$VIDEO_NAME\"" | grep '"id"' | grep -o '[0-9]*')
+          if [ -n "$OLD_ASSET" ]; then
+            echo "Deleting old asset $OLD_ASSET..."
+            curl -s -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/$OLD_ASSET"
+          fi
+
+          # Upload video as release asset
+          echo "Uploading $VIDEO_NAME..."
+          UPLOAD_URL="https://uploads.github.com/repos/${{ github.repository }}/releases/$EXISTING/assets?name=$VIDEO_NAME"
+          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: video/mp4" \
+            --data-binary @"$VIDEO_NAME" "$UPLOAD_URL")
+
+          DOWNLOAD_URL=$(echo "$RESPONSE" | grep '"browser_download_url"' | head -1 | cut -d'"' -f4)
+
+          if [ -n "$DOWNLOAD_URL" ]; then
+            echo "Upload SUCCESS: $DOWNLOAD_URL"
+            echo "RAW_URL=$DOWNLOAD_URL" >> $GITHUB_ENV
+          else
+            echo "Upload failed, response: $RESPONSE"
+            exit 1
+          fi
 
       - name: Update Job Status
         if: always()
