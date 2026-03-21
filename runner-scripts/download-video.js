@@ -210,21 +210,38 @@ function main() {
     console.log("=== Google Photos Download ===");
     console.log("URL:", url);
     
-    // Step 1: Try HTML parsing to extract video-downloads.googleusercontent.com URL
-    console.log("Step 1: Extracting video URL from Google Photos page...");
-    let ok = false;
-    try {
-      ok = await downloadGooglePhotos(url);
-    } catch(e) {
-      console.log("HTML parsing error:", e.message);
-    }
-    console.log("HTML parsing result:", ok ? "SUCCESS" : "FAILED");
+    // Extract album ID from URL if possible
+    const albumMatch = url.match(/AF1Qip[a-zA-Z0-9_-]+/);
+    let albumId = albumMatch ? albumMatch[0] : null;
     
+    // Try different yt-dlp methods
+    let ok = false;
+    
+    // Method 1: Direct URL with Google Photos specific options
+    console.log("Method 1: yt-dlp with direct URL...");
+    ok = downloadWithYtDlp(url);
+    console.log("Result:", ok ? "SUCCESS" : "FAILED");
+    
+    // Method 2: If we have album ID, try with photos.google.com/photos/share format
+    if (!ok && albumId) {
+      console.log("Method 2: Trying with album ID...");
+      try {
+        const albumUrl = "https://photos.google.com/photos/share/" + albumId;
+        console.log("Album URL:", albumUrl);
+        ok = downloadWithYtDlp(albumUrl);
+      } catch(e) {
+        console.log("Album ID method failed:", e.message);
+      }
+    }
+    
+    // Method 3: HTML parsing
     if (!ok) {
-      // Step 2: Try yt-dlp as fallback
-      console.log("Step 2: Trying yt-dlp...");
-      ok = downloadWithYtDlp(url);
-      console.log("yt-dlp result:", ok ? "SUCCESS" : "FAILED");
+      console.log("Method 3: HTML parsing...");
+      try {
+        ok = await downloadGooglePhotos(url);
+      } catch(e) {
+        console.log("HTML parsing error:", e.message);
+      }
     }
     
     if (!ok) {
