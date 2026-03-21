@@ -22,101 +22,6 @@ on:
         description: 'PostForMe API key'
         required: false
         type: string
-      video_source:
-        description: 'Video source'
-        required: false
-        type: string
-        default: "youtube"
-      video_url:
-        description: 'Video URL'
-        required: false
-        type: string
-        default: ""
-      channel_url:
-        description: 'Channel URL'
-        required: false
-        type: string
-        default: ""
-      multiple_urls:
-        description: 'Multiple URLs'
-        required: false
-        type: string
-        default: "[]"
-      videos_per_run:
-        description: 'Videos per run'
-        required: false
-        type: string
-        default: "1"
-      short_duration:
-        description: 'Short duration'
-        required: false
-        type: string
-        default: "60"
-      playback_speed:
-        description: 'Playback speed'
-        required: false
-        type: string
-        default: "1.0"
-      aspect_ratio:
-        description: 'Aspect ratio'
-        required: false
-        type: string
-        default: "9:16"
-      crop_mode:
-        description: 'Crop mode'
-        required: false
-        type: string
-        default: "crop"
-      split_enabled:
-        description: 'Split enabled'
-        required: false
-        type: string
-        default: "false"
-      combine_enabled:
-        description: 'Combine enabled'
-        required: false
-        type: string
-        default: "false"
-      codec:
-        description: 'Codec'
-        required: false
-        type: string
-        default: "libx264"
-      output_format:
-        description: 'Output format'
-        required: false
-        type: string
-        default: "mp4"
-      output_quality:
-        description: 'Output quality'
-        required: false
-        type: string
-        default: "high"
-      output_resolution:
-        description: 'Output resolution'
-        required: false
-        type: string
-        default: "1080x1920"
-      auto_publish:
-        description: 'Auto publish'
-        required: false
-        type: string
-        default: "true"
-      platforms:
-        description: 'Platforms'
-        required: false
-        type: string
-        default: "[]"
-      top_tagline:
-        description: 'Top tagline'
-        required: false
-        type: string
-        default: ""
-      bottom_tagline:
-        description: 'Bottom tagline'
-        required: false
-        type: string
-        default: ""
 
 jobs:
   process-video:
@@ -144,7 +49,7 @@ jobs:
           ffmpeg -version
 
       - name: Install runner dependencies
-        run: npm ci && mkdir -p output
+        run: npm ci && mkdir -p output videos
         working-directory: runner-scripts
 
       - name: Download Video
@@ -156,57 +61,65 @@ jobs:
       - name: Process Video
         continue-on-error: true
         run: |
-          echo "=== DEBUG ==="
-          ls -la output/ 2>&1 || echo "No output dir"
-          cat automation-config.json 2>&1 || echo "No config"
-          echo "=== END DEBUG ==="
           node runner-scripts/process-video.js
         working-directory: runner-scripts
 
-      - name: Post to Social Media
-        if: github.event.inputs.postforme_api_key != ''
-        continue-on-error: true
+      - name: Find processed video
+        id: find-video
+        run: |
+          # Find the processed video file
+          VIDEO_FILE=""
+          if [ -f "runner-scripts/output/final.mp4" ]; then
+            VIDEO_FILE="runner-scripts/output/final.mp4"
+          elif [ -f "runner-scripts/output/video.mp4" ]; then
+            VIDEO_FILE="runner-scripts/output/video.mp4"
+          fi
+          
+          if [ -n "$VIDEO_FILE" ]; then
+            echo "Found video: $VIDEO_FILE"
+            echo "VIDEO_FILE=$VIDEO_FILE" >> $GITHUB_ENV
+            echo "VIDEO_SIZE=$(stat -c%s "$VIDEO_FILE")" >> $GITHUB_ENV
+          else
+            echo "No video file found!"
+            ls -la runner-scripts/output/ 2>/dev/null || echo "Output dir not found"
+            exit 1
+          fi
+
+      - name: Upload video to GitHub
+        if: success()
+        id: upload-video
         env:
-          POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          node runner-scripts/post-via-postforme.js || true
-          if [ -f output/post_result.json ]; then
-            echo "POSTFORME_OUTPUT=$(cat output/post_result.json)" >> $GITHUB_ENV
-          fi
-        working-directory: runner-scripts
+          JOB_ID=${{ github.event.inputs.job_id }}
+          VIDEO_PATH="videos/job-$JOB_ID.mp4"
+          
+          # Copy video to repo root with proper name
+          cp "$VIDEO_FILE" "$VIDEO_PATH"
+          
+          # Create commit
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Add file
+          git add "$VIDEO_PATH"
+          git commit -m "Add processed video for job $JOB_ID" || echo "Nothing to commit"
+          git push origin master || echo "Push failed - file may already exist"
+          
+          # Get raw URL
+          RAW_URL="https://raw.githubusercontent.com/${{ github.repository }}/master/$VIDEO_PATH"
+          echo "RAW_URL=$RAW_URL" >> $GITHUB_ENV
+          echo "VIDEO_PATH=$VIDEO_PATH" >> $GITHUB_ENV
+          echo "::set-output name=raw_url::$RAW_URL"
+          echo "::set-output name=video_path::$VIDEO_PATH"
 
-      - name: Upload processed video
-        if: always()
-        id: upload-artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: processed-video-${{ github.event.inputs.job_id }}
-          path: runner-scripts/output/
-          retention-days: 7
-          if-no-files-found: warn
-
-      - name: Get Artifact Download URL
-        if: always()
-        run: |
-          ARTIFACT_URL=""
-          if [ -n "${{ steps.upload-artifact.outputs.artifact-id }}" ]; then
-            ARTIFACT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload-artifact.outputs.artifact-id }}"
-          fi
-          echo "ARTIFACT_URL=$ARTIFACT_URL"
-          echo "ARTIFACT_URL=$ARTIFACT_URL" >> $GITHUB_ENV
-
-      - name: Update Job Status
+      - name: Update Job Status with Video URL
         if: always()
         continue-on-error: true
         env:
           WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
           JOB_ID: ${{ github.event.inputs.job_id }}
-          JOB_STATUS: ${{ job.status }}
-          ARTIFACT_URL: ${{ env.ARTIFACT_URL }}
+          VIDEO_URL: ${{ env.RAW_URL || '' }}
         run: |
-          echo "WORKER_WEBHOOK_URL=$WORKER_WEBHOOK_URL"
-          echo "JOB_ID=$JOB_ID"
-          echo "JOB_STATUS=$JOB_STATUS"
-          echo "ARTIFACT_URL=$ARTIFACT_URL"
           node runner-scripts/update-job-status.js
         working-directory: runner-scripts

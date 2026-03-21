@@ -7,7 +7,7 @@ async function main() {
   const jobId = process.env.JOB_ID;
   const jobStatus = process.env.JOB_STATUS;
   const postformeOutput = process.env.POSTFORME_OUTPUT;
-  const artifactUrl = process.env.ARTIFACT_URL;
+  const rawUrl = process.env.RAW_URL;
 
   if (!workerUrl || !jobId) {
     console.error("WORKER_WEBHOOK_URL and JOB_ID are required");
@@ -18,7 +18,7 @@ async function main() {
 
   const status = jobStatus === "success" ? "success" : "failed";
   console.log(`Updating job ${jobId} to status: ${status}`);
-  console.log(`Artifact URL: ${artifactUrl}`);
+  console.log(`Video URL: ${rawUrl}`);
 
   let outputData = null;
   if (postformeOutput) {
@@ -46,7 +46,7 @@ async function main() {
     job_id: parseInt(jobId),
     status: status,
     output_data: outputData ? JSON.stringify(outputData) : undefined,
-    video_url: artifactUrl || null,
+    video_url: rawUrl || null,
   });
 
   try {
