@@ -15,16 +15,24 @@ const possiblePaths = [
   path.join(__dirname, "..", "photos.google.com_cookies.txt")
 ];
 
+console.log("Searching for cookies file...");
+console.log("Current dir:", process.cwd());
+console.log("Looking in:", possiblePaths);
+
 for (const p of possiblePaths) {
-  if (fs.existsSync(p)) {
+  const exists = fs.existsSync(p);
+  console.log("Check:", p, exists ? "FOUND" : "not found");
+  if (exists) {
     cookiesPath = p;
-    console.log("Found cookies at:", p);
+    console.log("Using cookies at:", p);
     break;
   }
 }
 
 if (!cookiesPath) {
   console.log("WARNING: Cookies file not found!");
+} else {
+  console.log("SUCCESS: Cookies file found at:", cookiesPath);
 }
 
 function downloadWithCurl(url) {
