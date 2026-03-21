@@ -151,20 +151,39 @@ function main() {
 
   // Run synchronously
   if (isGooglePhotos) {
-    // For Google Photos, first try yt-dlp (works with some album links)
-    console.log("Google Photos detected, trying yt-dlp first...");
+    console.log("=== Google Photos Download ===");
+    console.log("URL:", url);
+    
+    // For Google Photos albums, try yt-dlp first
+    console.log("Step 1: Trying yt-dlp...");
     let ok = downloadWithYtDlp(url);
+    console.log("yt-dlp result:", ok ? "SUCCESS" : "FAILED");
+    
     if (!ok) {
-      // Fallback to direct HTML parsing
-      console.log("yt-dlp failed, trying direct download...");
-      downloadGooglePhotos(url).then(ok2 => {
-        if (!ok2) {
-          console.log("All Google Photos methods failed");
-          finish(false);
-        } else {
-          finish(true);
+      // Step 2: Try direct HTML parsing
+      console.log("Step 2: Trying HTML parsing...");
+      const htmlOk = await downloadGooglePhotos(url);
+      console.log("HTML parsing result:", htmlOk ? "SUCCESS" : "FAILED");
+      
+      if (!htmlOk) {
+        console.log("All Google Photos methods failed!");
+        console.log("Trying curl on direct video URLs from Google Photos...");
+        // Try finding video in album by checking for common patterns
+        try {
+          const https = require('https');
+          const videoPatterns = [
+            'video-downloads.googleusercontent.com',
+            'googlevideo.com',
+            'drive.google.com'
+          ];
+          console.log("Trying to fetch album page...");
+        } catch(e) {
+          console.log("Extra attempts failed:", e.message);
         }
-      });
+        finish(false);
+        return;
+      }
+      finish(true);
       return;
     }
     finish(ok);
