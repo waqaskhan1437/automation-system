@@ -2,6 +2,7 @@ const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
+const zlib = require("zlib");
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
@@ -98,27 +99,36 @@ function fetchPage(url, cookies = "") {
     };
     
     https.get(url, options, res => {
-      let data = "";
-      
       // Handle redirects
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         console.log("Redirect to:", res.headers.location);
         return fetchPage(res.headers.location).then(resolve).catch(reject);
       }
-      
+
       // Collect cookies from response
       let newCookies = "";
       if (res.headers['set-cookie']) {
-        const cookieArray = Array.isArray(res.headers['set-cookie']) 
-          ? res.headers['set-cookie'] 
+        const cookieArray = Array.isArray(res.headers['set-cookie'])
+          ? res.headers['set-cookie']
           : [res.headers['set-cookie']];
         newCookies = cookieArray.map(c => c.split(';')[0]).join('; ');
         console.log("Got cookies:", newCookies.substring(0, 50));
       }
-      
-      res.on("data", c => data += c);
-      res.on("end", () => {
-        // If we got new cookies and haven't done second request, retry with cookies
+
+      // Handle gzip/deflate/br compressed responses
+      let stream = res;
+      const encoding = res.headers['content-encoding'];
+      if (encoding === 'gzip') {
+        stream = res.pipe(zlib.createGunzip());
+      } else if (encoding === 'deflate') {
+        stream = res.pipe(zlib.createInflate());
+      } else if (encoding === 'br') {
+        stream = res.pipe(zlib.createBrotliDecompress());
+      }
+
+      let data = "";
+      stream.on("data", c => data += c);
+      stream.on("end", () => {
         if (newCookies && !cookies) {
           console.log("Retrying with cookies...");
           fetchPage(url, newCookies).then(resolve).catch(reject);
@@ -126,6 +136,7 @@ function fetchPage(url, cookies = "") {
           resolve(data);
         }
       });
+      stream.on("error", reject);
     }).on("error", reject);
   });
 }
@@ -176,7 +187,7 @@ async function downloadGooglePhotos(url) {
   });
 }
 
-function main() {
+async function main() {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
   let config = { video_source: 'youtube', video_url: '', manual_links: '', youtube_channel_url: '' };
@@ -282,13 +293,9 @@ function main() {
         console.log("HTML parsing error:", e.message);
       }
     }
-    
+
     if (!ok) {
       console.log("All Google Photos methods failed!");
-      finish(false);
-      return;
-    }
-      return;
     }
     finish(ok);
     return;
@@ -317,4 +324,7 @@ function finish(success) {
   process.exit(0);
 }
 
-main();
+main().catch(e => {
+  console.error("Fatal error:", e.message);
+  process.exit(1);
+});
