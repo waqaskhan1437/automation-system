@@ -162,21 +162,39 @@ function main() {
     console.log("=== Google Photos Download ===");
     console.log("URL:", url);
     
-    // Step 1: Try direct curl download first (works for direct video links)
-    console.log("Step 1: Trying direct curl download...");
+    // Step 1: Try Playwright to extract video URL
+    console.log("Step 1: Using Playwright to extract video URL...");
+    try {
+      const { extractGooglePhotosVideoUrl } = require('./extract-google-photos.js');
+      const videoUrl = await extractGooglePhotosVideoUrl(url);
+      
+      if (videoUrl) {
+        console.log("Step 1: Got video URL, downloading...");
+        const ok = downloadWithCurl(videoUrl);
+        if (ok) {
+          finish(true);
+          return;
+        }
+      }
+    } catch(e) {
+      console.log("Playwright failed:", e.message);
+    }
+    
+    // Step 2: Try direct curl download 
+    console.log("Step 2: Trying direct curl download...");
     let ok = downloadWithCurl(url);
     console.log("Direct curl result:", ok ? "SUCCESS" : "FAILED");
     
     if (!ok) {
-      // Step 2: Try yt-dlp (may work with authentication)
-      console.log("Step 2: Trying yt-dlp...");
+      // Step 3: Try yt-dlp
+      console.log("Step 3: Trying yt-dlp...");
       ok = downloadWithYtDlp(url);
       console.log("yt-dlp result:", ok ? "SUCCESS" : "FAILED");
     }
     
     if (!ok) {
-      // Step 3: Try HTML parsing
-      console.log("Step 3: Trying HTML parsing...");
+      // Step 4: Try HTML parsing
+      console.log("Step 4: Trying HTML parsing...");
       const htmlOk = await downloadGooglePhotos(url);
       console.log("HTML parsing result:", htmlOk ? "SUCCESS" : "FAILED");
       if (htmlOk) ok = true;
