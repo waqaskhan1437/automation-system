@@ -34,24 +34,49 @@ function downloadWithYtDlp(url) {
   }
 }
 
-function fetchPage(url) {
+function fetchPage(url, cookies = "") {
   return new Promise((resolve, reject) => {
-    https.get(url, {
+    const options = {
       headers: { 
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
+        "Upgrade-Insecure-Requests": "1",
+        "Cookie": cookies
       }
-    }, res => {
+    };
+    
+    https.get(url, options, res => {
       let data = "";
+      
+      // Handle redirects
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        console.log("Redirect to:", res.headers.location);
         return fetchPage(res.headers.location).then(resolve).catch(reject);
       }
+      
+      // Collect cookies from response
+      let newCookies = "";
+      if (res.headers['set-cookie']) {
+        const cookieArray = Array.isArray(res.headers['set-cookie']) 
+          ? res.headers['set-cookie'] 
+          : [res.headers['set-cookie']];
+        newCookies = cookieArray.map(c => c.split(';')[0]).join('; ');
+        console.log("Got cookies:", newCookies.substring(0, 50));
+      }
+      
       res.on("data", c => data += c);
-      res.on("end", () => resolve(data));
+      res.on("end", () => {
+        // If we got new cookies and haven't done second request, retry with cookies
+        if (newCookies && !cookies) {
+          console.log("Retrying with cookies...");
+          fetchPage(url, newCookies).then(resolve).catch(reject);
+        } else {
+          resolve(data);
+        }
+      });
     }).on("error", reject);
   });
 }
