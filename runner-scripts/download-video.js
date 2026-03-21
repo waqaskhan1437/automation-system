@@ -98,6 +98,7 @@ function main() {
   const videoUrl = process.env.VIDEO_URL || config.video_url || "";
   const channelUrl = process.env.YOUTUBE_CHANNEL_URL || config.youtube_channel_url || "";
   const manualLinksRaw = process.env.MANUAL_LINKS || config.manual_links || "";
+  const googlePhotosAlbumUrl = process.env.GOOGLE_PHOTOS_ALBUM_URL || config.google_photos_album_url || "";
 
   // Parse manual links
   let multipleUrls = manualLinksRaw.split("\n").filter(u => u.trim());
@@ -105,6 +106,12 @@ function main() {
 
   if (videoSource === "manual_links" && multipleUrls.length > 0) {
     urls = multipleUrls;
+  } else if (videoSource === "google_photos") {
+    // Google Photos - use the album URL from config
+    if (googlePhotosAlbumUrl) {
+      urls.push(googlePhotosAlbumUrl);
+      console.log("Google Photos album URL set");
+    }
   } else if (videoSource === "bunny") {
     // Bunny CDN - videoUrl contains the bunny library URL
     if (videoUrl) urls.push(videoUrl);

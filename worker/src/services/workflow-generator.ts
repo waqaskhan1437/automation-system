@@ -36,6 +36,7 @@ jobs:
         env:
           VIDEO_SOURCE: "${config.video_source}"
           VIDEO_URL: "${config.video_url}"
+          GOOGLE_PHOTOS_ALBUM_URL: "${config.google_photos_album_url || ''}"
           BUNNY_API_KEY: \${{ secrets.BUNNY_API_KEY }}
           BUNNY_LIBRARY_ID: \${{ secrets.BUNNY_LIBRARY_ID }}
         run: node download-video.js

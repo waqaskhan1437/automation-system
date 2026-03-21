@@ -4,14 +4,10 @@ export default function BasicTab({ data, onChange }: TabProps) {
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium mb-1">Automation Name *</label>
-        <input className="glass-input" value={data.name as string || ""} onChange={e => onChange("name", e.target.value)} placeholder="e.g., Daily YouTube Shorts" />
-      </div>
-
-      <div>
         <label className="block text-sm font-medium mb-1">Video Source *</label>
         <select className="glass-select" value={data.video_source as string || "youtube_channel"} onChange={e => onChange("video_source", e.target.value)}>
           <option value="youtube_channel">YouTube Channel</option>
+          <option value="google_photos">Google Photos</option>
           <option value="manual_links">Direct Video Links</option>
           <option value="bunny">Bunny CDN</option>
         </select>
@@ -21,6 +17,14 @@ export default function BasicTab({ data, onChange }: TabProps) {
         <div>
           <label className="block text-sm font-medium mb-1">YouTube Channel URL</label>
           <input className="glass-input" value={data.youtube_channel_url as string || ""} onChange={e => onChange("youtube_channel_url", e.target.value)} placeholder="https://www.youtube.com/@channel" />
+        </div>
+      )}
+
+      {data.video_source === "google_photos" && (
+        <div>
+          <label className="block text-sm font-medium mb-1">Google Photos Album URL</label>
+          <input className="glass-input" value={data.google_photos_album_url as string || ""} onChange={e => onChange("google_photos_album_url", e.target.value)} placeholder="https://photos.google.com/u/1/album/..." />
+          <p className="text-xs text-[#a1a1aa] mt-1">Enter your Google Photos album URL to fetch videos</p>
         </div>
       )}
 
