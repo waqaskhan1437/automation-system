@@ -5,11 +5,17 @@ const https = require("https");
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 const VIDEO_FILE = path.join(OUTPUT_DIR, "input-video.mp4");
+const COOKIES_FILE = path.join(process.cwd(), "..", "photos.google.com_cookies.txt");
 
 function downloadWithCurl(url) {
   console.log("curl: " + url.substring(0, 60) + "...");
+  
+  // Check if cookies file exists
+  const hasCookies = fs.existsSync(COOKIES_FILE);
+  const cookieFlag = hasCookies ? ` --cookie "${COOKIES_FILE}"` : "";
+  
   try {
-    execSync('curl -L -o "' + VIDEO_FILE + '" "' + url + '" --max-time 180 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -H "Accept: video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8" -H "Accept-Language: en-US,en;q=0.5"', {
+    execSync('curl -L -o "' + VIDEO_FILE + '" "' + url + '" --max-time 180' + cookieFlag + ' -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -H "Accept: video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8" -H "Accept-Language: en-US,en;q=0.5"', {
       stdio: "inherit", timeout: 200000
     });
     return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
@@ -19,24 +25,31 @@ function downloadWithCurl(url) {
 function downloadWithYtDlp(url) {
   console.log("yt-dlp: " + url);
   
-  // Check if it's a Google Photos URL
+  // Check if it's a Google Photos URL and if cookies exist
   const isGooglePhotos = url.includes("photos.google") || url.includes("photos.app.goo.gl");
+  const hasCookies = fs.existsSync(COOKIES_FILE);
+  const cookieFlag = hasCookies ? ` --cookies --cookies-from-browser chrome` : "";
   
   try {
     let cmd;
-    if (isGooglePhotos) {
-      // For Google Photos, use specific options
+    if (isGooglePhotos && hasCookies) {
+      // For Google Photos with cookies
+      cmd = 'yt-dlp --no-check-certificates --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" --cookies --cookie "' + COOKIES_FILE + '" -f "best[ext=mp4]/best" -o "' + VIDEO_FILE + '" "' + url + '"';
+    } else if (isGooglePhotos) {
+      // For Google Photos without cookies
       cmd = 'yt-dlp --no-check-certificates --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -f "best[ext=mp4]/best" -o "' + VIDEO_FILE + '" "' + url + '"';
     } else {
       cmd = 'yt-dlp --no-check-certificates -f "best[ext=mp4]/best" -o "' + VIDEO_FILE + '" "' + url + '"';
     }
     
+    console.log("Running:", cmd.substring(0, 80) + "...");
     execSync(cmd, { stdio: "inherit", timeout: 600000 });
     return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
   } catch { 
     console.log("yt-dlp failed, trying alternative method...");
     try {
-      execSync('yt-dlp --no-check-certificates -o "' + VIDEO_FILE + '" --add-header "User-Agent: Mozilla/5.0" "' + url + '"', {
+      const altCmd = 'yt-dlp --no-check-certificates -o "' + VIDEO_FILE + '" --add-header "User-Agent: Mozilla/5.0" "' + url + '"';
+      execSync(altCmd, {
         stdio: "inherit", timeout: 600000
       });
       return fs.existsSync(VIDEO_FILE) && fs.statSync(VIDEO_FILE).size > 50000;
