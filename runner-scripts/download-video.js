@@ -59,47 +59,41 @@ function fetchPage(url) {
 async function downloadGooglePhotos(url) {
   console.log("Google Photos: extracting video...");
   return new Promise((resolve) => {
-    // First try to fetch the page and look for video download URLs
     fetchPage(url).then(html => {
-      console.log("HTML fetched (" + html.length + " chars), looking for video URLs...");
-      console.log("HTML sample:", html.substring(0, 200));
+      console.log("HTML fetched (" + html.length + " chars)");
       
-      // Look for video-downloads.googleusercontent.com URLs
-      const videoDownloadMatches = html.match(/https:\/\/video-downloads\.googleusercontent\.com\/[^\"'\s\\]+/g);
-      console.log("video-downloads matches:", videoDownloadMatches);
+      // Find all potential video URLs
+      const allUrls = [];
       
-      if (videoDownloadMatches && videoDownloadMatches.length > 0) {
-        console.log("Found video-downloads URL!");
-        const videoUrl = videoDownloadMatches[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-        console.log("Download URL:", videoUrl.substring(0, 80) + "...");
-        if (downloadWithCurl(videoUrl)) {
-          resolve(true);
-          return;
-        }
-      }
+      // Pattern 1: video-downloads.googleusercontent.com
+      const v1 = html.match(/https:\/\/video-downloads\.googleusercontent\.com\/[^\"'\s\\?]+/g);
+      if (v1) allUrls.push(...v1);
       
-      // Look for lh3 URLs (alternative)
-      const allMatches = html.match(/https:\/\/lh3\.googleusercontent\.com\/[^"'\s\\]+/g) || [];
-      console.log("Found " + allMatches.length + " lh3 URLs");
+      // Pattern 2: lh3.googleusercontent.com with video path (pw/AP...)
+      const v2 = html.match(/https:\/\/lh3\.googleusercontent\.com\/pw\/[^\"'\s\\]+/g);
+      if (v2) allUrls.push(...v2);
       
-      for (const match of allMatches) {
-        const cleanUrl = match.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-        // Skip thumbnails
-        if (cleanUrl.match(/=w\d+-h\d+/)) continue;
-        if (cleanUrl.match(/=s\d+/)) continue;
+      // Pattern 3: Any googlevideo.com URLs
+      const v3 = html.match(/https:\/\/[^\"'\s\\]*googlevideo\.com[^\"'\s\\]+/g);
+      if (v3) allUrls.push(...v3);
+      
+      console.log("Found " + allUrls.length + " potential video URLs");
+      
+      for (const rawUrl of allUrls) {
+        const videoUrl = rawUrl.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
+        console.log("Trying:", videoUrl.substring(0, 70) + "...");
         
-        console.log("Trying:", cleanUrl.substring(0, 60) + "...");
-        if (downloadWithCurl(cleanUrl)) {
+        if (downloadWithCurl(videoUrl)) {
           const size = fs.statSync(VIDEO_FILE).size;
-          if (size > 50000) {
-            console.log("Downloaded: " + (size / 1024 / 1024).toFixed(2) + " MB");
+          if (size > 10000) {
+            console.log("SUCCESS! Downloaded: " + (size / 1024 / 1024).toFixed(2) + " MB");
             resolve(true);
             return;
           }
         }
       }
       
-      console.log("Google Photos extraction failed");
+      console.log("No working video URL found in page");
       resolve(false);
     }).catch(e => {
       console.log("Google Photos fetch failed:", e.message);
