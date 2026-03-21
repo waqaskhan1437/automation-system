@@ -94,6 +94,7 @@ jobs:
           WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
           JOB_ID: ${{ github.event.inputs.job_id }}
           VIDEO_URL: ${{ env.RAW_URL || '' }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           cd runner-scripts
           node update-job-status.js

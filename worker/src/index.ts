@@ -259,8 +259,8 @@ export default {
       
       if (jobId && status) {
         await env.DB.prepare(
-          "UPDATE jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?"
-        ).bind(status, jobId).run();
+          "UPDATE jobs SET status = ?, output_data = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?"
+        ).bind(status, videoUrl ? JSON.stringify({ video_url: videoUrl }) : null, jobId).run();
 
         if (status === "success" && videoUrl) {
           await env.DB.prepare(
