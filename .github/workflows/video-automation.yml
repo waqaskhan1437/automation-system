@@ -45,7 +45,7 @@ jobs:
         run: |
           pip install -q "yt-dlp[default]" --break-system-packages
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg fonts-noto fonts-dejavu
+          sudo apt-get install -y ffmpeg aria2 fonts-noto fonts-dejavu
           mkdir -p ~/.config/yt-dlp
           NODE_PATH=$(which node)
           echo "node path: ${NODE_PATH}"
