@@ -59,14 +59,9 @@ function isValidVideo(file) {
 }
 
 function ytdlp(url, extraArgs = "") {
-  // Optimization: use aria2c for much faster downloads
-  // YouTube fix: use ios extractor to bypass bot detection when no cookies available
-  const commonArgs = [
-    '--no-check-certificates',
-    '--downloader aria2c',
-    '--downloader-args aria2c:"-x 16 -s 16 -k 1M"',
-    '--extractor-args "youtube:player-client=ios,web,android"',
-  ].join(' ');
+  // YouTube cookies in repo are expired - do NOT pass them to yt-dlp
+  // yt-dlp config file sets: --js-runtimes node + --remote-components ejs:github
+  // This handles n-challenge automatically via node JS runtime
 
   const strategies = [
     // Strategy 1: Let yt-dlp use config (node runtime + ejs:github) - best quality
@@ -78,7 +73,7 @@ function ytdlp(url, extraArgs = "") {
   ];
 
   for (let i = 0; i < strategies.length; i++) {
-    const cmd = `yt-dlp ${commonArgs} ${strategies[i]} ${extraArgs} -o "${VIDEO_FILE}" "${url}"`;
+    const cmd = `yt-dlp --no-check-certificates ${strategies[i]} ${extraArgs} -o "${VIDEO_FILE}" "${url}"`;
     console.log(`Strategy ${i+1}/${strategies.length}:`, cmd.substring(0, 150) + "...");
     try {
       execSync(cmd, { stdio: "inherit", timeout: 300000 });
