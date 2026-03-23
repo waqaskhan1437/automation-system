@@ -151,13 +151,23 @@ function getZonedFormatter(timezone: string): Intl.DateTimeFormat {
 
 function getZonedDateParts(date: Date, timezone: string): ZonedDateParts {
   const formattedParts = getZonedFormatter(timezone).formatToParts(date);
-  const parts = Object.fromEntries(formattedParts.map((part) => [part.type, part.value]));
-  const weekday = weekdayIndexByName[(parts.weekday || "").toLowerCase()] ?? 0;
+  let weekdayName = "";
+  let hour = "0";
+  let minute = "0";
+
+  for (let i = 0; i < formattedParts.length; i++) {
+    const part = formattedParts[i];
+    if (part.type === "weekday") weekdayName = part.value;
+    else if (part.type === "hour") hour = part.value;
+    else if (part.type === "minute") minute = part.value;
+  }
+
+  const weekday = weekdayIndexByName[weekdayName.toLowerCase()] ?? 0;
 
   return {
     weekday,
-    hour: Number.parseInt(parts.hour || "0", 10),
-    minute: Number.parseInt(parts.minute || "0", 10),
+    hour: Number.parseInt(hour, 10),
+    minute: Number.parseInt(minute, 10),
   };
 }
 
@@ -173,10 +183,10 @@ function roundUpToNextMinute(date: Date): Date {
 function findNextCalendarSlot(baseTime: Date, rule: ScheduleRule): Date {
   const timezone = rule.timezone || "UTC";
   const targetTime = parseTimeValue(rule.time) || { hour: 13, minute: 0, normalized: "13:00" };
-  const maxSearchMinutes = rule.type === "weekly" ? 60 * 24 * 14 : 60 * 24 * 3;
+  const maxSearchAttempts = 100; // Fail-safe to prevent infinite loops
   let candidate = roundUpToNextMinute(baseTime);
 
-  for (let minuteOffset = 0; minuteOffset <= maxSearchMinutes; minuteOffset += 1) {
+  for (let attempt = 0; attempt < maxSearchAttempts; attempt++) {
     const zonedParts = getZonedDateParts(candidate, timezone);
     const matchesTime = zonedParts.hour === targetTime.hour && zonedParts.minute === targetTime.minute;
     const matchesWeekday = rule.type !== "weekly" || (rule.weekdays || []).includes(zonedParts.weekday);
@@ -185,7 +195,28 @@ function findNextCalendarSlot(baseTime: Date, rule: ScheduleRule): Date {
       return candidate;
     }
 
-    candidate = new Date(candidate.getTime() + 60_000);
+    if (!matchesTime) {
+      // If hour/minute doesn't match, jump to the next hour or minute as a quick step
+      // In a real jumped implementation we'd do bigger leaps, but even just skipping
+      // to the next hour or 30 mins would be faster.
+      // For simplicity and safety against DST, we'll leap by 1 hour if it's far, or 1 min if close.
+      const diffHours = targetTime.hour - zonedParts.hour;
+      const diffMins = targetTime.minute - zonedParts.minute;
+      const totalDiffMins = diffHours * 60 + diffMins;
+
+      if (totalDiffMins > 0) {
+        candidate = new Date(candidate.getTime() + totalDiffMins * 60_000);
+      } else {
+        // Target time is earlier today or we just passed it, jump to tomorrow's target time roughly
+        candidate = new Date(candidate.getTime() + (totalDiffMins + 24 * 60) * 60_000);
+      }
+    } else if (!matchesWeekday) {
+      // Matches time but not weekday, jump exactly 24 hours
+      candidate = new Date(candidate.getTime() + 24 * 60 * 60_000);
+    } else {
+      // Fallback
+      candidate = new Date(candidate.getTime() + 60_000);
+    }
   }
 
   return roundUpToNextMinute(new Date(baseTime.getTime() + 24 * 60 * 60_000));
