@@ -1,0 +1,54 @@
+# ============================================================================
+# AUTOMATION SYSTEM - .gitignore
+# Project: automation-system
+# GitHub: https://github.com/waqaskhan1437/automation-system
+# ============================================================================
+
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+.dev.vars
+
+# Build outputs
+.wrangler/
+dist/
+.next/
+out/
+.build/
+
+# Logs
+*.log
+
+# Generated video files (DO NOT COMMIT)
+video-job-*.mp4
+
+# Temporary processing files
+runner-scripts/output/
+runner-scripts/temp-*.mp4
+automation-config.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ============================================================================
+
+# Video files — never commit to repo
+*.mp4
+*.mov
+*.avi
+*.webm
+*.mkv
+output/
+downloads/
+temp/
+runner-scripts/output/

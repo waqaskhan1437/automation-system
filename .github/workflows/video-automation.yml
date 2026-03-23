@@ -1,0 +1,157 @@
+name: "Video Automation Runner"
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID from worker'
+        required: true
+        type: string
+      automation_id:
+        description: 'Automation ID'
+        required: true
+        type: string
+      automation_config:
+        description: 'Full automation config as JSON'
+        required: true
+        type: string
+      worker_webhook_url:
+        description: 'Worker webhook URL'
+        required: false
+        type: string
+      postforme_api_key:
+        description: 'PostForMe API key'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  process-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install yt-dlp, FFmpeg and Fonts
+        run: |
+          pip install -q "yt-dlp[default]" --break-system-packages
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-noto fonts-dejavu
+          mkdir -p ~/.config/yt-dlp
+          NODE_PATH=$(which node)
+          echo "node path: ${NODE_PATH}"
+          echo "# Use node JS runtime for YouTube n-challenge solving" > ~/.config/yt-dlp/config
+          echo "--js-runtimes node" >> ~/.config/yt-dlp/config
+          echo "# Auto-fetch EJS scripts from GitHub" >> ~/.config/yt-dlp/config
+          echo "--remote-components ejs:github" >> ~/.config/yt-dlp/config
+          echo "yt-dlp version: $(yt-dlp --version)"
+          echo "ffmpeg version: $(ffmpeg -version | head -1)"
+          echo "=== yt-dlp JS runtime check ==="
+          yt-dlp --verbose 2>&1 | grep -i "JS\|runtime\|deno\|node" | head -5 || true
+
+      - name: Download Additional Fonts
+        run: |
+          mkdir -p ~/.local/share/fonts
+          cd ~/.local/share/fonts
+          curl -sL --max-time 30 "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Regular.ttf" -o Poppins-Regular.ttf || true
+          curl -sL --max-time 30 "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf" -o Poppins-Bold.ttf || true
+          fc-cache -f 2>/dev/null || true
+
+      - name: Setup directories
+        run: mkdir -p runner-scripts/output
+
+      - name: Download Video
+        id: download
+        env:
+          CONFIG: ${{ github.event.inputs.automation_config }}
+        run: |
+          echo "$CONFIG" > runner-scripts/automation-config.json
+          cd runner-scripts
+          npm ci --silent
+          node download-video.js 2>&1 | tee /tmp/download-log.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Process Video
+        id: process
+        if: success()
+        run: |
+          cd runner-scripts
+          node process-video.js 2>&1 | tee /tmp/process-log.txt
+
+      - name: Upload to Litterbox
+        id: litterbox
+        if: success()
+        run: |
+          VIDEO_FILE="runner-scripts/output/processed-video.mp4"
+          if [ -f "$VIDEO_FILE" ]; then
+            SIZE=$(du -sh "$VIDEO_FILE" | cut -f1)
+            echo "Video size: $SIZE"
+            LITTERBOX_URL=$(curl -s \
+              -F "reqtype=fileupload" \
+              -F "time=72h" \
+              -F "fileToUpload=@$VIDEO_FILE" \
+              https://litterbox.catbox.moe/resources/internals/api.php)
+            if [[ "$LITTERBOX_URL" == https://litter.catbox.moe/* ]]; then
+              echo "LITTERBOX_URL=$LITTERBOX_URL" >> $GITHUB_ENV
+              echo "RAW_URL=$LITTERBOX_URL" >> $GITHUB_ENV
+              echo "SUCCESS: $LITTERBOX_URL"
+            else
+              echo "Litterbox upload failed: $LITTERBOX_URL"
+            fi
+          else
+            echo "No video file found!"
+          fi
+
+      - name: Post via PostForMe
+        if: success()
+        env:
+          POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
+          WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+          LITTERBOX_URL: ${{ env.LITTERBOX_URL }}
+        run: |
+          cd runner-scripts
+          node post-via-postforme.js
+
+      - name: Save logs to repo
+        if: always()
+        run: |
+          mkdir -p job-logs
+          JOB_ID="${{ github.event.inputs.job_id }}"
+          LOG_FILE="job-logs/job-${JOB_ID}.txt"
+          echo "=== Job ${JOB_ID} - $(date) ===" > $LOG_FILE
+          echo "Config: $(cat runner-scripts/automation-config.json 2>/dev/null | head -5)" >> $LOG_FILE
+          echo "" >> $LOG_FILE
+          echo "=== DOWNLOAD LOG ===" >> $LOG_FILE
+          cat /tmp/download-log.txt 2>/dev/null >> $LOG_FILE || echo "no download log" >> $LOG_FILE
+          echo "" >> $LOG_FILE
+          echo "=== PROCESS LOG ===" >> $LOG_FILE
+          cat /tmp/process-log.txt 2>/dev/null >> $LOG_FILE || echo "no process log" >> $LOG_FILE
+          echo "" >> $LOG_FILE
+          echo "=== VIDEO URL ===" >> $LOG_FILE
+          echo "${RAW_URL:-not uploaded}" >> $LOG_FILE
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add job-logs/
+          git diff --staged --quiet || git commit -m "logs: job-${JOB_ID}"
+          git push || true
+
+      - name: Update Job Status
+        if: always()
+        env:
+          WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+          RAW_URL: ${{ env.RAW_URL }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          cd runner-scripts
+          node update-job-status.js

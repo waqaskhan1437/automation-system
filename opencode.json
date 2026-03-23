@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "command": {
+    "claude": {
+      "description": "Ask Claude AI (free via Puter.js)",
+      "template": "Run this command and return the output: node puter-ai.js \"$ARGUMENTS\"",
+      "agent": "build"
+    }
+  }
+}

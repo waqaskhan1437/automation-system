@@ -1,0 +1,19 @@
+name = "automation-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-05"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "automation-db"
+database_id = "d1a88132-78e9-4fab-9855-4cd554f7febc"
+
+[vars]
+ENVIRONMENT = "production"
+FRONTEND_URL = "https://frontend.vercel.app"
+
+[triggers]
+crons = ["* * * * *"]
+
+[build]
+command = "npm install"
