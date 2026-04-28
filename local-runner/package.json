@@ -1,0 +1,14 @@
+{
+  "name": "video-automation-runner",
+  "version": "1.1.0",
+  "description": "Local video automation runner",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "runner": "node runner.js"
+  },
+  "keywords": ["video", "automation", "ffmpeg"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {}
+}

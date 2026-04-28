@@ -1,0 +1,674 @@
+import { AuthContext, Env, PostformeSettings, GithubSettings, VideoSourceSettings, AISettings, TailscaleSettings } from "../types";
+import { jsonResponse, safeRequestJson } from "../utils";
+import {
+  buildAiCatalog,
+  generateAiJson,
+  getConfiguredProviderIds,
+  getShortPromptPlanMessages,
+  getSocialMessages,
+  getTaglinesMessages,
+  normalizeShortPromptPlanResult,
+  normalizeSocialResult,
+  normalizeTaglinesResult,
+  resolveModelForProvider,
+  type SupportedAIProvider,
+} from "../services/ai";
+import { generateImageBannerPreviewSpecs, normalizeBannerFormat } from "../services/image-automation";
+import { getScopedSettings, upsertScopedSettings } from "../services/user-settings";
+
+type SyncedPostformeAccount = {
+  id: string;
+  platform: string;
+  username: string;
+  connected: boolean;
+};
+
+function normalizePostformeAccounts(accounts: Array<{ platform: string; username: string; id: string }>): SyncedPostformeAccount[] {
+  return accounts.map((a) => ({
+    id: a.id,
+    platform: a.platform,
+    username: a.username,
+    connected: true,
+  }));
+}
+
+function parseSavedAccounts(raw: unknown): SyncedPostformeAccount[] {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object"))
+      .map((value) => ({
+        id: String(value.id || ""),
+        platform: String(value.platform || ""),
+        username: String(value.username || ""),
+        connected: value.connected !== false,
+      }))
+      .filter((value) => value.id && value.platform && value.username);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeCookieText(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
+}
+
+function normalizeOptionalCookieValue(value: unknown, label: string): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be provided as text`);
+  }
+
+  const normalized = normalizeCookieText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (!looksLikeNetscapeCookieFile(normalized)) {
+    throw new Error(`${label} must be in Netscape text format`);
+  }
+
+  return normalized;
+}
+
+function looksLikeNetscapeCookieFile(value: string): boolean {
+  if (!value.trim()) {
+    return false;
+  }
+
+  const normalized = normalizeCookieText(value);
+  if (normalized.includes("# Netscape HTTP Cookie File")) {
+    return true;
+  }
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("#"));
+
+  return lines.some((line) => line.split("\t").length >= 7);
+}
+
+export async function handleSettingsRoutes(
+  request: Request,
+  env: Env,
+  path: string,
+  auth: AuthContext
+): Promise<Response> {
+  const method = request.method;
+  const userId = auth.userId;
+
+  // POSTFORME SETTINGS
+  if (path === "/api/settings/postforme") {
+    if (method === "GET") {
+      const result = await getScopedSettings<PostformeSettings>(env.DB, "postforme", userId);
+      return jsonResponse({ success: true, data: result || null });
+    }
+
+    if (method === "POST") {
+      const body = await safeRequestJson<Partial<PostformeSettings>>(request);
+      if (!body) {
+        return jsonResponse({ success: false, error: "Invalid JSON body" }, 400);
+      }
+      const apiKey = typeof body.api_key === "string" ? body.api_key.trim() : "";
+      if (!apiKey) {
+        return jsonResponse({ success: false, error: "api_key is required" }, 400);
+      }
+
+      try {
+        await upsertScopedSettings(env.DB, "settings_postforme", userId, {
+          api_key: apiKey,
+          platforms: body.platforms || "[]",
+          saved_accounts: body.saved_accounts || "[]",
+          default_schedule: body.default_schedule || null,
+        });
+        return jsonResponse({ success: true, message: "Postforme settings saved" });
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : "Failed to save Postforme settings";
+        return jsonResponse({ success: false, error: errorMsg }, 500);
+      }
+    }
+  }
+
+  // POSTFORME ACCOUNTS (Get saved accounts)
+  if (path === "/api/settings/postforme/accounts" && method === "GET") {
+    console.log("[POSTFORME] /accounts endpoint called");
+    try {
+      // First get basic settings
+      const basicSettings = await getScopedSettings<{ api_key: string } & PostformeSettings>(env.DB, "postforme", userId);
+      const savedAccounts = parseSavedAccounts(basicSettings?.saved_accounts);
+      if (!basicSettings?.api_key) {
+        console.log("[POSTFORME] No API key in DB");
+        if (savedAccounts.length > 0) {
+          return jsonResponse({ success: true, data: savedAccounts });
+        }
+        return jsonResponse({ success: false, error: "No API key configured" }, 400);
+      }
+      console.log("[POSTFORME] Found API key, fetching from Postforme API");
+      
+      // Always fetch fresh from API
+      const res = await fetch("https://api.postforme.dev/v1/social-accounts", {
+        headers: { Authorization: `Bearer ${basicSettings.api_key}` },
+      });
+      console.log("[POSTFORME] API response status:", res.status);
+      
+      if (res.ok) {
+        const data = await res.json() as { data?: Array<{ platform: string; username: string; id: string }> };
+        const accounts = normalizePostformeAccounts(data.data || []);
+        console.log("[POSTFORME] Found accounts:", accounts.length);
+        try {
+          await upsertScopedSettings(env.DB, "settings_postforme", userId, {
+            api_key: basicSettings.api_key,
+            platforms: basicSettings.platforms || "[]",
+            saved_accounts: JSON.stringify(accounts),
+            default_schedule: basicSettings.default_schedule || null,
+          });
+        } catch (saveErr) {
+          console.log("[POSTFORME] Could not refresh saved accounts cache:", saveErr);
+        }
+        return jsonResponse({ success: true, data: accounts });
+      }
+      if (savedAccounts.length > 0) {
+        return jsonResponse({ success: true, data: savedAccounts });
+      }
+      return jsonResponse({ success: false, error: "Failed to fetch accounts from Postforme" }, 400);
+    } catch (err: unknown) {
+      console.log("[POSTFORME] Error:", err);
+      const basicSettings = await getScopedSettings<{ api_key: string } & PostformeSettings>(env.DB, "postforme", userId);
+      const savedAccounts = parseSavedAccounts(basicSettings?.saved_accounts);
+      if (savedAccounts.length > 0) {
+        return jsonResponse({ success: true, data: savedAccounts });
+      }
+      const errorMsg = err instanceof Error ? err.message : "Failed to fetch accounts";
+      return jsonResponse({ success: false, error: errorMsg }, 500);
+    }
+  }
+
+  // POSTFORME TEST
+  if (path === "/api/settings/postforme/test" && method === "POST") {
+    const body = await safeRequestJson<{ api_key: string }>(request);
+    if (!body || !body.api_key) {
+      return jsonResponse({ success: false, error: "api_key required" }, 400);
+    }
+    try {
+      const res = await fetch("https://api.postforme.dev/v1/social-accounts", {
+        headers: { Authorization: `Bearer ${body.api_key}` },
+      });
+      if (res.ok) {
+        return jsonResponse({ success: true, message: "Postforme API connected successfully!" });
+      }
+      const errText = await res.text();
+      return jsonResponse({ success: false, message: `Error ${res.status}: ${errText || "Invalid API key"}` });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Connection failed";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
+  // POSTFORME SYNC ACCOUNTS
+  if (path === "/api/settings/postforme/sync" && method === "POST") {
+    const body = await safeRequestJson<{ api_key: string }>(request);
+    if (!body || !body.api_key) {
+      return jsonResponse({ success: false, error: "api_key required" }, 400);
+    }
+    try {
+      const res = await fetch("https://api.postforme.dev/v1/social-accounts", {
+        headers: { Authorization: `Bearer ${body.api_key}` },
+      });
+      if (res.ok) {
+        const data = await res.json() as { data?: Array<{ platform: string; username: string; id: string }> };
+        const accounts = normalizePostformeAccounts(data.data || []);
+        const connectedPlatforms = accounts.map((a) => a.platform);
+        
+        // Save accounts to database (wrapped in try/catch in case column doesn't exist)
+        try {
+          await upsertScopedSettings(env.DB, "settings_postforme", userId, {
+            api_key: body.api_key,
+            platforms: JSON.stringify(connectedPlatforms),
+            saved_accounts: JSON.stringify(accounts),
+          });
+          console.log("[POSTFORME] Saved accounts to database:", accounts.length);
+        } catch (e) {
+          console.log("[POSTFORME] Could not save accounts - column may not exist:", e);
+        }
+        
+        return jsonResponse({ success: true, data: accounts });
+      }
+      return jsonResponse({ success: false, error: `Postforme error: ${res.status}` });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Sync failed";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
+  // GITHUB SETTINGS
+  if (path === "/api/settings/github") {
+    if (method === "GET") {
+      const result = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
+      return jsonResponse({ success: true, data: result || null });
+    }
+
+    if (method === "POST") {
+      const body = await safeRequestJson<Partial<GithubSettings>>(request);
+      if (!body || !body.pat_token || !body.repo_owner || !body.repo_name) {
+        return jsonResponse({ success: false, error: "pat_token, repo_owner, and repo_name are required" }, 400);
+      }
+
+      await upsertScopedSettings(env.DB, "settings_github", userId, {
+        pat_token: body.pat_token,
+        repo_owner: body.repo_owner,
+        repo_name: body.repo_name,
+        runner_labels: body.runner_labels || "self-hosted",
+        workflow_dispatch_url: body.workflow_dispatch_url || null,
+      });
+      return jsonResponse({ success: true, message: "GitHub settings saved" });
+    }
+  }
+
+  // TAILSCALE SETTINGS (admin only)
+  if (path === "/api/settings/tailscale") {
+    if (!auth.isAdmin) {
+      return jsonResponse({ success: false, error: "Admin only" }, 403);
+    }
+
+    if (method === "GET") {
+      try {
+        const result = await getScopedSettings<TailscaleSettings>(env.DB, "tailscale", userId);
+        return jsonResponse({ success: true, data: result || null });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Failed to load Tailscale settings";
+        return jsonResponse({ success: false, error: errorMsg }, 500);
+      }
+    }
+
+    if (method === "POST") {
+      const body = await safeRequestJson<Partial<TailscaleSettings>>(request);
+      if (!body) {
+        return jsonResponse({ success: false, error: "Invalid JSON body" }, 400);
+      }
+
+      try {
+        await upsertScopedSettings(env.DB, "settings_tailscale", userId, {
+          auth_key: typeof body.auth_key === "string" ? body.auth_key.trim() || null : null,
+          tailnet: typeof body.tailnet === "string" ? body.tailnet.trim() || null : null,
+          device_tag: typeof body.device_tag === "string" ? body.device_tag.trim() || null : null,
+          hostname_prefix: typeof body.hostname_prefix === "string" ? body.hostname_prefix.trim() || null : null,
+          auto_install: body.auto_install === false || body.auto_install === 0 ? 0 : 1,
+          ssh_enabled: body.ssh_enabled === false || body.ssh_enabled === 0 ? 0 : 1,
+          unattended: body.unattended === false || body.unattended === 0 ? 0 : 1,
+        });
+        return jsonResponse({ success: true, message: "Tailscale settings saved" });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Failed to save Tailscale settings";
+        return jsonResponse({ success: false, error: errorMsg }, 500);
+      }
+    }
+  }
+
+  // VIDEO SOURCE SETTINGS
+  if (path === "/api/settings/video-sources") {
+    if (method === "GET") {
+      const result = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
+      return jsonResponse({ success: true, data: result || null });
+    }
+
+    if (method === "POST") {
+      const body = await safeRequestJson<Partial<VideoSourceSettings>>(request);
+      if (!body) {
+        return jsonResponse({ success: false, error: "Invalid JSON body" }, 400);
+      }
+
+      try {
+        await upsertScopedSettings(env.DB, "settings_video_sources", userId, {
+          bunny_api_key: body.bunny_api_key || null,
+          bunny_library_id: body.bunny_library_id || null,
+          youtube_cookies: normalizeOptionalCookieValue(body.youtube_cookies, "YouTube cookies"),
+          google_photos_cookies: normalizeOptionalCookieValue(body.google_photos_cookies, "Google Photos cookies"),
+        });
+        return jsonResponse({ success: true, message: "Video source settings saved" });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Failed to save video source settings";
+        return jsonResponse({ success: false, error: errorMsg }, 400);
+      }
+    }
+  }
+
+  if (path === "/api/settings/video-sources/upload" && method === "POST") {
+    try {
+      const formData = await request.formData();
+      const source = String(formData.get("source") || "").trim().toLowerCase();
+      const file = formData.get("file") as { name?: string; text?: () => Promise<string> } | null;
+      const sourceFieldMap: Record<string, { field: "youtube_cookies" | "google_photos_cookies"; label: string }> = {
+        youtube: { field: "youtube_cookies", label: "YouTube cookies" },
+        google_photos: { field: "google_photos_cookies", label: "Google Photos cookies" },
+      };
+      const sourceConfig = sourceFieldMap[source];
+
+      if (!sourceConfig) {
+        return jsonResponse({ success: false, error: "Unsupported cookies source" }, 400);
+      }
+
+      if (!file || typeof file.text !== "function") {
+        return jsonResponse({ success: false, error: "Cookies file is required" }, 400);
+      }
+
+      const fileName = file.name || "youtube-cookies.txt";
+      if (!fileName.toLowerCase().endsWith(".txt")) {
+        return jsonResponse({ success: false, error: "Upload a .txt cookies file" }, 400);
+      }
+
+      const rawText = await file.text();
+      const normalized = normalizeOptionalCookieValue(rawText, sourceConfig.label);
+      if (!normalized) {
+        return jsonResponse({ success: false, error: "Uploaded cookies file is empty" }, 400);
+      }
+
+      const existing = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
+      await upsertScopedSettings(env.DB, "settings_video_sources", userId, {
+        bunny_api_key: existing?.bunny_api_key || null,
+        bunny_library_id: existing?.bunny_library_id || null,
+        youtube_cookies: sourceConfig.field === "youtube_cookies" ? normalized : existing?.youtube_cookies || null,
+        google_photos_cookies: sourceConfig.field === "google_photos_cookies" ? normalized : existing?.google_photos_cookies || null,
+      });
+
+      return jsonResponse({
+        success: true,
+        message: `${sourceConfig.label} uploaded and replaced successfully`,
+        data: {
+          source,
+          file_name: fileName,
+          bytes: normalized.length,
+        },
+      });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Cookies upload failed";
+      return jsonResponse({ success: false, error: errorMsg }, 500);
+    }
+  }
+
+  // AI SETTINGS
+  if (path === "/api/settings/ai") {
+    if (method === "GET") {
+      const result = await getScopedSettings<AISettings>(env.DB, "ai", userId);
+      return jsonResponse({ success: true, data: result || null });
+    }
+
+    if (method === "POST") {
+      const body = await safeRequestJson<Partial<AISettings>>(request);
+      if (!body) {
+        return jsonResponse({ success: false, error: "Invalid JSON body" }, 400);
+      }
+
+      await upsertScopedSettings(env.DB, "settings_ai", userId, {
+        gemini_key: body.gemini_key || null,
+        grok_key: body.grok_key || null,
+        cohere_key: body.cohere_key || null,
+        openrouter_key: body.openrouter_key || null,
+        openai_key: body.openai_key || null,
+        groq_key: body.groq_key || null,
+        default_provider: body.default_provider || "openai",
+      });
+      return jsonResponse({ success: true, message: "AI settings saved" });
+    }
+  }
+
+  // AI KEY TEST
+  if (path === "/api/settings/ai/test" && method === "POST") {
+    const body = await safeRequestJson<{ provider: string; api_key: string }>(request);
+    if (!body || !body.provider || !body.api_key) {
+      return jsonResponse({ success: false, error: "provider and api_key required" }, 400);
+    }
+
+    try {
+      let testResult = false;
+      let message = "";
+
+      switch (body.provider) {
+        case "openai": {
+          const res = await fetch("https://api.openai.com/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "OpenAI connected successfully" : `OpenAI error: ${res.status}`;
+          break;
+        }
+        case "gemini": {
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${body.api_key}`);
+          testResult = res.ok;
+          message = res.ok ? "Gemini connected successfully" : `Gemini error: ${res.status}`;
+          break;
+        }
+        case "grok": {
+          const res = await fetch("https://api.x.ai/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "Grok connected successfully" : `Grok error: ${res.status}`;
+          break;
+        }
+        case "cohere": {
+          const res = await fetch("https://api.cohere.ai/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "Cohere connected successfully" : `Cohere error: ${res.status}`;
+          break;
+        }
+        case "openrouter": {
+          const res = await fetch("https://openrouter.ai/api/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "OpenRouter connected successfully" : `OpenRouter error: ${res.status}`;
+          break;
+        }
+        case "groq": {
+          const res = await fetch("https://api.groq.com/openai/v1/models", {
+            headers: { Authorization: `Bearer ${body.api_key}` },
+          });
+          testResult = res.ok;
+          message = res.ok ? "Groq connected successfully" : `Groq error: ${res.status}`;
+          break;
+        }
+        default:
+          return jsonResponse({ success: false, error: "Unknown provider" }, 400);
+      }
+
+      return jsonResponse({ success: testResult, message });
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Connection failed";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
+  // AI MODEL CATALOG
+  if (path === "/api/settings/ai/models" && method === "GET") {
+    const aiSettings = await getScopedSettings<AISettings>(env.DB, "ai", userId);
+    if (!aiSettings) {
+      return jsonResponse({
+        success: true,
+        data: {
+          default_provider: null,
+          providers: [],
+        },
+      });
+    }
+
+    const catalog = await buildAiCatalog(aiSettings);
+    return jsonResponse({ success: true, data: catalog });
+  }
+
+  // AI GENERATE TAGLINES
+  if (path === "/api/settings/ai/generate" && method === "POST") {
+    const body = await safeRequestJson<{
+      task: "taglines" | "social" | "image_banner" | "short_prompt_plan";
+      provider?: string;
+      model?: string;
+      prompt?: string;
+      topic?: string;
+      platform?: string;
+      count?: number;
+      automationName?: string;
+      brandName?: string;
+      brandingUrl?: string;
+      bannerTitle?: string;
+      bannerPrompt?: string;
+      bannerProductSummary?: string;
+      bannerFormat?: string;
+      layout?: string;
+    }>(request);
+
+    if (!body || !body.task) {
+      return jsonResponse({ success: false, error: "task is required" }, 400);
+    }
+
+    if (body.task === "image_banner") {
+      try {
+        const previewResult = await generateImageBannerPreviewSpecs(env, userId, {
+          automationName: String(body.automationName || "Image automation").trim(),
+          brandName: String(body.brandName || "").trim(),
+          brandingUrl: String(body.brandingUrl || "").trim(),
+          bannerTitle: String(body.bannerTitle || "").trim(),
+          bannerPrompt: String(body.bannerPrompt || "").trim(),
+          bannerProductSummary: String(body.bannerProductSummary || "").trim(),
+          bannerFormat: normalizeBannerFormat(body.bannerFormat),
+          layout: String(body.layout || "").trim().toLowerCase() === "landscape" ? "landscape" : "portrait",
+          providerValue: body.provider,
+          modelValue: body.model,
+          count: Math.min(Math.max(Number(body.count || 3), 1), 4),
+        });
+
+        return jsonResponse({
+          success: true,
+          data: {
+            specs: previewResult.specs,
+            provider: previewResult.provider,
+            model: previewResult.model,
+          },
+        });
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : "Image banner generation failed";
+        return jsonResponse({ success: false, error: errorMsg }, 500);
+      }
+    }
+
+    const aiSettings = await getScopedSettings<AISettings>(env.DB, "ai", userId);
+    if (!aiSettings) {
+      return jsonResponse({ success: false, error: "No AI settings configured" }, 400);
+    }
+
+    const configuredProviders = getConfiguredProviderIds(aiSettings);
+    if (configuredProviders.length === 0) {
+      return jsonResponse({ success: false, error: "No AI provider API keys saved in Settings" }, 400);
+    }
+
+    try {
+      const catalog = await buildAiCatalog(aiSettings);
+      const requestedProvider = body.provider as SupportedAIProvider | undefined;
+      const provider = requestedProvider && configuredProviders.includes(requestedProvider)
+        ? requestedProvider
+        : catalog.default_provider;
+
+      if (!provider) {
+        return jsonResponse({ success: false, error: "No configured AI provider available" }, 400);
+      }
+
+      const resolvedModel = resolveModelForProvider(provider, body.model, catalog.providers);
+
+      if (body.task === "taglines") {
+        const topic = String(body.prompt || body.topic || "").trim();
+        const count = Math.min(Math.max(Number(body.count || 5), 1), 10);
+        if (!topic) {
+          return jsonResponse({ success: false, error: "prompt is required for tagline generation" }, 400);
+        }
+
+        const parsed = await generateAiJson(
+          aiSettings,
+          provider,
+          resolvedModel,
+          getTaglinesMessages({ topic, count })
+        );
+        const normalized = normalizeTaglinesResult(parsed, count);
+
+        return jsonResponse({
+          success: true,
+          data: {
+            ...normalized,
+            provider,
+            model: resolvedModel,
+          },
+        });
+      }
+
+      if (body.task === "social") {
+        const topic = String(body.topic || body.prompt || "").trim();
+        const platform = String(body.platform || "instagram").trim();
+        const count = Math.min(Math.max(Number(body.count || 10), 1), 50);
+
+        if (!topic) {
+          return jsonResponse({ success: false, error: "topic is required for social generation" }, 400);
+        }
+
+        const parsed = await generateAiJson(
+          aiSettings,
+          provider,
+          resolvedModel,
+          getSocialMessages({ topic, platform, count })
+        );
+        const normalized = normalizeSocialResult(parsed, count);
+
+        return jsonResponse({
+          success: true,
+          data: {
+            ...normalized,
+            provider,
+            model: resolvedModel,
+          },
+        });
+      }
+
+      if (body.task === "short_prompt_plan") {
+        const prompt = String(body.prompt || body.topic || "").trim();
+        if (!prompt) {
+          return jsonResponse({ success: false, error: "prompt is required for short prompt planning" }, 400);
+        }
+
+        const parsed = await generateAiJson(
+          aiSettings,
+          provider,
+          resolvedModel,
+          getShortPromptPlanMessages({ prompt })
+        );
+        const normalized = normalizeShortPromptPlanResult(parsed);
+
+        return jsonResponse({
+          success: true,
+          data: {
+            plan: normalized,
+            provider,
+            model: resolvedModel,
+          },
+        });
+      }
+
+      return jsonResponse({ success: false, error: "Unknown AI generation task" }, 400);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "AI generation failed";
+      return jsonResponse({ success: false, error: errorMsg });
+    }
+  }
+
+  return jsonResponse({ success: false, error: "Settings route not found" }, 404);
+}

@@ -1,0 +1,50 @@
+name: Validate Deployments
+
+on:
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'frontend/**'
+      - 'worker/**'
+      - 'vercel.json'
+      - 'frontend/vercel.json'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-deployments-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+      - run: npm ci
+      - run: npm run build
+
+  worker-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'worker/package-lock.json'
+      - run: npm ci
+      - run: npm run check

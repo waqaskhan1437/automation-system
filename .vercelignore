@@ -1,0 +1,15 @@
+node_modules
+frontend/node_modules
+frontend/.next
+worker/node_modules
+runner-scripts/node_modules
+local-runner/dist
+local-runner/dist-clean
+local-runner/tools
+local-runner/downloads
+local-runner/processed
+.git
+.next
+cookies.txt
+cookies (2).txt
+photos.google.com_cookies.txt

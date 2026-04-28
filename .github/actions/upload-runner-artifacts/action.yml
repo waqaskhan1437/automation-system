@@ -1,0 +1,24 @@
+name: "Upload runner artifacts"
+description: "Upload runner output/debug artifacts with a short retention period."
+inputs:
+  name:
+    description: "Artifact name"
+    required: true
+  path:
+    description: "Artifact path"
+    required: false
+    default: "runner-scripts/output/"
+  retention-days:
+    description: "Artifact retention in days"
+    required: false
+    default: "3"
+runs:
+  using: "composite"
+  steps:
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        retention-days: ${{ inputs.retention-days }}

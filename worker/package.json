@@ -1,0 +1,27 @@
+{
+  "name": "automation-worker",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 execute automation-db --file=./src/db/schema.sql",
+    "db:migrate:local": "wrangler d1 execute automation-db --local --file=./src/db/schema.sql",
+    "db:seed": "wrangler d1 execute automation-db --local --file=./src/db/seed.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.77.0"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "playwright": "^1.59.1",
+    "tweetsodium": "^0.0.4",
+    "zstd-wasm-decoder": "^0.2.3"
+  }
+}

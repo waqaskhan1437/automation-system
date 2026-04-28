@@ -1,0 +1,5 @@
+# Lightweight local launcher
+SERVER_URL=https://automation-api.waqaskhan1437.workers.dev
+FRONTEND_URL=https://automation-frontend-woad.vercel.app
+RUNNER_TOKEN=
+ACCESS_TOKEN=
