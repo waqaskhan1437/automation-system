@@ -185,7 +185,7 @@ if %errorlevel% equ 0 (
 )
 
 if /I "%SHOULD_OPEN_BROWSER%"=="1" if /I "%DASHBOARD_READY%"=="1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process 'http://localhost:3000/open'"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process 'http://localhost:3000/launcher'"
 )
 
 echo.
@@ -195,10 +195,10 @@ echo   Background runner started
 if /I "%SHOULD_OPEN_BROWSER%"=="0" (
     echo   Browser auto-open skipped
 ) else if /I "%DASHBOARD_READY%"=="1" (
-    echo   Browser opening on localhost:3000
+    echo   Browser opening on localhost:3000/launcher
 ) else (
     echo   Dashboard is still warming up
-    echo   Open this link manually if browser does not open: http://localhost:3000/open
+    echo   Open this link manually if browser does not open: http://localhost:3000/launcher
 )
 echo ========================================
 echo.

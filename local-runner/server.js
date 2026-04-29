@@ -1343,7 +1343,11 @@ const server = http.createServer((req, res) => {
 
   if ((req.method === "GET" || req.method === "HEAD") && pathname === "/open") {
     const token = config.ACCESS_TOKEN || "";
-    redirect(res, token ? `/?token=${encodeURIComponent(token)}` : "/launcher");
+    if (token && config.RUNNER_TOKEN) {
+      redirect(res, `/?token=${encodeURIComponent(token)}`);
+    } else {
+      redirect(res, "/launcher");
+    }
     return;
   }
 
