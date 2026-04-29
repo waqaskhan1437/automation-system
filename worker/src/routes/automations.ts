@@ -59,7 +59,27 @@ async function ensureRotationResetColumn(env: Env): Promise<void> {
 
 function getScheduledAccountCount(postMetadata: string | null | undefined): number {
   const parsed = parseStoredPostMetadata(postMetadata);
-  return parsed?.scheduled_accounts.length || 1;
+  return Array.isArray(parsed?.scheduled_accounts) ? parsed.scheduled_accounts.length : 1;
+}
+
+function defaultLinkQueueStatus() {
+  return {
+    totalLinks: 0,
+    processedLinks: 0,
+    currentIndex: 0,
+    remainingLinks: 0,
+    allCompleted: false,
+    links: [],
+  };
+}
+
+async function safeGetLinkQueueStatus(env: Env, automationId: number, userId: number): Promise<Awaited<ReturnType<typeof getLinkQueueStatus>>> {
+  try {
+    return await getLinkQueueStatus(env, automationId, userId);
+  } catch (error) {
+    console.warn("[automations.dashboard] link queue status failed:", automationId, error instanceof Error ? error.message : String(error));
+    return defaultLinkQueueStatus() as Awaited<ReturnType<typeof getLinkQueueStatus>>;
+  }
 }
 
 function normalizeConfigText(config: unknown): string {
@@ -136,17 +156,25 @@ export async function handleAutomationsRoutes(
   }
 
   if (path === "/api/automations/dashboard" && method === "GET") {
-    await backfillScheduledAutomations(env, userId);
+    try {
+      await backfillScheduledAutomations(env, userId);
+    } catch (error) {
+      console.warn("[automations.dashboard] schedule backfill failed:", error instanceof Error ? error.message : String(error));
+    }
 
     const url = new URL(request.url);
     const syncScheduled = url.searchParams.get("sync_scheduled") === "1";
 
     if (syncScheduled) {
-      await syncScheduledUploads(env, {
-        userId,
-        limit: 50,
-        onlyDue: false,
-      });
+      try {
+        await syncScheduledUploads(env, {
+          userId,
+          limit: 50,
+          onlyDue: false,
+        });
+      } catch (error) {
+        console.warn("[automations.dashboard] scheduled sync failed:", error instanceof Error ? error.message : String(error));
+      }
     }
 
     const automationsResult = await env.DB.prepare(
@@ -245,7 +273,7 @@ export async function handleAutomationsRoutes(
             accounts: 0,
           },
           latest_active_job: null,
-          link_queue: await getLinkQueueStatus(env, automation.id, userId),
+          link_queue: await safeGetLinkQueueStatus(env, automation.id, userId),
         };
       }
 
@@ -490,10 +518,16 @@ export async function handleAutomationsRoutes(
       replaceExistingLocalRun: true,
     });
     if (!runResult.success) {
-      return jsonResponse(
-        { success: false, error: runResult.error || "Failed to trigger automation" },
-        runResult.inProgress ? 409 : 500
-      );
+      return jsonResponse({
+        success: false,
+        error: runResult.error || "Failed to trigger automation",
+        data: {
+          job_id: runResult.jobId || null,
+          github_run_id: runResult.githubRunId ?? null,
+          execution_mode: runResult.executionMode || null,
+          in_progress: runResult.inProgress === true,
+        },
+      });
     }
 
     return jsonResponse({

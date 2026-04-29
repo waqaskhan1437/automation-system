@@ -4,7 +4,7 @@ import AutomationModal from "@/components/automations/AutomationModal";
 import ImageAutomationModal from "@/components/automations/image/ImageAutomationModal";
 import ScheduledPostsModal from "@/components/ui/ScheduledPostsModal";
 import { Automation } from "@/components/automations/types";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 interface StepInfo { name: string; status: string; conclusion: string | null }
 interface RunningJob { jobId: number; status: string; githubRunUrl: string | null; steps: StepInfo[]; error: string | null; progress: number }
@@ -60,6 +60,52 @@ function estimateProgress(status: string): number {
   if (status === "running") return 60;
   if (status === "queued" || status === "pending") return 20;
   return 0;
+}
+
+function normalizeSteps(value: unknown): StepInfo[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      return {
+        name: typeof record.name === "string" ? record.name : "Runner step",
+        status: typeof record.status === "string" ? record.status : "unknown",
+        conclusion: typeof record.conclusion === "string" ? record.conclusion : null,
+      };
+    })
+    .filter((item): item is StepInfo => Boolean(item));
+}
+
+function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) {
+    const data = error.data as { error?: string } | undefined;
+    return data?.error || error.message || fallback;
+  }
+  if (error instanceof Error) return error.message;
+  return fallback;
+}
+
+function getApiErrorData(error: unknown): Record<string, unknown> {
+  if (error instanceof ApiError && error.data && typeof error.data === "object") {
+    const maybeData = (error.data as { data?: unknown }).data;
+    return maybeData && typeof maybeData === "object" ? maybeData as Record<string, unknown> : {};
+  }
+  return {};
+}
+
+function buildFailedRunState(existing: RunningJob | undefined, message: string, data: Record<string, unknown> = {}): RunningJob {
+  const jobId = typeof data.job_id === "number" ? data.job_id : existing?.jobId || 0;
+  return {
+    jobId,
+    status: "failed",
+    githubRunUrl: existing?.githubRunUrl || null,
+    steps: normalizeSteps(existing?.steps).length > 0 ? normalizeSteps(existing?.steps) : [
+      { name: message, status: "completed", conclusion: "failure" },
+    ],
+    error: message,
+    progress: 100,
+  };
 }
 
 function buildRunningJobSummary(job: DashboardActiveJob): RunningJob {
@@ -180,7 +226,7 @@ export default function AutomationsPage() {
       }
       const payload = response.data;
 
-      const steps: StepInfo[] = payload.steps || [];
+      const steps: StepInfo[] = normalizeSteps(payload.steps);
       const done = steps.filter((step) => step.conclusion === "success").length;
       const total = steps.length || 1;
       let status = payload.run_status || job.status;
@@ -301,31 +347,33 @@ export default function AutomationsPage() {
     }));
 
     try {
-      const response = await api.post<{ job_id: number; github_run_id: number | null }>(`/api/automations/${autoId}/run`, {});
+      const response = await api.post<{ job_id?: number | null; github_run_id?: number | null; execution_mode?: string | null; in_progress?: boolean }>(`/api/automations/${autoId}/run`, {});
       if (response.success) {
+        if (response.data?.job_id) {
+          setRunningJobs((current) => ({
+            ...current,
+            [autoId]: {
+              ...(current[autoId] || { status: "queued", githubRunUrl: null, steps: [], error: null, progress: 20 }),
+              jobId: Number(response.data?.job_id) || current[autoId]?.jobId || 0,
+              steps: normalizeSteps(current[autoId]?.steps),
+            },
+          }));
+        }
         window.setTimeout(() => {
           void loadData();
         }, 2500);
       } else {
         setRunningJobs((current) => ({
           ...current,
-          [autoId]: {
-            ...current[autoId],
-            status: "failed",
-            error: response.error || "Unknown error",
-            progress: 100,
-          },
+          [autoId]: buildFailedRunState(current[autoId], response.error || "Unknown error", response.data || {}),
         }));
       }
-    } catch {
+    } catch (error) {
+      const message = getApiErrorMessage(error, "Request failed");
+      const errorData = getApiErrorData(error);
       setRunningJobs((current) => ({
         ...current,
-        [autoId]: {
-          ...current[autoId],
-          status: "failed",
-          error: "Request failed",
-          progress: 100,
-        },
+        [autoId]: buildFailedRunState(current[autoId], message, errorData),
       }));
     }
   };
@@ -636,8 +684,8 @@ export default function AutomationsPage() {
               <div className="h-3 rounded-full bg-[rgba(255,255,255,0.1)] overflow-hidden">
                 <div className="h-full rounded-full" style={{ width: `${showLogs.job.progress}%`, backgroundColor: sc(showLogs.job.status) }} />
               </div>
-              {showLogs.job.steps.length > 0 ? (
-                <div className="space-y-2">{showLogs.job.steps.map((step, index) => (
+              {normalizeSteps(showLogs.job.steps).length > 0 ? (
+                <div className="space-y-2">{normalizeSteps(showLogs.job.steps).map((step, index) => (
                   <div key={index} className="flex items-center gap-3 p-2 rounded-lg bg-[rgba(255,255,255,0.03)]">
                     <span style={{ color: sc(step.conclusion || step.status) }}>{si(step)}</span>
                     <span className="text-sm flex-1">{step.name}</span>

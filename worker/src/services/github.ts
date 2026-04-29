@@ -80,6 +80,79 @@ function getWorkflowRunsUrl(githubSettings: GithubSettings, workflowFile: string
   return `https://github.com/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${workflowFile}`;
 }
 
+type GitHubWorkflowListItem = {
+  id: number;
+  name: string;
+  path: string;
+  state?: string;
+};
+
+function expectedWorkflowNames(workflowFile: string): string[] {
+  if (workflowFile === "image-automation.yml") {
+    return ["Image Automation Runner"];
+  }
+  if (workflowFile === "video-automation.yml") {
+    return ["Video Automation Runner"];
+  }
+  return [];
+}
+
+async function resolveWorkflowDispatchTarget(
+  githubSettings: GithubSettings,
+  workflowFile: string
+): Promise<{ idOrFile: string; warning?: string }> {
+  try {
+    const workflowsUrl = `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows?per_page=100`;
+    const response = await fetchGithubWithTimeout(workflowsUrl, {
+      headers: githubHeaders(githubSettings.pat_token),
+    }, 12000);
+
+    if (!response.ok) {
+      const body = await response.text();
+      return {
+        idOrFile: workflowFile,
+        warning: `Could not list GitHub workflows (${response.status}): ${body.substring(0, 240)}`,
+      };
+    }
+
+    const data = await response.json() as { workflows?: GitHubWorkflowListItem[] };
+    const workflows = Array.isArray(data.workflows) ? data.workflows : [];
+    const names = expectedWorkflowNames(workflowFile);
+
+    const match = workflows.find((workflow) => {
+      const path = String(workflow.path || "");
+      const name = String(workflow.name || "");
+      return path.endsWith(`/${workflowFile}`) || path === workflowFile || names.includes(name);
+    });
+
+    if (!match) {
+      const available = workflows
+        .map((workflow) => `${workflow.name} (${workflow.path})`)
+        .slice(0, 8)
+        .join(", ");
+      return {
+        idOrFile: workflowFile,
+        warning: `GitHub workflow ${workflowFile} was not found in the default branch. Available workflows: ${available || "none"}`,
+      };
+    }
+
+    if (match.state && match.state !== "active") {
+      return {
+        idOrFile: String(match.id),
+        warning: `GitHub workflow ${match.name} exists but state is ${match.state}. Enable it in GitHub Actions if dispatch still fails.`,
+      };
+    }
+
+    return { idOrFile: String(match.id) };
+  } catch (error) {
+    return {
+      idOrFile: workflowFile,
+      warning: `Could not resolve GitHub workflow ID: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+
 function toBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) {
@@ -164,31 +237,59 @@ export async function dispatchWorkflow(
   workflowName: string = WORKFLOW_NAME
 ): Promise<DispatchResult> {
   try {
-    // Use workflow file name only (GitHub API expects just the filename)
     const workflowFile = workflowName || WORKFLOW_NAME;
-    const dispatchUrl = `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${workflowFile}/dispatches`;
-    console.log("[dispatchWorkflow] Dispatch URL:", dispatchUrl);
+    console.log("[dispatchWorkflow] Workflow file:", workflowFile);
     console.log("[dispatchWorkflow] Workflow inputs keys:", Object.keys(workflowInputs));
-    
+
     const requestBody = JSON.stringify({ ref: "master", inputs: workflowInputs });
     const payloadBytes = new TextEncoder().encode(requestBody).length;
     console.log("[dispatchWorkflow] Payload bytes:", payloadBytes);
 
-    const response = await fetchGithubWithTimeout(dispatchUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${githubSettings.pat_token}`,
-        Accept: "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-        "User-Agent": "AutomationSystem/1.0",
-      },
-      body: requestBody,
-    });
+    let workflowDispatchTarget = workflowFile;
+    let workflowResolveWarning: string | undefined;
 
-    const status = response.status;
-    const responseText = await response.text();
-    console.log("[dispatchWorkflow] Response status:", status, "body:", responseText.substring(0, 500));
-    
+    async function postDispatch(idOrFile: string): Promise<{ status: number; text: string }> {
+      const encodedWorkflow = encodeURIComponent(idOrFile);
+      const dispatchUrl = `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${encodedWorkflow}/dispatches`;
+      console.log("[dispatchWorkflow] Dispatch URL:", dispatchUrl);
+      const response = await fetchGithubWithTimeout(dispatchUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${githubSettings.pat_token}`,
+          Accept: "application/vnd.github.v3+json",
+          "Content-Type": "application/json",
+          "User-Agent": "AutomationSystem/1.0",
+        },
+        body: requestBody,
+      });
+      const status = response.status;
+      const text = await response.text();
+      console.log("[dispatchWorkflow] Response status:", status, "body:", text.substring(0, 500));
+      return { status, text };
+    }
+
+    let dispatchResponse = await postDispatch(workflowDispatchTarget);
+    let status = dispatchResponse.status;
+    let responseText = dispatchResponse.text;
+
+    if (
+      status !== 204 &&
+      status !== 201 &&
+      status !== 200 &&
+      (status === 404 || status === 422) &&
+      /workflow_dispatch|not found|does not exist/i.test(responseText)
+    ) {
+      const resolved = await resolveWorkflowDispatchTarget(githubSettings, workflowFile);
+      workflowResolveWarning = resolved.warning;
+      if (resolved.idOrFile !== workflowDispatchTarget) {
+        workflowDispatchTarget = resolved.idOrFile;
+        console.log("[dispatchWorkflow] Retrying dispatch with resolved workflow target:", workflowDispatchTarget);
+        dispatchResponse = await postDispatch(workflowDispatchTarget);
+        status = dispatchResponse.status;
+        responseText = dispatchResponse.text;
+      }
+    }
+
     if (status !== 204 && status !== 201 && status !== 200) {
       console.log("[dispatchWorkflow] Error response:", responseText);
       if (status === 422 && responseText.includes("inputs are too large")) {
@@ -201,16 +302,18 @@ export async function dispatchWorkflow(
           dispatchStatus: status,
         };
       }
+      const workflowHint = workflowResolveWarning
+        ? ` ${workflowResolveWarning}.`
+        : ` Confirm .github/workflows/${workflowFile} exists on master/main and contains workflow_dispatch.`;
       return {
         success: false,
         runId: null,
         runUrl: null,
-        error: `GitHub API error: ${status} - ${responseText}`,
+        error: `GitHub API error while dispatching ${workflowFile}: ${status} - ${responseText}.${workflowHint}`,
         payloadBytes,
         dispatchStatus: status,
       };
     }
-
     console.log("[dispatchWorkflow] Workflow dispatched, checking for run ID...");
 
     let runId: number | null = null;
@@ -221,7 +324,7 @@ export async function dispatchWorkflow(
       await sleep(waitMs);
       try {
         const runsRes = await fetchGithubWithTimeout(
-          `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${workflowFile}/runs?event=workflow_dispatch&branch=master&per_page=5`,
+          `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${workflowDispatchTarget}/runs?event=workflow_dispatch&branch=master&per_page=5`,
           {
             headers: {
               Authorization: `Bearer ${githubSettings.pat_token}`,

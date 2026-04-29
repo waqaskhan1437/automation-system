@@ -125,16 +125,20 @@ function formatPlatformLabel(platform: string): string {
 
 function getTotalScheduledAccounts(uploads: ScheduledUpload[]): number {
   return uploads.reduce((total, upload) => {
-    const count = upload.post_details?.scheduled_accounts.length || upload.scheduled_account_count || 1;
+    const count = Array.isArray(upload.post_details?.scheduled_accounts) ? upload.post_details.scheduled_accounts.length : upload.scheduled_account_count || 1;
     return total + count;
   }, 0);
 }
 
 function getPlatformCount(details: ScheduledPostDetails | null | undefined): number {
-  return details?.platform_configurations?.length || details?.scheduled_accounts?.reduce((total, account, index, array) => {
+  const platformConfigurations = Array.isArray(details?.platform_configurations) ? details.platform_configurations : [];
+  if (platformConfigurations.length > 0) return platformConfigurations.length;
+
+  const scheduledAccounts = Array.isArray(details?.scheduled_accounts) ? details.scheduled_accounts : [];
+  return scheduledAccounts.reduce((total, account, index, array) => {
     const alreadyCounted = array.findIndex((item) => item.platform === account.platform) !== index;
     return alreadyCounted || !account.platform ? total : total + 1;
-  }, 0) || 0;
+  }, 0);
 }
 
 function getNextScheduledAt(uploads: ScheduledUpload[]): string | null {
@@ -490,7 +494,7 @@ export default function ScheduledPostsModal({
                               </div>
                               <div>
                                 <div className="text-[10px] uppercase tracking-[0.2em] text-[#71717a] mb-2">Hashtags</div>
-                                {details?.hashtags && details.hashtags.length > 0 ? (
+                                {Array.isArray(details?.hashtags) && details.hashtags.length > 0 ? (
                                   <div className="flex flex-wrap gap-2">
                                     {details.hashtags.map((hashtag) => (
                                       <span key={`${upload.id}-${hashtag}`} className="text-xs px-2.5 py-1 rounded-full bg-[rgba(245,158,11,0.16)] text-amber-300">
@@ -513,7 +517,7 @@ export default function ScheduledPostsModal({
                           </div>
                         )}
 
-                        {details?.platform_configurations && details.platform_configurations.length > 0 && (
+                        {Array.isArray(details?.platform_configurations) && details.platform_configurations.length > 0 && (
                           <div className="mt-3 rounded-xl bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] p-3">
                             <div className="text-[10px] uppercase tracking-[0.2em] text-[#71717a] mb-2">Platform Delivery</div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -540,7 +544,7 @@ export default function ScheduledPostsModal({
                           </div>
                         )}
 
-                        {details?.account_configurations && details.account_configurations.length > 0 && (
+                        {Array.isArray(details?.account_configurations) && details.account_configurations.length > 0 && (
                           <div className="mt-3 rounded-xl bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] p-3">
                             <div className="text-[10px] uppercase tracking-[0.2em] text-[#71717a] mb-2">Account Overrides</div>
                             <div className="space-y-2">
