@@ -104,6 +104,9 @@ const ENDPOINTS = [
   ["Create PR", "POST", "/api/ai/git/pr"],
   ["Run Tests", "POST", "/api/ai/tests/run"],
   ["Audit", "GET", "/api/ai/audit"],
+  ["Monitor", "GET", "/api/ai/monitor"],
+  ["Snapshot", "GET", "/api/ai/snapshot"],
+  ["Browser Links", "GET", "/api/ai/browser-links"],
 ];
 
 function formatDate(value?: string | null): string {
@@ -284,6 +287,18 @@ export default function AiAccessPage() {
     ? `curl -X POST "${baseUrl}/api/ai/files/patch" \\\n  -H "Authorization: Bearer ${createdKey.key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"branch":"ai/example-change","message":"AI example change","path":"README.md","content":"Updated by AI Developer API"}'`
     : `curl -X POST "${baseUrl}/api/ai/files/patch" \\\n  -H "Authorization: Bearer <API_KEY>" \\\n  -H "Content-Type: application/json" \\\n  -d '{"branch":"ai/example-change","message":"AI example change","path":"README.md","content":"Updated by AI Developer API"}'`;
 
+  const browserSnapshotUrl = createdKey
+    ? `${baseUrl}/api/ai/snapshot?ai_token=${createdKey.key}`
+    : `${baseUrl}/api/ai/snapshot?ai_token=<API_KEY>`;
+
+  const browserMonitorUrl = createdKey
+    ? `${baseUrl}/api/ai/monitor?ai_token=${createdKey.key}`
+    : `${baseUrl}/api/ai/monitor?ai_token=<API_KEY>`;
+
+  const browserLinksUrl = createdKey
+    ? `${baseUrl}/api/ai/browser-links?ai_token=${createdKey.key}`
+    : `${baseUrl}/api/ai/browser-links?ai_token=<API_KEY>`;
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-5">
@@ -326,6 +341,9 @@ export default function AiAccessPage() {
             </button>
           </div>
           <code className="mt-4 block break-all rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white">{createdKey.key}</code>
+          <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
+            Browser/ChatGPT access ke liye Snapshot URL copy karein. Yeh GET-only monitoring link hai, is se AI manifest, automations, masked settings, logs aur project status read kar sakta hai. Write/patch actions ab bhi Authorization header ke sath rahenge.
+          </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <div className="mb-2 text-xs uppercase tracking-[0.16em] text-[#93c5fd]">Manifest Test</div>
@@ -333,9 +351,24 @@ export default function AiAccessPage() {
               <button onClick={() => void handleCopy("manifest curl", manifestCurl)} className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs text-white transition hover:bg-white/5">Copy Curl</button>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="mb-2 text-xs uppercase tracking-[0.16em] text-[#93c5fd]">ChatGPT Snapshot URL</div>
+              <pre className="whitespace-pre-wrap break-all text-xs leading-5 text-[#dbeafe]">{browserSnapshotUrl}</pre>
+              <button onClick={() => void handleCopy("snapshot URL", browserSnapshotUrl)} className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs text-white transition hover:bg-white/5">Copy Snapshot URL</button>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="mb-2 text-xs uppercase tracking-[0.16em] text-[#93c5fd]">Monitor URL</div>
+              <pre className="whitespace-pre-wrap break-all text-xs leading-5 text-[#dbeafe]">{browserMonitorUrl}</pre>
+              <button onClick={() => void handleCopy("monitor URL", browserMonitorUrl)} className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs text-white transition hover:bg-white/5">Copy Monitor URL</button>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <div className="mb-2 text-xs uppercase tracking-[0.16em] text-[#93c5fd]">Patch Example</div>
               <pre className="whitespace-pre-wrap break-all text-xs leading-5 text-[#dbeafe]">{patchExample}</pre>
               <button onClick={() => void handleCopy("patch curl", patchExample)} className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs text-white transition hover:bg-white/5">Copy Curl</button>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4 lg:col-span-2">
+              <div className="mb-2 text-xs uppercase tracking-[0.16em] text-[#93c5fd]">All Browser Links</div>
+              <pre className="whitespace-pre-wrap break-all text-xs leading-5 text-[#dbeafe]">{browserLinksUrl}</pre>
+              <button onClick={() => void handleCopy("browser links URL", browserLinksUrl)} className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs text-white transition hover:bg-white/5">Copy Browser Links URL</button>
             </div>
           </div>
         </section>

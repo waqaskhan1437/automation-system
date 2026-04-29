@@ -68,6 +68,26 @@ export function getBearerToken(request: Request): string | null {
     return accessToken.trim();
   }
 
+  // Browser-based AI tools and simple web fetchers often cannot send custom
+  // Authorization headers. For safe monitoring/debug access, allow API keys in
+  // the URL only for GET /api/ai/* endpoints. Mutating endpoints still require
+  // Authorization or X-Access-Token headers.
+  if (request.method === "GET") {
+    try {
+      const url = new URL(request.url);
+      if (url.pathname.startsWith("/api/ai")) {
+        const queryToken = url.searchParams.get("ai_token") ||
+          url.searchParams.get("access_token") ||
+          url.searchParams.get("token");
+        if (queryToken?.trim()) {
+          return queryToken.trim();
+        }
+      }
+    } catch {
+      // Ignore malformed URLs and fall through to unauthenticated.
+    }
+  }
+
   return null;
 }
 

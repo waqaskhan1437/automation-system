@@ -17,6 +17,7 @@ import {
   maskObjectSecrets,
   readRepositoryFile,
   requireAiScope,
+  canUseAiScope,
   textByteLength,
 } from "../services/ai-developer";
 
@@ -91,6 +92,8 @@ function buildAiManifest(request: Request, auth: AuthContext): Record<string, un
     auth: {
       type: "bearer",
       header: "Authorization: Bearer <api_key>",
+      browser_get_url_param: "?ai_token=<api_key> works only for GET /api/ai/* endpoints",
+      browser_note: "Use this for ChatGPT/browser monitoring links when custom headers are not available. Mutating POST/PUT/PATCH/DELETE calls still require Authorization headers.",
       current_user_id: auth.userId,
       api_key_id: auth.apiKeyId || null,
       api_key_permissions: auth.apiKeyPermissions || null,
@@ -120,10 +123,14 @@ function buildAiManifest(request: Request, auth: AuthContext): Record<string, un
       tests_run: `${baseUrl}/api/ai/tests/run`,
       audit: `${baseUrl}/api/ai/audit`,
       logs: `${baseUrl}/api/ai/logs`,
+      monitor: `${baseUrl}/api/ai/monitor`,
+      snapshot: `${baseUrl}/api/ai/snapshot`,
+      browser_links: `${baseUrl}/api/ai/browser-links`,
     },
     scopes: AI_DEVELOPER_SCOPES,
     safety: {
       secrets_are_masked_on_read: true,
+      query_token_is_get_only: true,
       recommended_code_flow: "branch -> commit -> test -> pull request -> deploy",
       direct_production_changes_should_use_admin_full: true,
     },
@@ -134,6 +141,7 @@ function buildInstructions(): string {
   return [
     "Automation System AI Developer API instructions:",
     "1. Authenticate with Authorization: Bearer <API_KEY>.",
+    "1a. Browser/ChatGPT tools that cannot send headers may use GET links with ?ai_token=<API_KEY>. This works only for read/monitoring GET endpoints.",
     "2. Start with /api/ai/manifest and /api/ai/project-map before editing anything.",
     "3. Use /api/ai/files/tree to discover files and /api/ai/files/read?path=... to inspect relevant files.",
     "4. Use /api/ai/files/patch with complete replacement file content. The endpoint creates or updates files through GitHub commits.",
@@ -177,6 +185,9 @@ function buildOpenApiSpec(request: Request): Record<string, unknown> {
       "/api/ai/tests/run": { post: { summary: "Dispatch validation workflow" } },
       "/api/ai/audit": { get: { summary: "AI change audit" } },
       "/api/ai/logs": { get: { summary: "Recent API logs" } },
+      "/api/ai/monitor": { get: { summary: "One-call monitoring view for browser-based AI tools" } },
+      "/api/ai/snapshot": { get: { summary: "Combined project, automation, settings, logs, and GitHub diagnostic bundle" } },
+      "/api/ai/browser-links": { get: { summary: "Copyable GET links that work with ChatGPT/browser tools using ai_token query auth" } },
     },
   };
 }
@@ -228,6 +239,143 @@ function buildProjectMap(): Record<string, unknown> {
   };
 }
 
+function maskUrlToken(value: string): string {
+  if (!value) return "";
+  if (value.length <= 12) return "********";
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function buildBrowserAccessLinks(request: Request, auth: AuthContext): Record<string, unknown> {
+  const baseUrl = getApiBaseUrl(request);
+  const tokenPlaceholder = "<API_KEY>";
+  const withToken = (endpoint: string) => `${baseUrl}${endpoint}${endpoint.includes("?") ? "&" : "?"}ai_token=${tokenPlaceholder}`;
+  return {
+    purpose: "Header-free GET links for ChatGPT/browser-based AI monitoring.",
+    active_token_preview: maskUrlToken(auth.token || ""),
+    important_warning: "Do not share real ai_token links publicly. Query tokens can appear in browser history/logs. Use short expiry keys and rotate/revoke after testing.",
+    write_limitation: "Query-token auth is read-only by design. POST/PUT/PATCH/DELETE still need Authorization header or X-Access-Token.",
+    links: {
+      snapshot: withToken("/api/ai/snapshot"),
+      monitor: withToken("/api/ai/monitor"),
+      manifest: withToken("/api/ai/manifest"),
+      instructions: withToken("/api/ai/instructions"),
+      openapi: withToken("/api/ai/openapi.json"),
+      project_map: withToken("/api/ai/project-map"),
+      automations: withToken("/api/ai/automations"),
+      settings_masked: withToken("/api/ai/settings"),
+      audit: withToken("/api/ai/audit?limit=50"),
+      logs: withToken("/api/ai/logs?limit=100"),
+      read_worker_index: withToken("/api/ai/files/read?path=worker/src/index.ts"),
+      read_ai_access_route: withToken("/api/ai/files/read?path=worker/src/routes/ai-access.ts"),
+      file_tree: withToken("/api/ai/files/tree"),
+    },
+    suggested_prompt_for_ai: "Open the snapshot URL first, inspect monitor/automations/logs, then ask for specific file read links when deeper code analysis is needed.",
+  };
+}
+
+async function getAutomationMonitor(env: Env, userId: number): Promise<Record<string, unknown>> {
+  const [automationCounts, recentAutomations, jobCounts, recentFailedJobs, runningJobs] = await Promise.all([
+    env.DB.prepare("SELECT status, type, COUNT(*) AS count FROM automations WHERE user_id = ? GROUP BY status, type ORDER BY status, type").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT id, name, type, status, schedule, next_run, last_run, updated_at FROM automations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 25").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT status, COUNT(*) AS count FROM jobs WHERE user_id = ? GROUP BY status ORDER BY status").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_url, j.created_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status = 'failed' ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.github_run_url, j.started_at, j.created_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status IN ('queued','pending','running') ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
+  ]);
+
+  return {
+    generated_at: new Date().toISOString(),
+    automation_counts: automationCounts.results || [],
+    recent_automations: recentAutomations.results || [],
+    job_counts: jobCounts.results || [],
+    recent_failed_jobs: recentFailedJobs.results || [],
+    running_or_queued_jobs: runningJobs.results || [],
+  };
+}
+
+async function getRecentAiLogs(env: Env, userId: number): Promise<Record<string, unknown>> {
+  const [audit, apiLogs] = await Promise.all([
+    env.DB.prepare("SELECT id, api_key_id, action, target, status, request_payload, result_payload, created_at FROM ai_change_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 50").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT id, api_key_id, endpoint, method, status_code, ip_address, user_agent, duration_ms, error_message, created_at FROM api_audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 100").bind(userId).all<Record<string, unknown>>(),
+  ]);
+
+  return {
+    ai_changes: audit.results || [],
+    api_requests: apiLogs.results || [],
+  };
+}
+
+async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): Promise<Record<string, unknown>> {
+  const url = new URL(request.url);
+  const snapshot: Record<string, unknown> = {
+    success: true,
+    generated_at: new Date().toISOString(),
+    access_mode: url.searchParams.has("ai_token") || url.searchParams.has("access_token") || url.searchParams.has("token") ? "query-token-get" : "header-auth",
+    token_preview: maskUrlToken(auth.token || ""),
+    browser_access: buildBrowserAccessLinks(request, auth),
+    manifest: buildAiManifest(request, auth),
+    permissions: {
+      scopes: auth.apiKeyScopes || [],
+      permissions: auth.apiKeyPermissions || null,
+      can_read_files: canUseAiScope(auth, "files.read"),
+      can_write_files: canUseAiScope(auth, "files.write"),
+      can_read_automations: canUseAiScope(auth, "automation.read"),
+      can_write_automations: canUseAiScope(auth, "automation.write"),
+      can_read_settings: canUseAiScope(auth, "settings.read"),
+      can_read_logs: canUseAiScope(auth, "logs.read"),
+    },
+  };
+
+  if (canUseAiScope(auth, "project.read")) {
+    snapshot.project_map = buildProjectMap();
+  }
+
+  if (canUseAiScope(auth, "automation.read")) {
+    snapshot.monitor = await getAutomationMonitor(env, auth.userId);
+  } else {
+    snapshot.monitor = { skipped: true, reason: "Missing automation.read scope" };
+  }
+
+  if (canUseAiScope(auth, "settings.read")) {
+    snapshot.settings = await loadMaskedSettings(env, auth.userId);
+  } else {
+    snapshot.settings = { skipped: true, reason: "Missing settings.read scope" };
+  }
+
+  if (canUseAiScope(auth, "logs.read")) {
+    snapshot.recent_logs = await getRecentAiLogs(env, auth.userId);
+  } else {
+    snapshot.recent_logs = { skipped: true, reason: "Missing logs.read scope" };
+  }
+
+  if (canUseAiScope(auth, "files.read")) {
+    const githubSettings = await getGithubSettingsForUser(env, auth.userId);
+    if (githubSettings) {
+      try {
+        const repo = await getRepositoryInfo(githubSettings);
+        snapshot.github = {
+          owner: githubSettings.repo_owner,
+          repo: githubSettings.repo_name,
+          full_name: repo.full_name || `${githubSettings.repo_owner}/${githubSettings.repo_name}`,
+          default_branch: repo.default_branch || "master",
+          html_url: repo.html_url || null,
+        };
+        if (url.searchParams.get("include_tree") === "1") {
+          const tree = await listRepositoryFiles(githubSettings, url.searchParams.get("ref") || undefined);
+          const files = Array.isArray((tree as any).files) ? (tree as any).files : [];
+          snapshot.file_tree = { ...(tree as any), files: files.slice(0, 500), note: files.length > 500 ? "Showing first 500 files. Use /api/ai/files/tree for full tree." : undefined };
+        }
+      } catch (error) {
+        snapshot.github = { error: error instanceof Error ? error.message : String(error) };
+      }
+    } else {
+      snapshot.github = { configured: false, message: "GitHub settings are not configured" };
+    }
+  } else {
+    snapshot.github = { skipped: true, reason: "Missing files.read scope" };
+  }
+
+  return snapshot;
+}
 function jsonTextResponse(text: string): Response {
   return new Response(text, {
     status: 200,
@@ -393,6 +541,25 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     });
   }
 
+  if (path === "/api/ai/browser-links" && method === "GET") {
+    const denied = requireAiScope(auth, "project.read");
+    if (denied) return denied;
+    return jsonResponse({ success: true, data: buildBrowserAccessLinks(request, auth) });
+  }
+
+  if (path === "/api/ai/monitor" && method === "GET") {
+    const denied = requireAiScope(auth, "automation.read");
+    if (denied) return denied;
+    const data = await getAutomationMonitor(env, auth.userId);
+    return jsonResponse({ success: true, data });
+  }
+
+  if (path === "/api/ai/snapshot" && method === "GET") {
+    const denied = requireAiScope(auth, "project.read");
+    if (denied) return denied;
+    const data = await buildAiSnapshot(request, env, auth);
+    return jsonResponse({ success: true, data });
+  }
   if (path === "/api/ai/project-map" && method === "GET") {
     const denied = requireAiScope(auth, "project.read");
     if (denied) return denied;

@@ -131,3 +131,33 @@ AI_DEVELOPER_ACCESS_REPORT.md
 - Worker remains deployed before Vercel through `deploy-production.yml`.
 - The risky automatic D1 migration step was removed from deployment workflow to avoid duplicate-column failures on existing databases.
 - Runtime schema upgrade handles this feature when API key/AI endpoints are used.
+
+## ChatGPT / Browser-compatible monitoring access added
+
+Some AI tools, including browser-based assistants, cannot send custom `Authorization` headers. This package now supports a safe read-only URL mode for AI monitoring:
+
+```txt
+GET /api/ai/snapshot?ai_token=<API_KEY>
+GET /api/ai/monitor?ai_token=<API_KEY>
+GET /api/ai/browser-links?ai_token=<API_KEY>
+```
+
+### What this enables
+
+- ChatGPT/browser AI can open a single Snapshot URL and read project manifest, permissions, automation health, recent jobs, masked settings, recent logs, and GitHub configuration status.
+- ChatGPT/browser AI can open Monitor URL to quickly see which automations/jobs are active, failed, queued, or running.
+- Browser Links endpoint returns copyable GET links for manifest, project map, automations, logs, masked settings, file reads, and file tree.
+
+### Safety behavior
+
+- Query-token access works only for `GET /api/ai/*` endpoints.
+- Mutating actions such as file patch, automation create/update/delete, settings update, Git branch/PR, tests, and deploy still require `Authorization: Bearer <API_KEY>` or `X-Access-Token` headers.
+- Use short-expiry keys for ChatGPT/browser monitoring links and rotate/revoke the key after testing.
+- Secrets remain masked on read.
+
+### Recommended prompt for ChatGPT/browser AI
+
+```txt
+Open this snapshot URL first and analyze my automation system. Check active automations, failed jobs, recent logs, masked settings, GitHub repo status, and tell me what bugs or deployment issues you find. Then ask me for specific file read links only if deeper code analysis is needed.
+```
+
