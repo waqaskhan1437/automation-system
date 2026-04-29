@@ -13,7 +13,7 @@ echo ========================================
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $tmp = Join-Path $env:TEMP 'automation-local-runner-bootstrap.ps1'; try { Invoke-WebRequest -Uri '%BOOTSTRAP_URL%' -OutFile $tmp -UseBasicParsing; $bootstrapPath = $tmp } catch { if (Test-Path -LiteralPath '%LOCAL_BOOTSTRAP%') { $bootstrapPath = '%LOCAL_BOOTSTRAP%' } else { throw } }; & $bootstrapPath -InstallRoot '%INSTALL_ROOT%' -SourceDir '%SOURCE_DIR%'"
+  "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $tmp = Join-Path $env:TEMP 'automation-local-runner-bootstrap.ps1'; $cacheBustedUrl = '%BOOTSTRAP_URL%' + '?ts=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); try { Invoke-WebRequest -Uri $cacheBustedUrl -OutFile $tmp -UseBasicParsing; $bootstrapPath = $tmp } catch { if (Test-Path -LiteralPath '%LOCAL_BOOTSTRAP%') { $bootstrapPath = '%LOCAL_BOOTSTRAP%' } else { throw } }; & $bootstrapPath -InstallRoot '%INSTALL_ROOT%' -SourceDir '%SOURCE_DIR%'"
 
 if errorlevel 1 (
   echo.

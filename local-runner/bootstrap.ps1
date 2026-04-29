@@ -106,7 +106,9 @@ function Get-DefaultConfig {
 function Get-ManifestJson {
     param([string]$Url)
 
-    return Invoke-RestMethod -Uri $Url -UseBasicParsing
+    $separator = if ($Url -like "*?*") { "&" } else { "?" }
+    $cacheBustedUrl = "$Url${separator}ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    return Invoke-RestMethod -Uri $cacheBustedUrl -UseBasicParsing
 }
 
 function Get-RawBaseUrl {
@@ -164,6 +166,8 @@ function Download-ManifestFile {
     )
 
     $url = "$RawBaseUrl/$($Entry.Source)"
+    $separator = if ($url -like "*?*") { "&" } else { "?" }
+    $url = "$url${separator}ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
     $tempFile = "$($Entry.AbsoluteTarget).download"
     Ensure-Directory (Split-Path -Parent $Entry.AbsoluteTarget)
     Invoke-WebRequest -Uri $url -OutFile $tempFile -UseBasicParsing
