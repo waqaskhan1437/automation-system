@@ -1,9 +1,9 @@
-const https = require("https");
 const fs = require("fs");
 const path = require("path");
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 const FETCH_TIMEOUT_MS = 30000;
+const TITLE_PLATFORMS = new Set(["youtube", "tiktok", "tiktok_business"]);
 
 async function timedFetch(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -22,21 +22,250 @@ async function timedFetch(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
 }
 
 function getRandomFromArray(arr) {
-  if (!arr || arr.length === 0) return "";
-  return arr[Math.floor(Math.random() * arr.length)];
+  if (!Array.isArray(arr) || arr.length === 0) return "";
+  return arr[Math.floor(Math.random() * arr.length)] || "";
+}
+
+function parsePositiveInteger(value, fallback = null) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function cleanString(value) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function normalizeHashtags(value) {
   if (!Array.isArray(value)) return [];
 
   return value
-    .map((item) => typeof item === "string" ? item.trim() : "")
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
     .map((item) => {
       if (!item) return "";
       const normalized = item.replace(/\s+/g, "").replace(/^#+/, "");
       return normalized ? `#${normalized}` : "";
     })
     .filter((item, index, array) => item && array.indexOf(item) === index);
+}
+
+function parseTimeValue(value) {
+  const raw = cleanString(value);
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+
+  return {
+    hour,
+    minute,
+    normalized: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+  };
+}
+
+function normalizeTimezone(value) {
+  const candidate = cleanString(value) || "UTC";
+  try {
+    Intl.DateTimeFormat("en-US", {
+      timeZone: candidate,
+      year: "numeric",
+    }).format(new Date());
+    return candidate;
+  } catch {
+    return "UTC";
+  }
+}
+
+function getZonedLocalDateTimeParts(date, timezone) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const values = Object.create(null);
+  for (const part of formatter.formatToParts(date)) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+
+  return {
+    year: Number.parseInt(values.year, 10),
+    month: Number.parseInt(values.month, 10),
+    day: Number.parseInt(values.day, 10),
+    hour: Number.parseInt(values.hour, 10),
+    minute: Number.parseInt(values.minute, 10),
+    second: Number.parseInt(values.second, 10),
+  };
+}
+
+function buildScheduledUtcDate(dateText, timeText, timezone) {
+  const dateMatch = cleanString(dateText).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeParts = parseTimeValue(timeText);
+  if (!dateMatch || !timeParts) {
+    return null;
+  }
+
+  const year = Number.parseInt(dateMatch[1], 10);
+  const month = Number.parseInt(dateMatch[2], 10);
+  const day = Number.parseInt(dateMatch[3], 10);
+  const desiredLocalTimestamp = Date.UTC(year, month - 1, day, timeParts.hour, timeParts.minute);
+
+  let guess = new Date(desiredLocalTimestamp);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const current = getZonedLocalDateTimeParts(guess, timezone);
+    const currentLocalTimestamp = Date.UTC(current.year, current.month - 1, current.day, current.hour, current.minute);
+    const diffMs = desiredLocalTimestamp - currentLocalTimestamp;
+
+    if (diffMs === 0) {
+      return guess;
+    }
+
+    guess = new Date(guess.getTime() + diffMs);
+  }
+
+  const resolved = getZonedLocalDateTimeParts(guess, timezone);
+  if (
+    resolved.year === year
+    && resolved.month === month
+    && resolved.day === day
+    && resolved.hour === timeParts.hour
+    && resolved.minute === timeParts.minute
+  ) {
+    return guess;
+  }
+
+  return null;
+}
+
+function roundUpToNextMinute(date) {
+  const next = new Date(date.getTime());
+  next.setUTCSeconds(0, 0);
+  if (next.getTime() < date.getTime()) {
+    next.setUTCMinutes(next.getUTCMinutes() + 1);
+  }
+  return next;
+}
+
+function ensureMinimumScheduledLead(date, minimumMinutes = 1) {
+  const minimum = roundUpToNextMinute(new Date(Date.now() + minimumMinutes * 60_000));
+  return date.getTime() <= minimum.getTime() ? minimum : date;
+}
+
+function getDelayMinutes(config) {
+  if (cleanString(config.delay_minutes) === "custom") {
+    return Math.min(1440, Math.max(1, parsePositiveInteger(config.delay_minutes_custom, 60)));
+  }
+  return Math.min(1440, Math.max(1, parsePositiveInteger(config.delay_minutes, 60)));
+}
+
+function getStaggerMinutes(config) {
+  return Math.max(1, parsePositiveInteger(config.post_stagger_minutes, 15));
+}
+
+function buildPublishingPlan(config, socialAccounts) {
+  const autoPublish = config.auto_publish === true;
+  const publishMode = cleanString(config.publish_mode) || (autoPublish ? "delay" : "immediate");
+  const publishTimezone = normalizeTimezone(config.postforme_schedule_timezone || config.schedule_timezone);
+  const delayMinutes = getDelayMinutes(config);
+  const staggerMinutes = getStaggerMinutes(config);
+  const scheduleDate = cleanString(config.schedule_date);
+  const scheduleTime = cleanString(config.schedule_time);
+  const accountStaggerEnabled = config.postforme_account_stagger_enabled === true;
+
+  if (!autoPublish || !Array.isArray(socialAccounts) || socialAccounts.length === 0) {
+    return {
+      autoPublish: false,
+      publishMode,
+      postStatus: "pending",
+      scheduledAt: null,
+      scheduledAccounts: [],
+      publishTimezone,
+    };
+  }
+
+  if (publishMode === "scheduled" && scheduleDate && scheduleTime) {
+    const scheduledDate = buildScheduledUtcDate(scheduleDate, scheduleTime, publishTimezone);
+    if (!scheduledDate) {
+      throw new Error("Invalid scheduled publish date/time");
+    }
+
+    return {
+      autoPublish: true,
+      publishMode,
+      postStatus: "scheduled",
+      scheduledAt: ensureMinimumScheduledLead(scheduledDate).toISOString(),
+      scheduledAccounts: [],
+      publishTimezone,
+    };
+  }
+
+  if (publishMode === "scheduled") {
+    return {
+      autoPublish: true,
+      publishMode,
+      postStatus: "scheduled",
+      scheduledAt: ensureMinimumScheduledLead(new Date(Date.now() + delayMinutes * 60 * 1000)).toISOString(),
+      scheduledAccounts: [],
+      publishTimezone,
+    };
+  }
+
+  if (publishMode === "delay") {
+    return {
+      autoPublish: true,
+      publishMode,
+      postStatus: "scheduled",
+      scheduledAt: ensureMinimumScheduledLead(new Date(Date.now() + delayMinutes * 60 * 1000)).toISOString(),
+      scheduledAccounts: [],
+      publishTimezone,
+    };
+  }
+
+  if (publishMode === "stagger" && socialAccounts.length > 1) {
+    if (accountStaggerEnabled) {
+      return {
+        autoPublish: true,
+        publishMode,
+        postStatus: "scheduled",
+        scheduledAt: ensureMinimumScheduledLead(new Date(Date.now())).toISOString(),
+        scheduledAccounts: socialAccounts.map((accountId, index) => ({
+          id: accountId,
+          scheduled_at: ensureMinimumScheduledLead(new Date(Date.now() + index * staggerMinutes * 60 * 1000)).toISOString(),
+        })),
+        publishTimezone,
+      };
+    }
+
+    return {
+      autoPublish: true,
+      publishMode,
+      postStatus: "scheduled",
+      scheduledAt: ensureMinimumScheduledLead(new Date(Date.now() + staggerMinutes * 60 * 1000)).toISOString(),
+      scheduledAccounts: [],
+      publishTimezone,
+    };
+  }
+
+  return {
+    autoPublish: true,
+    publishMode,
+    postStatus: "posted",
+    scheduledAt: null,
+    scheduledAccounts: [],
+    publishTimezone,
+  };
 }
 
 async function fetchSelectedPostformeAccounts(apiKey, accountIds) {
@@ -52,8 +281,8 @@ async function fetchSelectedPostformeAccounts(apiKey, accountIds) {
 
   const response = await timedFetch(`https://api.postforme.dev/v1/social-accounts?${params.toString()}`, {
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
-    }
+      Authorization: `Bearer ${apiKey}`,
+    },
   });
 
   if (!response.ok) {
@@ -70,18 +299,22 @@ function buildPlatformConfigurations(selectedAccounts, title) {
     return {};
   }
 
-  const platforms = Array.from(new Set(
-    (Array.isArray(selectedAccounts) ? selectedAccounts : [])
-      .map((account) => typeof account?.platform === "string" ? account.platform.trim() : "")
-      .filter(Boolean)
-  ));
+  const platforms = Array.from(
+    new Set(
+      (Array.isArray(selectedAccounts) ? selectedAccounts : [])
+        .map((account) => cleanString(account && account.platform))
+        .filter(Boolean)
+    )
+  );
 
   return platforms.reduce((accumulator, platform) => {
-    if (platform === "youtube" || platform === "tiktok" || platform === "tiktok_business") {
-      accumulator[platform] = { title };
-      if (platform === "tiktok") {
-        accumulator.tiktok_business = { title };
-      }
+    if (!TITLE_PLATFORMS.has(platform)) {
+      return accumulator;
+    }
+
+    accumulator[platform] = { title };
+    if (platform === "tiktok") {
+      accumulator.tiktok_business = { title };
     }
     return accumulator;
   }, {});
@@ -94,16 +327,16 @@ async function uploadMediaToPostforme(apiKey, filePath) {
 
   const createUrlBody = JSON.stringify({
     filename: fileName,
-    content_type: "video/mp4"
+    content_type: "video/mp4",
   });
 
   const createUrlResponse = await timedFetch("https://api.postforme.dev/v1/media/create-upload-url", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
     },
-    body: createUrlBody
+    body: createUrlBody,
   });
 
   if (!createUrlResponse.ok) {
@@ -112,28 +345,28 @@ async function uploadMediaToPostforme(apiKey, filePath) {
   }
 
   const urlData = await createUrlResponse.json();
-  const { upload_url, media_url } = urlData;
+  const { upload_url: uploadUrl, media_url: mediaUrl } = urlData;
 
-  const uploadResponse = await timedFetch(upload_url, {
+  const uploadResponse = await timedFetch(uploadUrl, {
     method: "PUT",
     headers: { "Content-Type": "video/mp4" },
-    body: fileData
+    body: fileData,
   }, 120000);
 
   if (!uploadResponse.ok) {
     throw new Error(`Failed to upload media: ${uploadResponse.status}`);
   }
 
-  console.log(`Media uploaded to PostForMe: ${media_url}`);
-  return media_url;
+  console.log(`Media uploaded to PostForMe: ${mediaUrl}`);
+  return mediaUrl;
 }
 
 async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations) {
   const postBody = {
-    caption: caption,
+    caption,
     media: [{ url: mediaUrl }],
     social_accounts: socialAccounts,
-    isDraft: isDraft
+    isDraft,
   };
 
   if (scheduledAt && !isDraft) {
@@ -146,10 +379,10 @@ async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, sc
   const response = await timedFetch("https://api.postforme.dev/v1/social-posts", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify(postBody)
+    body: JSON.stringify(postBody),
   });
 
   if (!response.ok) {
@@ -160,52 +393,10 @@ async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, sc
   return await response.json();
 }
 
-async function notifyWorker(workerUrl, jobId, status, outputData) {
-  try {
-    const webhookBody = JSON.stringify({
-      job_id: parseInt(jobId),
-      status: status,
-      output_data: JSON.stringify(outputData)
-    });
-
-    const url = new URL(workerUrl);
-    await new Promise((resolve, reject) => {
-      const req = https.request({
-        hostname: url.hostname,
-        port: 443,
-        path: url.pathname,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(webhookBody)
-        }
-      }, (res) => {
-        let data = "";
-        res.on("data", c => data += c);
-        res.on("end", () => {
-          console.log(`Worker notified: ${res.statusCode}`);
-          resolve();
-        });
-      });
-      req.setTimeout(FETCH_TIMEOUT_MS, () => {
-        req.destroy(new Error(`Worker notify timeout after ${FETCH_TIMEOUT_MS}ms`));
-      });
-      req.on("error", reject);
-      req.write(webhookBody);
-      req.end();
-    });
-  } catch (err) {
-    console.error(`Failed to notify worker: ${err.message}`);
-  }
-}
-
 async function main() {
   console.log("=== PostForMe Posting ===");
 
   const apiKeyFromEnv = process.env.POSTFORME_API_KEY;
-  const workerUrl = process.env.WORKER_WEBHOOK_URL;
-  const jobId = process.env.JOB_ID;
-  // Litterbox URL passed from workflow env
   const litterboxUrl = process.env.LITTERBOX_URL;
 
   let config = {};
@@ -214,29 +405,25 @@ async function main() {
     if (fs.existsSync(configPath)) {
       config = JSON.parse(fs.readFileSync(configPath, "utf8"));
     }
-  } catch (e) {
+  } catch {
     console.log("Could not read config file");
   }
 
-  const apiKey = apiKeyFromEnv || (typeof config.postforme_api_key === "string" ? config.postforme_api_key.trim() : "");
-
+  const apiKey = apiKeyFromEnv || cleanString(config.postforme_api_key);
   if (!apiKey) {
-    console.log("No POSTFORME_API_KEY â€” skipping PostForMe");
+    console.log("No POSTFORME_API_KEY - skipping PostForMe");
     process.exit(0);
   }
 
-  const autoPublish = config.auto_publish || false;
-  const publishMode = config.publish_mode || "immediate";
-  const socialAccounts = config.postforme_account_ids || [];
+  const autoPublish = config.auto_publish === true;
+  const socialAccounts = Array.isArray(config.postforme_account_ids) ? config.postforme_account_ids : [];
   const topTaglines = Array.isArray(config.top_taglines) ? config.top_taglines : [];
   const bottomTaglines = Array.isArray(config.bottom_taglines) ? config.bottom_taglines : [];
   const titles = Array.isArray(config.titles) ? config.titles : [];
   const descriptions = Array.isArray(config.descriptions) ? config.descriptions : [];
   const hashtags = Array.isArray(config.hashtags) ? config.hashtags : [];
-  const scheduleDate = config.schedule_date || "";
-  const scheduleTime = config.schedule_time || "";
-  let selectedAccountDetails = [];
 
+  let selectedAccountDetails = [];
   if (autoPublish && socialAccounts.length > 0) {
     try {
       selectedAccountDetails = await fetchSelectedPostformeAccounts(apiKey, socialAccounts);
@@ -245,7 +432,6 @@ async function main() {
     }
   }
 
-  // Build caption
   const topTagline = getRandomFromArray(topTaglines);
   const bottomTagline = getRandomFromArray(bottomTaglines);
   const title = getRandomFromArray(titles);
@@ -257,9 +443,7 @@ async function main() {
     .join("\n\n");
   const platformConfigurations = buildPlatformConfigurations(selectedAccountDetails, title || "");
 
-  // Get media URL — prefer Litterbox, fallback to PostForMe upload
   let mediaUrl = null;
-
   if (litterboxUrl && litterboxUrl.startsWith("https://")) {
     console.log(`Using Litterbox URL: ${litterboxUrl}`);
     mediaUrl = litterboxUrl;
@@ -275,75 +459,112 @@ async function main() {
 
   let livePostId = null;
   let draftPostId = null;
+  let postStatus = "pending";
   let scheduledAt = null;
+  let scheduledAccounts = [];
+  let livePostIds = [];
 
   try {
-    // STEP A: Publish to selected accounts (if auto_publish enabled)
-    if (autoPublish && socialAccounts.length > 0) {
-      console.log(`Publishing to ${socialAccounts.length} accounts...`);
+    const publishingPlan = buildPublishingPlan(config, socialAccounts);
+    postStatus = publishingPlan.postStatus;
+    scheduledAt = publishingPlan.scheduledAt;
+    scheduledAccounts = publishingPlan.scheduledAccounts;
 
-      if (publishMode === "scheduled" && scheduleDate && scheduleTime) {
-        scheduledAt = new Date(`${scheduleDate}T${scheduleTime}:00`).toISOString();
-      } else if (publishMode === "offset") {
-        // offset: post 1-6 hours from now
-        const offsetHours = Math.floor(Math.random() * 5) + 1;
-        const offsetDate = new Date(Date.now() + offsetHours * 60 * 60 * 1000);
-        scheduledAt = offsetDate.toISOString();
+    if (publishingPlan.autoPublish) {
+      console.log(`Publishing to ${socialAccounts.length} account(s) with mode ${publishingPlan.publishMode}...`);
+
+      if (publishingPlan.publishMode === "stagger" && scheduledAccounts.length > 0) {
+        for (const scheduledAccount of scheduledAccounts) {
+          const livePost = await createPostformePost(
+            apiKey,
+            mediaUrl,
+            caption,
+            [scheduledAccount.id],
+            scheduledAccount.scheduled_at,
+            false,
+            platformConfigurations
+          );
+
+          const createdId = livePost && (livePost.id || (livePost.data && livePost.data.id)) || null;
+          livePostIds.push(createdId);
+        }
+
+        livePostId = livePostIds.find(Boolean) || null;
+      } else {
+        const livePost = await createPostformePost(
+          apiKey,
+          mediaUrl,
+          caption,
+          socialAccounts,
+          scheduledAt,
+          false,
+          platformConfigurations
+        );
+        livePostId = livePost && (livePost.id || (livePost.data && livePost.data.id)) || null;
+        livePostIds = livePostId ? [livePostId] : [];
       }
-
-      const livePost = await createPostformePost(
-        apiKey, mediaUrl, caption, socialAccounts, scheduledAt, false, platformConfigurations
-      );
-      livePostId = livePost?.id || livePost?.data?.id;
-      console.log(`Live post created: ${livePostId}`);
     } else {
-      console.log("Auto-publish disabled or no accounts selected — skipping live post");
+      console.log("Auto-publish disabled or no accounts selected - skipping live post");
     }
 
-    // STEP B: Always create a draft (for review queue — no accounts, isDraft: true)
     console.log("Creating draft post for review queue...");
     const draftPost = await createPostformePost(
-      apiKey, mediaUrl, caption, [], null, true
+      apiKey,
+      mediaUrl,
+      caption,
+      [],
+      null,
+      true
     );
-    draftPostId = draftPost?.id || draftPost?.data?.id;
+    draftPostId = draftPost && (draftPost.id || (draftPost.data && draftPost.data.id)) || null;
     console.log(`Draft post created: ${draftPostId}`);
-
   } catch (err) {
     console.error(`PostForMe error: ${err.message}`);
-    // Don't exit — still save what we have
   }
+
+  const scheduledAccountMetadata = socialAccounts.map((accountId, index) => {
+    const account = selectedAccountDetails.find((item) => item && item.id === accountId) || null;
+    const scheduledRecord = scheduledAccounts.find((item) => item.id === accountId) || null;
+    const perAccountPostId = scheduledRecord
+      ? livePostIds[index] || null
+      : livePostId || null;
+
+    return {
+      id: accountId,
+      platform: cleanString(account && account.platform),
+      username: cleanString(account && account.username) || accountId,
+      scheduled_at: scheduledRecord ? scheduledRecord.scheduled_at : scheduledAt,
+      postforme_id: perAccountPostId,
+    };
+  });
+
+  const platformConfigurationMetadata = Object.entries(platformConfigurations).map(([platform, configuration]) => ({
+    platform,
+    title: cleanString(configuration && configuration.title),
+    caption,
+  }));
 
   const outputData = {
     success: true,
     media_url: mediaUrl,
     live_post_id: livePostId,
+    live_post_ids: livePostIds.filter(Boolean),
     draft_post_id: draftPostId,
     platforms: socialAccounts.length,
-    caption: caption,
+    caption,
+    post_status: postStatus,
+    scheduled_at: scheduledAt,
     post_metadata: {
       title: title || "",
       description: description || "",
       hashtags: normalizedHashtags,
-      caption: caption,
+      caption,
       top_tagline: topTagline || "",
       bottom_tagline: bottomTagline || "",
-      schedule_mode: publishMode,
-      scheduled_accounts: socialAccounts.map((accountId) => {
-        const account = selectedAccountDetails.find((item) => item && item.id === accountId) || null;
-        return {
-          id: accountId,
-          platform: account?.platform || "",
-          username: account?.username || accountId,
-          scheduled_at: scheduledAt || null,
-          postforme_id: livePostId || null
-        };
-      }),
-      platform_configurations: Object.entries(platformConfigurations).map(([platform, configuration]) => ({
-        platform,
-        title: configuration?.title || "",
-        caption
-      }))
-    }
+      schedule_mode: cleanString(config.publish_mode) || (autoPublish ? "delay" : "immediate"),
+      scheduled_accounts: scheduledAccountMetadata,
+      platform_configurations: platformConfigurationMetadata,
+    },
   };
 
   fs.writeFileSync(
@@ -351,14 +572,21 @@ async function main() {
     JSON.stringify(outputData)
   );
 
-  // notifyWorker removed — webhook.final() in main.js handles the single webhook call
-  // post_result.json (written above) is read by main.js and forwarded via webhook.final()
-
   console.log("=== SUCCESS ===");
   process.exit(0);
 }
 
-main().catch(err => {
-  console.error("Fatal error:", err.message);
-  process.exit(1);
-});
+module.exports = {
+  buildPublishingPlan,
+  buildScheduledUtcDate,
+  ensureMinimumScheduledLead,
+  normalizeTimezone,
+  parseTimeValue,
+};
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("Fatal error:", err.message);
+    process.exit(1);
+  });
+}

@@ -139,6 +139,119 @@ function extractStoredPostMetadata(record: Record<string, unknown> | null | unde
   return null;
 }
 
+function parseStoredPostMetadataObject(rawMetadata: string | null | undefined): Record<string, unknown> | null {
+  if (!rawMetadata) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawMetadata);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function cleanDerivedString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function pickEarliestScheduledAt(values: Array<string | null | undefined>): string | null {
+  const parsed = values
+    .map((value) => cleanDerivedString(value))
+    .filter((value): value is string => Boolean(value))
+    .map((value) => ({ value, time: Date.parse(value) }))
+    .filter((entry) => Number.isFinite(entry.time))
+    .sort((a, b) => a.time - b.time);
+
+  return parsed[0]?.value || null;
+}
+
+function extractScheduledAtFromMetadata(rawMetadata: string | null | undefined): string | null {
+  const metadata = parseStoredPostMetadataObject(rawMetadata);
+  if (!metadata) {
+    return null;
+  }
+
+  const directScheduledAt = cleanDerivedString(metadata.scheduled_at) || cleanDerivedString(metadata.scheduledAt);
+  if (directScheduledAt) {
+    return directScheduledAt;
+  }
+
+  const scheduledAccounts = Array.isArray(metadata.scheduled_accounts)
+    ? metadata.scheduled_accounts
+    : [];
+
+  return pickEarliestScheduledAt(
+    scheduledAccounts.map((account) => {
+      if (!account || typeof account !== "object" || Array.isArray(account)) {
+        return null;
+      }
+
+      const record = account as Record<string, unknown>;
+      return cleanDerivedString(record.scheduled_at) || cleanDerivedString(record.scheduledAt);
+    })
+  );
+}
+
+function normalizeDerivedPostStatus(value: unknown): "pending" | "scheduled" | "posted" | null {
+  const normalized = cleanDerivedString(value)?.toLowerCase();
+  if (normalized === "pending" || normalized === "scheduled" || normalized === "posted") {
+    return normalized;
+  }
+  return null;
+}
+
+function deriveUploadPostState(
+  uploadRecord: Record<string, unknown>,
+  mergedOutputData: Record<string, unknown> | null,
+  storedPostMetadata: string | null,
+  livePostId: string | null,
+  draftPostId: string | null
+): { postStatus: "pending" | "scheduled" | "posted"; scheduledAt: string | null } {
+  const scheduledAt = pickEarliestScheduledAt([
+    cleanDerivedString(uploadRecord.scheduled_at) || cleanDerivedString(uploadRecord.scheduledAt),
+    cleanDerivedString(mergedOutputData?.scheduled_at) || cleanDerivedString(mergedOutputData?.scheduledAt),
+    extractScheduledAtFromMetadata(storedPostMetadata),
+  ]);
+
+  const explicitStatus = normalizeDerivedPostStatus(uploadRecord.post_status)
+    || normalizeDerivedPostStatus(mergedOutputData?.post_status);
+
+  if (explicitStatus) {
+    return {
+      postStatus: explicitStatus === "scheduled" && !scheduledAt ? "posted" : explicitStatus,
+      scheduledAt,
+    };
+  }
+
+  if (scheduledAt) {
+    return {
+      postStatus: "scheduled",
+      scheduledAt,
+    };
+  }
+
+  if (livePostId || draftPostId) {
+    return {
+      postStatus: "posted",
+      scheduledAt: null,
+    };
+  }
+
+  return {
+    postStatus: "pending",
+    scheduledAt: null,
+  };
+}
+
 type GithubContentFile = {
   download_url?: string;
 };
@@ -1202,26 +1315,57 @@ export default {
             "SELECT id FROM video_uploads WHERE user_id = ? AND job_id = ? AND media_url = ? LIMIT 1"
           ).bind(jobRecord.user_id, jobId, mediaUrl).first<{ id: number }>();
 
-          // If workflow already posted (has livePostId or draftPostId), mark as posted to avoid double-posting
-          const alreadyPosted = !!(livePostId || draftPostId);
-          const postStatus = alreadyPosted ? "posted" : "pending";
+          const { postStatus, scheduledAt } = deriveUploadPostState(
+            uploadRecord,
+            mergedOutputData,
+            storedPostMetadata,
+            livePostId,
+            draftPostId,
+          );
 
           if (existingUpload?.id) {
-            // Don't downgrade post_status: if already "posted"/"scheduled", keep it
             await env.DB.prepare(
               `UPDATE video_uploads SET
                 postforme_id = COALESCE(?, postforme_id),
                 upload_status = 'uploaded',
-                post_status = CASE WHEN post_status IN ('posted', 'scheduled') THEN post_status ELSE ? END,
+                post_status = CASE
+                  WHEN post_status = 'scheduled' OR ? = 'scheduled' THEN 'scheduled'
+                  WHEN post_status = 'posted' OR ? = 'posted' THEN 'posted'
+                  ELSE ?
+                END,
+                scheduled_at = CASE
+                  WHEN ? IS NOT NULL THEN ?
+                  WHEN post_status = 'scheduled' THEN scheduled_at
+                  ELSE NULL
+                END,
                 aspect_ratio = COALESCE(?, aspect_ratio),
                 post_metadata = COALESCE(?, post_metadata),
                 updated_at = CURRENT_TIMESTAMP
               WHERE id = ?`
-            ).bind(livePostId || draftPostId, postStatus, aspectRatio, storedPostMetadata, existingUpload.id).run();
+            ).bind(
+              livePostId || draftPostId,
+              postStatus,
+              postStatus,
+              postStatus,
+              scheduledAt,
+              scheduledAt,
+              aspectRatio,
+              storedPostMetadata,
+              existingUpload.id,
+            ).run();
           } else {
             await env.DB.prepare(
-              "INSERT INTO video_uploads (user_id, job_id, postforme_id, media_url, upload_status, post_status, aspect_ratio, post_metadata) VALUES (?, ?, ?, ?, 'uploaded', ?, ?, ?)"
-            ).bind(jobRecord.user_id, jobId, livePostId || draftPostId, mediaUrl, postStatus, aspectRatio, storedPostMetadata).run();
+              "INSERT INTO video_uploads (user_id, job_id, postforme_id, media_url, upload_status, post_status, scheduled_at, aspect_ratio, post_metadata) VALUES (?, ?, ?, ?, 'uploaded', ?, ?, ?, ?)"
+            ).bind(
+              jobRecord.user_id,
+              jobId,
+              livePostId || draftPostId,
+              mediaUrl,
+              postStatus,
+              scheduledAt,
+              aspectRatio,
+              storedPostMetadata,
+            ).run();
           }
 
           // Save draft_post_id to jobs table for review queue
