@@ -99,7 +99,7 @@ export default function SocialTab({
             <div>
               <div className="text-xs font-bold text-cyan-200">Prompt Mode Social Content</div>
               <div className="mt-1 text-[11px] text-cyan-100/80">
-                `Short with Prompt` mode me Plan tab se niklay hue titles, descriptions aur hashtags yahan save hote hain aur posting me wahi use hote hain.
+                `Short with Prompt` mode me Basic tab se niklay hue titles, descriptions aur hashtags yahan save hote hain aur posting me wahi use hote hain.
               </div>
               {promptSegmentCount > 0 && (
                 <div className="mt-2 text-[10px] text-cyan-100/70">
@@ -119,7 +119,7 @@ export default function SocialTab({
           </div>
           {!promptPlanAvailable && (
             <div className="mt-2 text-[10px] text-cyan-100/70">
-              Pehle Plan tab me prompt generate karein, phir social content yahan auto-fill ya re-apply ho jayega.
+              Pehle Basic tab me prompt generate karein, phir social content yahan auto-fill ya re-apply ho jayega.
             </div>
           )}
         </div>

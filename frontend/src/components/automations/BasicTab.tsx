@@ -1,5 +1,7 @@
 import { useEffect } from "react";
+import type { AIProviderCatalog } from "@/lib/types";
 import { TabProps } from "./types";
+import PlanTab from "./tabs/PlanTab";
 
 const weekdayOptions = [
   { value: "sunday", label: "Sunday" },
@@ -31,7 +33,31 @@ function getWeekdays(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && allowed.has(item));
 }
 
-export default function BasicTab({ data, onChange }: TabProps) {
+interface BasicTabProps extends TabProps {
+  isLocalRunnerUser?: boolean;
+  aiProviders?: AIProviderCatalog[];
+  promptGenerating?: boolean;
+  promptGenResult?: string;
+  onPromptAiGenerate?: () => void;
+  onPromptProviderChange?: (provider: string) => void;
+  onPromptModelChange?: (model: string) => void;
+  onPromptSourceTypeChange?: (value: string) => void;
+  onPromptPickLocalFile?: () => void;
+}
+
+export default function BasicTab({
+  data,
+  onChange,
+  isLocalRunnerUser = false,
+  aiProviders = [],
+  promptGenerating = false,
+  promptGenResult = "",
+  onPromptAiGenerate,
+  onPromptProviderChange,
+  onPromptModelChange,
+  onPromptSourceTypeChange,
+  onPromptPickLocalFile,
+}: BasicTabProps) {
   const scheduleType = typeof data.schedule_type === "string" ? data.schedule_type : "manual";
   const weeklyDays = getWeekdays(data.schedule_weekdays);
   const isPromptMode = data.short_generation_mode === "prompt";
@@ -96,39 +122,47 @@ export default function BasicTab({ data, onChange }: TabProps) {
 
   return (
     <div className="space-y-4">
-      {isPromptMode && (
+      <PlanTab
+        data={data}
+        onChange={onChange}
+        isLocalRunnerUser={isLocalRunnerUser}
+        aiProviders={aiProviders}
+        generating={promptGenerating}
+        genResult={promptGenResult}
+        onAiGenerate={onPromptAiGenerate}
+        onProviderChange={onPromptProviderChange}
+        onModelChange={onPromptModelChange}
+        onPromptSourceTypeChange={onPromptSourceTypeChange}
+        onPromptPickLocalFile={onPromptPickLocalFile}
+      />
+
+      {isPromptMode ? (
         <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-xs text-cyan-200">
-          `Short with Prompt` select hai. Is tab ka source setup normal workflow ke liye preserve rahega, lekin prompt mode apna single-source setup `Plan` tab se lega.
+          `Short with Prompt` active hai. Single source, AI prompt aur generated plan setup upar isi Basic tab mein hai. Neeche sirf output aur schedule options manage karein.
+        </div>
+      ) : (
+        <div>
+          <label className="block text-sm font-medium mb-1">Video Source *</label>
+          <select
+            className="glass-select"
+            value={data.video_source as string || "youtube"}
+            onChange={(event) => {
+              onChange("video_source", event.target.value);
+              onChange("video_url", "");
+              onChange("youtube_channel_url", "");
+              onChange("manual_links", "");
+              onChange("google_photos_album_url", "");
+              onChange("local_folder_path", "");
+            }}
+          >
+            {sourceOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </div>
       )}
-
-      <div>
-        <label className="block text-sm font-medium mb-1">Video Source *</label>
-        <select
-          className="glass-select"
-          value={data.video_source as string || "youtube"}
-          disabled={isPromptMode}
-          onChange={(event) => {
-            onChange("video_source", event.target.value);
-            onChange("video_url", "");
-            onChange("youtube_channel_url", "");
-            onChange("manual_links", "");
-            onChange("google_photos_album_url", "");
-            onChange("local_folder_path", "");
-          }}
-        >
-          {sourceOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        {isPromptMode && (
-          <p className="mt-1 text-xs text-cyan-200/80">
-            Prompt mode mein Basic tab ka source sirf saved fallback ke liye rahega. Actual run `Plan` tab ke single-source input se hoga.
-          </p>
-        )}
-      </div>
 
       {!isPromptMode && (data.video_source === "youtube" || !data.video_source) && (
         <div>

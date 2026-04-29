@@ -74,7 +74,7 @@ export default function PlanTab({
           <div>
             <div className="text-xs font-bold text-white">Workflow Mode</div>
             <div className="mt-1 text-[11px] text-slate-400">
-              `Normal Workflow` purana Basic tab links system use karega. `Short with Prompt` ek single source video ke sath prompt-driven plan chalaye ga.
+              `Normal Workflow` neeche wali normal source fields use karega. `Short with Prompt` ek single source video ke sath prompt-driven plan chalaye ga.
             </div>
           </div>
           <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-cyan-300">
@@ -94,7 +94,7 @@ export default function PlanTab({
           >
             <div className="text-sm font-semibold text-white">Normal Workflow</div>
             <div className="mt-1 text-[11px] text-slate-400">
-              Existing Basic tab aur Video tab ka pura current flow bilkul waise hi chalega.
+              Existing source fields, Video tab aur current flow bilkul waise hi chalega.
             </div>
           </button>
 
@@ -248,7 +248,7 @@ export default function PlanTab({
               <div>
                 <div className="text-[11px] font-semibold text-cyan-200">Short Merge Output</div>
                 <div className="mt-1 text-[11px] text-cyan-100/75">
-                  Agar multiple generated shorts ko aik final merged video me jorna ho to isi toggle ko on karein. Yeh setting isi Plan tab se control hoti hai.
+                  Agar multiple generated shorts ko aik final merged video me jorna ho to isi toggle ko on karein. Yeh setting isi Basic tab se control hoti hai.
                 </div>
               </div>
               <label className="flex items-center gap-2 text-[11px] text-cyan-100">

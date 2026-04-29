@@ -6,7 +6,6 @@ import { getAvailableProviders, resolveModelSelection, resolveProviderSelection 
 import { useSessionUser } from "@/components/layout/ClientWrapper";
 import { api } from "@/lib/api";
 import BasicTab from "./BasicTab";
-import PlanTab from "./tabs/PlanTab";
 import VideoTab from "./tabs/VideoTab";
 import TaglinesTab from "./tabs/TaglinesTab";
 import SocialTab from "./tabs/SocialTab";
@@ -39,7 +38,6 @@ function getPromptPlanSegmentCount(plan: PromptPlanPayload | null | undefined): 
 
 const tabs = [
   { id: "basic", label: "Basic", icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
-  { id: "plan", label: "Plan", icon: "M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V9m-5-4l5 5m0 0l-5 5m5-5H9" },
   { id: "video", label: "Video", icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" },
   { id: "taglines", label: "Taglines", icon: "M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" },
   { id: "social", label: "Social", icon: "M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" },
@@ -508,7 +506,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
       promptSocialContent.descriptions.length === 0 &&
       promptSocialContent.hashtags.length === 0
     ) {
-      setSocialGenResult("Prompt plan me social content mila nahi. Pehle Plan tab se generate karein.");
+      setSocialGenResult("Prompt plan me social content mila nahi. Pehle Basic tab mein prompt plan generate karein.");
       return;
     }
 
@@ -572,19 +570,18 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     }
 
     switch (activeTab) {
-      case "basic": return <BasicTab data={data} onChange={onChange} />;
-      case "plan":
+      case "basic":
         return (
-          <PlanTab
+          <BasicTab
             data={data}
             onChange={onChange}
             isLocalRunnerUser={isLocalRunnerUser}
             aiProviders={getAvailableProviders(aiCatalog)}
-            generating={promptPlanGenerating || aiLoading}
-            genResult={promptPlanResult}
-            onAiGenerate={handleGeneratePromptPlan}
-            onProviderChange={handlePromptProviderChange}
-            onModelChange={handlePromptModelChange}
+            promptGenerating={promptPlanGenerating || aiLoading}
+            promptGenResult={promptPlanResult}
+            onPromptAiGenerate={handleGeneratePromptPlan}
+            onPromptProviderChange={handlePromptProviderChange}
+            onPromptModelChange={handlePromptModelChange}
             onPromptSourceTypeChange={handlePromptSourceTypeChange}
             onPromptPickLocalFile={handlePromptPickLocalFile}
           />
