@@ -1327,7 +1327,7 @@ const server = http.createServer((req, res) => {
         }
 
         saveConfig(nextConfig);
-        redirect(res, `/?token=${encodeURIComponent(accessToken)}`);
+        redirect(res, "/launcher");
       }).catch((error) => {
         serveLauncher(
           res,
@@ -1370,7 +1370,7 @@ const server = http.createServer((req, res) => {
   const hasLocalAccessToken = Boolean(config.ACCESS_TOKEN || requestUrl.searchParams.get("token"));
   const hasLocalRunnerToken = Boolean(config.RUNNER_TOKEN);
   if (!hasLocalAccessToken || !hasLocalRunnerToken) {
-    serveLauncher(res, config, selfCheck);
+    redirect(res, "/launcher");
     return;
   }
 
