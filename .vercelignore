@@ -10,6 +10,8 @@ local-runner/downloads
 local-runner/processed
 .git
 .next
+/package.json
+/package-lock.json
 cookies.txt
 cookies (2).txt
 photos.google.com_cookies.txt
