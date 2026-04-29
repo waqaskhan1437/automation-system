@@ -13,6 +13,10 @@ $DefaultManifestUrl = "https://raw.githubusercontent.com/waqaskhan1437/automatio
 $DefaultServerUrl = "https://automation-api.waqaskhan1437.workers.dev"
 $DefaultFrontendUrl = "https://automation-frontend-woad.vercel.app"
 $ConfigFileName = "config.txt"
+$NoCacheHeaders = @{
+    "Cache-Control" = "no-cache"
+    "Pragma" = "no-cache"
+}
 
 function Write-Status {
     param(
@@ -106,9 +110,7 @@ function Get-DefaultConfig {
 function Get-ManifestJson {
     param([string]$Url)
 
-    $separator = if ($Url -like "*?*") { "&" } else { "?" }
-    $cacheBustedUrl = "$Url${separator}ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
-    return Invoke-RestMethod -Uri $cacheBustedUrl -UseBasicParsing
+    return Invoke-RestMethod -Uri $Url -Headers $NoCacheHeaders -UseBasicParsing
 }
 
 function Get-RawBaseUrl {
@@ -166,11 +168,9 @@ function Download-ManifestFile {
     )
 
     $url = "$RawBaseUrl/$($Entry.Source)"
-    $separator = if ($url -like "*?*") { "&" } else { "?" }
-    $url = "$url${separator}ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
     $tempFile = "$($Entry.AbsoluteTarget).download"
     Ensure-Directory (Split-Path -Parent $Entry.AbsoluteTarget)
-    Invoke-WebRequest -Uri $url -OutFile $tempFile -UseBasicParsing
+    Invoke-WebRequest -Uri $url -Headers $NoCacheHeaders -OutFile $tempFile -UseBasicParsing
     Copy-Item -LiteralPath $tempFile -Destination $Entry.AbsoluteTarget -Force
     Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
 }
