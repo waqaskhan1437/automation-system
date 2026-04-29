@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { Automation } from "../types";
 import type { AIModelCatalogResponse } from "@/lib/types";
-import { getAvailableProviders, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";
+import { getAvailableProviders, normalizeAiCatalog, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";
 import ImageBasicTab from "./ImageBasicTab";
 import ImageSocialContentTab from "./ImageSocialContentTab";
 import PublishTab from "../PublishTab";
@@ -100,7 +100,7 @@ export default function ImageAutomationEditor({ editData, onSaved, onClose }: Pr
       const res = await fetch("/api/settings/ai/models");
       const result = await res.json();
       if (result.success) {
-        setAiCatalog(result.data || { default_provider: null, providers: [] });
+        setAiCatalog(normalizeAiCatalog(result.data || { default_provider: null, providers: [] }));
       } else {
         setAiCatalog({ default_provider: null, providers: [] });
       }

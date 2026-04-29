@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, memo } from "react";
 import { Automation } from "./types";
 import type { AIModelCatalogResponse } from "@/lib/types";
-import { getAvailableProviders, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";
+import { getAvailableProviders, normalizeAiCatalog, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";
 import { useSessionUser } from "@/components/layout/ClientWrapper";
 import { api } from "@/lib/api";
 import BasicTab from "./BasicTab";
@@ -174,15 +174,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     try {
       const res = await api.get<{ default_provider: string | null; providers: Array<{ id: string; name: string; models: string[] }> }>("/api/settings/ai/models");
       if (res.success && res.data) {
-        const transformedData = {
-          default_provider: res.data.default_provider,
-          providers: (res.data.providers || []).map(p => ({
-            id: p.id,
-            label: p.name || p.id,
-            models: (p.models || []).map(m => ({ id: m, label: m }))
-          }))
-        };
-        setAiCatalog(transformedData);
+        setAiCatalog(normalizeAiCatalog(res.data as AIModelCatalogResponse));
       } else {
         setAiCatalog({ default_provider: null, providers: [] });
       }

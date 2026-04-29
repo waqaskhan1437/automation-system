@@ -1,4 +1,8 @@
-import type { AIModelCatalogResponse, AIModelOption, AIProviderCatalog } from "./types";
+from pathlib import Path
+root = Path('/mnt/data/react31_fix')
+ai = root/'frontend/src/lib/ai.ts'
+text = ai.read_text()
+text = r'''import type { AIModelCatalogResponse, AIModelOption, AIProviderCatalog } from "./types";
 
 function stringFromUnknown(value: unknown): string {
   if (typeof value === "string") return value;
@@ -129,3 +133,50 @@ export function resolveModelSelection(
   }
   return models[0]?.id || "";
 }
+'''
+ai.write_text(text)
+
+modal = root/'frontend/src/components/automations/AutomationModal.tsx'
+text = modal.read_text()
+text = text.replace('import { getAvailableProviders, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";', 'import { getAvailableProviders, normalizeAiCatalog, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";')
+old = '''      if (res.success && res.data) {
+        const transformedData = {
+          default_provider: res.data.default_provider,
+          providers: (res.data.providers || []).map(p => ({
+            id: p.id,
+            label: p.name || p.id,
+            models: (p.models || []).map(m => ({ id: m, label: m }))
+          }))
+        };
+        setAiCatalog(transformedData);
+      } else {
+        setAiCatalog({ default_provider: null, providers: [] });
+      }'''
+new = '''      if (res.success && res.data) {
+        setAiCatalog(normalizeAiCatalog(res.data as AIModelCatalogResponse));
+      } else {
+        setAiCatalog({ default_provider: null, providers: [] });
+      }'''
+if old not in text:
+    raise SystemExit('old modal block not found')
+text = text.replace(old, new)
+modal.write_text(text)
+
+img = root/'frontend/src/components/automations/image/ImageAutomationEditor.tsx'
+text = img.read_text()
+text = text.replace('import { getAvailableProviders, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";', 'import { getAvailableProviders, normalizeAiCatalog, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";')
+old = '''      if (result.success) {
+        setAiCatalog(result.data || { default_provider: null, providers: [] });
+      } else {
+        setAiCatalog({ default_provider: null, providers: [] });
+      }'''
+new = '''      if (result.success) {
+        setAiCatalog(normalizeAiCatalog(result.data || { default_provider: null, providers: [] }));
+      } else {
+        setAiCatalog({ default_provider: null, providers: [] });
+      }'''
+if old not in text:
+    raise SystemExit('old image block not found')
+text = text.replace(old, new)
+img.write_text(text)
+print('[OK] patched ai catalog normalization')
