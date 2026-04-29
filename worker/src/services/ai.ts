@@ -112,6 +112,11 @@ function parseContextWindow(value: unknown): number | null {
   return null;
 }
 
+async function readProviderError(prefix: string, response: Response): Promise<never> {
+  const errorText = (await response.text()).trim();
+  throw new Error(errorText ? `${prefix}: ${response.status} ${errorText}` : `${prefix}: ${response.status}`);
+}
+
 function getModelTierFromPricing(pricing: unknown, id: string): "free" | "paid" | "unknown" {
   if (id.includes(":free")) return "free";
   if (!pricing || typeof pricing !== "object") return "unknown";
@@ -569,7 +574,7 @@ async function fetchOpenAIModels(apiKey: string): Promise<AIModelOption[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI models failed: ${response.status}`);
+    await readProviderError("OpenAI models failed", response);
   }
 
   const payload = await response.json() as { data?: Array<{ id: string }> };
@@ -586,9 +591,10 @@ async function fetchOpenAIModels(apiKey: string): Promise<AIModelOption[]> {
 }
 
 async function fetchGeminiModels(apiKey: string): Promise<AIModelOption[]> {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+  const params = new URLSearchParams({ key: apiKey.trim() });
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`);
   if (!response.ok) {
-    throw new Error(`Gemini models failed: ${response.status}`);
+    await readProviderError("Gemini models failed", response);
   }
 
   const payload = await response.json() as {
@@ -621,7 +627,7 @@ async function fetchGrokModels(apiKey: string): Promise<AIModelOption[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`xAI models failed: ${response.status}`);
+    await readProviderError("xAI models failed", response);
   }
 
   const payload = await response.json() as {
@@ -649,7 +655,7 @@ async function fetchCohereModels(apiKey: string): Promise<AIModelOption[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`Cohere models failed: ${response.status}`);
+    await readProviderError("Cohere models failed", response);
   }
 
   const payload = await response.json() as {
@@ -686,7 +692,7 @@ async function fetchOpenRouterModels(apiKey: string): Promise<AIModelOption[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`OpenRouter models failed: ${response.status}`);
+    await readProviderError("OpenRouter models failed", response);
   }
 
   const payload = await response.json() as {
@@ -735,7 +741,7 @@ async function fetchGroqModels(apiKey: string): Promise<AIModelOption[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`Groq models failed: ${response.status}`);
+    await readProviderError("Groq models failed", response);
   }
 
   const payload = await response.json() as {

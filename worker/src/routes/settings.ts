@@ -120,6 +120,15 @@ function maskVideoSourceSettingsForApiKey(
   };
 }
 
+async function buildProviderTestMessage(providerLabel: string, response: Response): Promise<string> {
+  if (response.ok) {
+    return `${providerLabel} connected successfully`;
+  }
+
+  const errorText = (await response.text()).trim();
+  return errorText ? `${providerLabel} error: ${response.status} ${errorText}` : `${providerLabel} error: ${response.status}`;
+}
+
 async function ensureVideoSourceCookieMetadataColumns(env: Env): Promise<void> {
   for (const statement of [
     "ALTER TABLE settings_video_sources ADD COLUMN youtube_cookies_meta TEXT",
@@ -470,6 +479,11 @@ export async function handleSettingsRoutes(
       return jsonResponse({ success: false, error: "provider and api_key required" }, 400);
     }
 
+    const apiKey = body.api_key.trim();
+    if (!apiKey) {
+      return jsonResponse({ success: false, error: "provider and api_key required" }, 400);
+    }
+
     try {
       let testResult = false;
       let message = "";
@@ -477,48 +491,49 @@ export async function handleSettingsRoutes(
       switch (body.provider) {
         case "openai": {
           const res = await fetch("https://api.openai.com/v1/models", {
-            headers: { Authorization: `Bearer ${body.api_key}` },
+            headers: { Authorization: `Bearer ${apiKey}` },
           });
           testResult = res.ok;
-          message = res.ok ? "OpenAI connected successfully" : `OpenAI error: ${res.status}`;
+          message = await buildProviderTestMessage("OpenAI", res);
           break;
         }
         case "gemini": {
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${body.api_key}`);
+          const params = new URLSearchParams({ key: apiKey });
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`);
           testResult = res.ok;
-          message = res.ok ? "Gemini connected successfully" : `Gemini error: ${res.status}`;
+          message = await buildProviderTestMessage("Gemini", res);
           break;
         }
         case "grok": {
           const res = await fetch("https://api.x.ai/v1/models", {
-            headers: { Authorization: `Bearer ${body.api_key}` },
+            headers: { Authorization: `Bearer ${apiKey}` },
           });
           testResult = res.ok;
-          message = res.ok ? "Grok connected successfully" : `Grok error: ${res.status}`;
+          message = await buildProviderTestMessage("Grok", res);
           break;
         }
         case "cohere": {
           const res = await fetch("https://api.cohere.ai/v1/models", {
-            headers: { Authorization: `Bearer ${body.api_key}` },
+            headers: { Authorization: `Bearer ${apiKey}` },
           });
           testResult = res.ok;
-          message = res.ok ? "Cohere connected successfully" : `Cohere error: ${res.status}`;
+          message = await buildProviderTestMessage("Cohere", res);
           break;
         }
         case "openrouter": {
           const res = await fetch("https://openrouter.ai/api/v1/models", {
-            headers: { Authorization: `Bearer ${body.api_key}` },
+            headers: { Authorization: `Bearer ${apiKey}` },
           });
           testResult = res.ok;
-          message = res.ok ? "OpenRouter connected successfully" : `OpenRouter error: ${res.status}`;
+          message = await buildProviderTestMessage("OpenRouter", res);
           break;
         }
         case "groq": {
           const res = await fetch("https://api.groq.com/openai/v1/models", {
-            headers: { Authorization: `Bearer ${body.api_key}` },
+            headers: { Authorization: `Bearer ${apiKey}` },
           });
           testResult = res.ok;
-          message = res.ok ? "Groq connected successfully" : `Groq error: ${res.status}`;
+          message = await buildProviderTestMessage("Groq", res);
           break;
         }
         default:
