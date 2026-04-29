@@ -95,13 +95,18 @@ jobs:
           echo "=============================================="
           
           set +e
-          node main.js
-          MAIN_EXIT_CODE=$?
+          node main.js 2>&1 | tee output/runner.log
+          MAIN_EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
           if [ "$MAIN_EXIT_CODE" -ne 0 ]; then
             echo "main.js exited with code $MAIN_EXIT_CODE"
-            cat output/error.log 2>/dev/null || true
+            {
+              echo "=== runner.log tail ==="
+              tail -n 300 output/runner.log 2>/dev/null || true
+              echo "=== error.log ==="
+              cat output/error.log 2>/dev/null || true
+            } | tee -a output/error.log
           fi
 
           echo "=============================================="

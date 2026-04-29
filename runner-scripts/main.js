@@ -13,6 +13,7 @@ const webhook = require('./steps/webhook');
 const tracker = require('./steps/tracker');
 
 const FAILURE_REPORT_PATH = path.join(OUTPUT_DIR, 'failure-report.json');
+const ERROR_LOG_PATH = path.join(OUTPUT_DIR, 'error.log');
 
 function writeFailureReport(payload) {
   try {
@@ -27,7 +28,24 @@ function clearFailureReport() {
     if (fs.existsSync(FAILURE_REPORT_PATH)) {
       fs.unlinkSync(FAILURE_REPORT_PATH);
     }
+    if (fs.existsSync(ERROR_LOG_PATH)) {
+      fs.unlinkSync(ERROR_LOG_PATH);
+    }
   } catch {}
+}
+
+function appendErrorLog(message) {
+  try {
+    if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+    fs.appendFileSync(ERROR_LOG_PATH, `${new Date().toISOString()} ${message}\n`, 'utf8');
+  } catch (error) {
+    console.error('[ERROR-LOG] Could not write error log:', error.message);
+  }
+}
+
+function isBlockingDownloadFailure(error) {
+  const message = String(error && (error.message || error) || '').toLowerCase();
+  return /youtube authentication|cookies?|sign in|login|not a bot|confirm.*bot|bot check|private video|age.?restricted|members-only|google photos.*download|forbidden|unauthorized|http error 401|http error 403/.test(message);
 }
 
 function loadConfig() {
@@ -585,11 +603,16 @@ async function main() {
       }
     } catch (e) {
       console.error(`[VIDEO ${i + 1}] FAILED:`, e.message);
+      appendErrorLog(`[VIDEO ${i + 1}/${toProcess.length}] ${url} FAILED: ${e.message}`);
       failures.push({
         source_url: url,
         error: e.message,
         failed_at: new Date().toISOString(),
       });
+      if (isBlockingDownloadFailure(e)) {
+        appendErrorLog(`[FAIL-FAST] Blocking auth/download failure detected; stopping remaining source downloads for this job.`);
+        break;
+      }
     }
   }
 
@@ -610,6 +633,7 @@ async function main() {
 
 main().catch(async (e) => {
   console.error('[MAIN] FATAL:', e.message);
+  appendErrorLog(`[FATAL] ${e.message}`);
   writeFailureReport({
     ok: false,
     type: 'fatal',

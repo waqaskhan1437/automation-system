@@ -119,6 +119,8 @@ function extractGithubLogSnippets(logText: string): string[] {
     /ffmpeg/i,
     /playwright/i,
     /chromium/i,
+    /innerTube client/i,
+    /attempt \d+\//i,
   ];
   const snippets: string[] = [];
   const seen = new Set<string>();
@@ -143,6 +145,7 @@ function analyzeGithubLog(logText: string): Record<string, unknown> {
   const hasDownloadSignal = /yt-dlp|youtube|download|http error 403|http error 429|requested format|unable to extract|video unavailable/.test(lower);
   const hasFfmpegSignal = /ffmpeg|invalid data found|error while decoding|conversion failed|no such file|moov atom/.test(lower);
   const hasBrowserSignal = /playwright|chromium|browser|page\.goto|timeout.*navigation/.test(lower);
+  const repeatedDownloadAttempts = (logText.match(/\[DOWNLOAD\].*(attempt|InnerTube client|Downloading)/gi) || []).length;
 
   if (hasCookieOrSigninSignal) detected.push("cookie_or_signin_possible");
   if (hasDownloadSignal) detected.push("video_download_or_ytdlp");
@@ -150,6 +153,7 @@ function analyzeGithubLog(logText: string): Record<string, unknown> {
   if (hasBrowserSignal) detected.push("browser_or_playwright");
   if (/postforme|upload|scheduled post|api key/.test(lower)) detected.push("postforme_or_upload");
   if (/gemini|openai|grok|cohere|openrouter|ai provider|api key/.test(lower)) detected.push("ai_provider_or_key");
+  if (repeatedDownloadAttempts >= 4) detected.push("repeated_download_attempts");
 
   const snippets = extractGithubLogSnippets(logText);
   const summary = hasCookieOrSigninSignal
@@ -170,7 +174,10 @@ function analyzeGithubLog(logText: string): Record<string, unknown> {
     has_video_download_signal: hasDownloadSignal,
     has_ffmpeg_signal: hasFfmpegSignal,
     has_browser_signal: hasBrowserSignal,
-    summary,
+    repeated_download_attempts: repeatedDownloadAttempts,
+    summary: repeatedDownloadAttempts >= 4
+      ? `${summary} Multiple downloader attempts were detected; the patched runner now uses yt-dlp-first for YouTube and fail-fast auth/download handling.`
+      : summary,
     snippets,
   };
 }

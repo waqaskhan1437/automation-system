@@ -4,7 +4,84 @@
 const { fs, path } = require('../lib/core');
 const { execFileSync, spawnSync } = require('child_process');
 const { chromium } = require('playwright-core');
-const { OUTPUT_DIR } = require('../lib/paths');
+const { OUTPUT_DIR, CONFIG_PATH } = require('../lib/paths');
+
+
+function loadRuntimeConfig() {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) || {};
+    }
+  } catch (error) {
+    console.log(`[DOWNLOAD] Could not read runtime config: ${error.message}`);
+  }
+  return {};
+}
+
+function readBool(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(lower)) return true;
+    if (['0', 'false', 'no', 'off'].includes(lower)) return false;
+  }
+  return fallback;
+}
+
+function readPositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isAuthLikeDownloadError(error) {
+  const message = String(error && (error.message || error) || '').toLowerCase();
+  return /cookie|cookies|sign in|login|not a bot|confirm.*bot|bot check|private video|age.?restricted|members-only|account|authentication|unauthorized|forbidden|http error 401|http error 403/.test(message);
+}
+
+function buildYtDlpArgs(ytDlp, outFile) {
+  return [
+    ...ytDlp.baseArgs,
+    '--force-overwrites',
+    '--no-part',
+    '--no-playlist',
+    '--no-cache-dir',
+    '--socket-timeout', '20',
+    '--retries', '2',
+    '--fragment-retries', '2',
+    '--file-access-retries', '2',
+    '--extractor-retries', '1',
+    '--merge-output-format',
+    'mp4',
+    '--remote-components',
+    'ejs:github',
+    '--js-runtimes',
+    'node',
+    '-f',
+    'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b[height<=1080]/b',
+    '-o',
+    outFile,
+  ];
+}
+
+function runYtDlpDownload(normalizedSource, outFile) {
+  const ytDlp = resolveYtDlpRunner();
+  if (!ytDlp) {
+    throw new Error('yt-dlp is not installed');
+  }
+
+  const cookiesFile = resolveCookiesFile(normalizedSource);
+  const ytArgs = buildYtDlpArgs(ytDlp, outFile);
+
+  if (cookiesFile) {
+    ytArgs.push('--cookies', cookiesFile);
+    console.log('[DOWNLOAD] Using cookie file for YouTube/source authentication');
+  }
+
+  ytArgs.push(normalizedSource);
+  clearDownloadArtifacts(outFile);
+  runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
+  validateOutput(outFile);
+}
 
 function getCommandCandidates(name) {
   const candidates = [];
@@ -288,7 +365,9 @@ async function downloadGooglePhotosViaBrowser(sourceUrl, outFile) {
   const executablePath = resolveBrowserExecutable();
   let lastError = null;
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  const runtimeConfig = loadRuntimeConfig();
+  const maxAttempts = readPositiveInt(process.env.GOOGLE_PHOTOS_DOWNLOAD_ATTEMPTS || runtimeConfig.google_photos_download_attempts, 1);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const browser = await chromium.launch({
       executablePath,
       headless: true,
@@ -351,7 +430,7 @@ async function downloadGooglePhotosViaBrowser(sourceUrl, outFile) {
       throw new Error(`Downloaded file too small: ${fs.existsSync(outFile) ? (fs.statSync(outFile).size / 1024).toFixed(1) + ' KB' : 'missing'}`);
     } catch (error) {
       lastError = error;
-      console.log(`[DOWNLOAD] Google Photos browser attempt ${attempt} failed: ${error.message}`);
+      console.log(`[DOWNLOAD] Google Photos browser attempt ${attempt}/${maxAttempts} failed: ${error.message}`);
       try {
         if (fs.existsSync(outFile)) {
           fs.unlinkSync(outFile);
@@ -571,7 +650,7 @@ function analyzeCookieFile(rawText, label) {
   const missing = label === 'YouTube' ? recommended.filter((name) => !names.has(name)) : [];
   if (persistent > 0 && expired === persistent) console.log(`[DOWNLOAD] ${label} cookie warning: all persistent cookies appear expired.`);
   if (missing.length > 0) console.log(`[DOWNLOAD] ${label} cookie warning: missing recommended auth cookies: ${missing.join(', ')}`);
-  return { count: lines.length, missing };
+  return { count: lines.length, missing, allPersistentExpired: persistent > 0 && expired === persistent };
 }
 
 function resolveCookiesFile(sourceUrl) {
@@ -600,6 +679,10 @@ function resolveCookiesFile(sourceUrl) {
     }
     const size = fs.statSync(candidate).size;
     const diagnostics = analyzeCookieFile(rawText, label);
+    if (diagnostics.count <= 0 || diagnostics.allPersistentExpired === true) {
+      console.log(`[DOWNLOAD] Ignoring expired/empty ${label} cookie file: ${candidate}`);
+      continue;
+    }
     console.log(`[DOWNLOAD] Using managed ${label} cookie file: ${candidate} (${(size / 1024).toFixed(1)} KB, ${diagnostics.count} records, mtime=${new Date(fs.statSync(candidate).mtimeMs).toISOString()})`);
     return candidate;
   }
@@ -653,10 +736,12 @@ function clearDownloadArtifacts(targetFile) {
 function downloadDirectFile(sourceUrl, outFile) {
   let lastError = null;
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  const runtimeConfig = loadRuntimeConfig();
+  const maxAttempts = readPositiveInt(process.env.DIRECT_DOWNLOAD_ATTEMPTS || runtimeConfig.direct_download_attempts, 2);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       clearDownloadArtifacts(outFile);
-      console.log(`[DOWNLOAD] Direct media attempt ${attempt}/3`);
+      console.log(`[DOWNLOAD] Direct media attempt ${attempt}/${maxAttempts}`);
       runCommand('curl', [
         '-L',
         '--fail',
@@ -757,91 +842,38 @@ module.exports = async function download(videoUrl) {
   }
 
   if (isLikelyYtDlpSource(normalizedSource) && /youtube\.com|youtu\.be/i.test(normalizedSource)) {
+    const runtimeConfig = loadRuntimeConfig();
+    const allowInnerTubeFallback = readBool(process.env.ALLOW_INNERTUBE_FALLBACK ?? runtimeConfig.allow_innertube_fallback, false);
+
     try {
+      console.log('[DOWNLOAD] YouTube strategy: yt-dlp first (prevents repeated InnerTube download attempts)');
+      runYtDlpDownload(normalizedSource, outFile);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.log(`[DOWNLOAD] yt-dlp failed: ${error.message}`);
+      if (isAuthLikeDownloadError(error)) {
+        throw new Error(`YouTube authentication/download failed. Refresh YouTube cookies in Settings and retry. Details: ${error.message}`);
+      }
+      if (!allowInnerTubeFallback) {
+        throw error;
+      }
+    }
+
+    try {
+      console.log('[DOWNLOAD] Trying optional InnerTube fallback...');
       await downloadYouTubeViaInnerTube(normalizedSource, outFile);
       validateOutput(outFile);
       return;
     } catch (error) {
       lastError = error;
-      console.log('[DOWNLOAD] YouTube InnerTube failed, falling back to yt-dlp...');
-    }
-
-    try {
-      const ytDlp = resolveYtDlpRunner();
-      if (!ytDlp) {
-        throw new Error('yt-dlp is not installed');
-      }
-
-      const cookiesFile = resolveCookiesFile(normalizedSource);
-      const ytArgs = [
-        ...ytDlp.baseArgs,
-        '--force-overwrites',
-        '--no-part',
-        '--no-playlist',
-        '--merge-output-format',
-        'mp4',
-        '--remote-components',
-        'ejs:github',
-        '--js-runtimes',
-        'node',
-        '-f',
-        'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b[height<=1080]/b',
-        '-o',
-        outFile,
-      ];
-
-      if (cookiesFile) {
-        ytArgs.push('--cookies', cookiesFile);
-        console.log('[DOWNLOAD] Using cookie file for YouTube authentication');
-      }
-
-      ytArgs.push(normalizedSource);
-
-      clearDownloadArtifacts(outFile);
-      runCommand(ytDlp.command, ytArgs, ytDlp.label, 600000);
-      validateOutput(outFile);
-      return;
-    } catch (error) {
-      lastError = error;
-      console.log('[DOWNLOAD] yt-dlp fallback also failed');
+      console.log('[DOWNLOAD] Optional InnerTube fallback also failed');
     }
   }
 
   if (isLikelyYtDlpSource(normalizedSource)) {
     try {
-      const ytDlp = resolveYtDlpRunner();
-      if (!ytDlp) {
-        throw new Error('yt-dlp is not installed');
-      }
-
-      const cookiesFile = resolveCookiesFile(normalizedSource);
-      const ytArgs = [
-        ...ytDlp.baseArgs,
-        '--force-overwrites',
-        '--no-part',
-        '--no-playlist',
-        '--merge-output-format',
-        'mp4',
-        '--remote-components',
-        'ejs:github',
-        '--js-runtimes',
-        'node',
-        '-f',
-        'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b[height<=1080]/b',
-        '-o',
-        outFile,
-      ];
-
-      if (cookiesFile) {
-        ytArgs.push('--cookies', cookiesFile);
-        console.log('[DOWNLOAD] Using cookie file for YouTube authentication');
-      }
-
-      ytArgs.push(normalizedSource);
-
-      clearDownloadArtifacts(outFile);
-      runCommand(ytDlp.command, ytArgs, ytDlp.label, 600000);
-      validateOutput(outFile);
+      runYtDlpDownload(normalizedSource, outFile);
       return;
     } catch (error) {
       lastError = error;

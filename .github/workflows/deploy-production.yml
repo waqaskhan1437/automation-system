@@ -16,17 +16,18 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  group: deploy-production-${{ github.ref }}
-  cancel-in-progress: true
+  actions: read
 
 env:
   VERCEL_ORG_ID: team_xQveLh5tkEuV829DuVHcbAWZ
   VERCEL_PROJECT_ID: prj_BVtIbisfUzhsuaE0iTzokA952icO
 
+concurrency:
+  group: deploy-production-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  worker-check:
+  worker_check:
     name: Check Worker
     runs-on: ubuntu-latest
     defaults:
@@ -42,9 +43,9 @@ jobs:
       - run: npm ci
       - run: npm run check
 
-  deploy-worker:
+  deploy_worker:
     name: Deploy Cloudflare Worker
-    needs: [worker-check]
+    needs: [worker_check]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -58,14 +59,85 @@ jobs:
           cache-dependency-path: 'worker/package-lock.json'
       - run: npm ci
       - run: npm run check
-      - run: npx wrangler deploy
+      - name: Resolve Cloudflare credentials
+        id: cf-creds
+        shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_TOKEN_PRIMARY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_TOKEN_FALLBACK: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_PRIMARY: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_ACCOUNT_FALLBACK: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          token="${CF_TOKEN_PRIMARY:-${CF_TOKEN_FALLBACK:-}}"
+          account_id="${CF_ACCOUNT_PRIMARY:-${CF_ACCOUNT_FALLBACK:-}}"
 
-  frontend-build:
+          if [ -n "$token" ]; then
+            echo "::add-mask::$token"
+          fi
+          if [ -n "$account_id" ]; then
+            echo "::add-mask::$account_id"
+          fi
+
+          if [ -z "$token" ]; then
+            {
+              echo "### Cloudflare deploy blocked"
+              echo "GitHub secret CLOUDFLARE_API_TOKEN is missing. CF_API_TOKEN is also supported as a fallback."
+              echo "Create/rotate a Cloudflare API token with Workers Scripts Edit permission for this account, then save it in GitHub Actions secrets."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "CLOUDFLARE_API_TOKEN or CF_API_TOKEN is required" >&2
+            exit 1
+          fi
+
+          if [ -z "$account_id" ]; then
+            {
+              echo "### Cloudflare deploy blocked"
+              echo "GitHub secret CLOUDFLARE_ACCOUNT_ID is missing. CF_ACCOUNT_ID is also supported as a fallback."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "CLOUDFLARE_ACCOUNT_ID or CF_ACCOUNT_ID is required" >&2
+            exit 1
+          fi
+
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "account_id=$account_id" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Cloudflare API token
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.cf-creds.outputs.token }}
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          status_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            https://api.cloudflare.com/client/v4/user/tokens/verify || true)"
+
+          if [ "$status_code" != "200" ]; then
+            {
+              echo "### Cloudflare token validation failed"
+              echo "Cloudflare returned HTTP $status_code for /user/tokens/verify."
+              echo "The token in GitHub secret CLOUDFLARE_API_TOKEN/CF_API_TOKEN is missing, expired, malformed, or from the wrong account."
+              echo "Rotate the token and make sure it has permission to deploy the automation-api Worker."
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat "$response_file" >&2 || true
+            exit 1
+          fi
+
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(!p.success){ console.error(JSON.stringify(p)); process.exit(1); }" "$response_file"
+          echo "Cloudflare token verification passed."
+
+      - name: Deploy Worker with Wrangler
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.cf-creds.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cf-creds.outputs.account_id }}
+        run: npx wrangler deploy
+
+  frontend_build:
     name: Build Frontend
-    needs: [deploy-worker]
+    needs: [worker_check, deploy_worker]
+    if: ${{ always() && needs.worker_check.result == 'success' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -79,10 +151,15 @@ jobs:
           cache-dependency-path: 'frontend/package-lock.json'
       - run: npm ci
       - run: npm run build
+      - name: Worker deploy status notice
+        if: ${{ needs.deploy_worker.result != 'success' }}
+        run: |
+          echo "Worker deploy result was '${{ needs.deploy_worker.result }}'. Frontend build still ran so Vercel is not skipped by the worker deploy auth failure." >> "$GITHUB_STEP_SUMMARY"
 
-  deploy-frontend:
+  deploy_frontend:
     name: Deploy Vercel Frontend
-    needs: [frontend-build]
+    needs: [frontend_build, deploy_worker]
+    if: ${{ always() && needs.frontend_build.result == 'success' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -96,5 +173,45 @@ jobs:
           cache-dependency-path: 'frontend/package-lock.json'
       - run: npm ci
       - run: npm install --global vercel@latest
+      - name: Validate Vercel token
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "VERCEL_TOKEN GitHub secret is missing" >&2
+            echo "### Vercel deploy blocked" >> "$GITHUB_STEP_SUMMARY"
+            echo "GitHub secret VERCEL_TOKEN is missing." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
       - run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
       - run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+
+  deployment-summary:
+    name: Deployment Summary
+    needs: [worker_check, deploy_worker, frontend_build, deploy_frontend]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize deployment results
+        shell: bash
+        run: |
+          {
+            echo "### Deploy Production summary"
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "| Worker check | ${{ needs.worker_check.result }} |"
+            echo "| Cloudflare Worker deploy | ${{ needs.deploy_worker.result }} |"
+            echo "| Frontend build | ${{ needs.frontend_build.result }} |"
+            echo "| Vercel deploy | ${{ needs.deploy_frontend.result }} |"
+            echo ""
+            echo "If Cloudflare deploy fails with 9109/10000, rotate the Cloudflare token in GitHub secrets. This workflow now keeps the frontend path running instead of skipping it because of the worker deploy auth failure."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ needs.worker_check.result }}" != "success" ] || \
+             [ "${{ needs.deploy_worker.result }}" != "success" ] || \
+             [ "${{ needs.frontend_build.result }}" != "success" ] || \
+             [ "${{ needs.deploy_frontend.result }}" != "success" ]; then
+            exit 1
+          fi

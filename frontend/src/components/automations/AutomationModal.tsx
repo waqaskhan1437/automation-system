@@ -192,7 +192,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
   const loadAiCatalog = useCallback(async () => {
     setAiLoading(true);
     try {
-      const res = await api.get<unknown>("/api/settings/ai/models");
+      const res = await api.get<{ default_provider: string | null; providers: Array<{ id: string; name: string; models: string[] }> }>("/api/settings/ai/models");
       if (res.success && res.data) {
         setAiCatalog(normalizeAiCatalog(res.data as AIModelCatalogResponse));
       } else {

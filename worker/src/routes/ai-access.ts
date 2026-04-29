@@ -496,7 +496,7 @@ async function githubTextWithTimeout(settings: GithubSettings, endpoint: string,
 
 function extractAiGithubLogSnippets(logText: string): string[] {
   const lines = logText.split(/\r?\n/);
-  const patterns = [/::error/i, /\berror\b/i, /failed/i, /exit code/i, /traceback/i, /exception/i, /yt-dlp/i, /youtube/i, /cookies?/i, /sign in/i, /login/i, /private video/i, /age.?restricted/i, /ffmpeg/i, /playwright/i, /chromium/i];
+  const patterns = [/::error/i, /\berror\b/i, /failed/i, /exit code/i, /traceback/i, /exception/i, /yt-dlp/i, /youtube/i, /cookies?/i, /sign in/i, /login/i, /private video/i, /age.?restricted/i, /ffmpeg/i, /playwright/i, /chromium/i, /InnerTube client/i, /attempt \d+\//i];
   const snippets: string[] = [];
   const seen = new Set<string>();
   for (let i = 0; i < lines.length; i += 1) {
@@ -517,12 +517,14 @@ function analyzeAiGithubLog(logText: string): Record<string, unknown> {
   const hasFfmpegSignal = /ffmpeg|invalid data found|error while decoding|conversion failed|no such file|moov atom/.test(lower);
   const hasBrowserSignal = /playwright|chromium|browser|page\.goto|timeout.*navigation/.test(lower);
   const hasSourceMismatchSignal = /no valid google photos source urls found|google_photos_source_mismatch|requested_video_source|effective_video_source/.test(lower);
+  const repeatedDownloadAttempts = (logText.match(/\[DOWNLOAD\].*(attempt|InnerTube client|Downloading)/gi) || []).length;
   const detected = [
     hasSourceMismatchSignal ? "source_type_mismatch" : null,
     hasCookieOrSigninSignal ? "cookie_or_signin_possible" : null,
     hasDownloadSignal ? "video_download_or_ytdlp" : null,
     hasFfmpegSignal ? "ffmpeg_or_video_processing" : null,
     hasBrowserSignal ? "browser_or_playwright" : null,
+    repeatedDownloadAttempts >= 4 ? "repeated_download_attempts" : null,
   ].filter(Boolean);
   const snippets = extractAiGithubLogSnippets(logText);
   const summary = hasSourceMismatchSignal
@@ -538,7 +540,7 @@ function analyzeAiGithubLog(logText: string): Record<string, unknown> {
           : snippets.length > 0
             ? "Logs contain error snippets, but no cookie/sign-in keyword was detected."
             : "No clear error keywords found in fetched GitHub logs.";
-  return { detected, has_source_type_mismatch_signal: hasSourceMismatchSignal, has_cookie_or_signin_signal: hasCookieOrSigninSignal, has_video_download_signal: hasDownloadSignal, has_ffmpeg_signal: hasFfmpegSignal, has_browser_signal: hasBrowserSignal, summary, snippets };
+  return { detected, has_source_type_mismatch_signal: hasSourceMismatchSignal, has_cookie_or_signin_signal: hasCookieOrSigninSignal, has_video_download_signal: hasDownloadSignal, has_ffmpeg_signal: hasFfmpegSignal, has_browser_signal: hasBrowserSignal, repeated_download_attempts: repeatedDownloadAttempts, summary: repeatedDownloadAttempts >= 4 ? `${summary} Multiple downloader attempts were detected; the patched runner now uses yt-dlp-first for YouTube and fail-fast auth/download handling.` : summary, snippets };
 }
 
 function chooseGithubJobForLog(jobsPayload: unknown): { id: number; name?: string } | null {
@@ -811,11 +813,7 @@ async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): P
             html_url: repo.html_url || null,
           };
         } else {
-          const repoFallback = unwrapSnapshotSection(repoSection);
-          snapshot.github = {
-            ...(snapshot.github as Record<string, unknown>),
-            ...(repoFallback && typeof repoFallback === "object" ? repoFallback : { unavailable: true, error: String(repoFallback) }),
-          };
+          snapshot.github = { ...(snapshot.github as Record<string, unknown>), ...unwrapSnapshotSection(repoSection) };
         }
 
         if (getBooleanQueryFlag(url, "include_tree")) {
