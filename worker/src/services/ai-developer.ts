@@ -214,8 +214,15 @@ export function maskObjectSecrets<T extends Record<string, unknown> | null | und
   for (const [key, value] of Object.entries(record)) {
     if (SECRET_KEY_PATTERN.test(key)) {
       masked[key] = maskSecretValue(value);
+    } else if (Array.isArray(value)) {
+      masked[key] = value.map((entry) => {
+        if (Array.isArray(entry)) {
+          return entry.map((nested) => (nested && typeof nested === "object" ? maskObjectSecrets(nested as Record<string, unknown>) : nested));
+        }
+        return entry && typeof entry === "object" ? maskObjectSecrets(entry as Record<string, unknown>) : entry;
+      });
     } else if (value && typeof value === "object") {
-      masked[key] = maskSecretValue(value);
+      masked[key] = maskObjectSecrets(value as Record<string, unknown>);
     } else {
       masked[key] = value;
     }
