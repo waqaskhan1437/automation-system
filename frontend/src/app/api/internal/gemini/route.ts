@@ -27,13 +27,43 @@ function getBridgeSecret(): string {
   return String(process.env.GEMINI_BRIDGE_SECRET || "").trim();
 }
 
-function isAuthorized(request: NextRequest): boolean {
-  const expected = getBridgeSecret();
-  if (!expected) {
+function getWorkerApiBaseUrl(): string {
+  return String(process.env.NEXT_PUBLIC_API_URL || "https://automation-api.waqaskhan1437.workers.dev").trim().replace(/\/+$/, "");
+}
+
+function getBearerToken(request: NextRequest): string {
+  const header = request.headers.get("authorization") || "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
+}
+
+async function hasValidWorkerAuth(request: NextRequest): Promise<boolean> {
+  const token = getBearerToken(request);
+  if (!token) {
     return false;
   }
 
-  return request.headers.get("x-gemini-bridge-secret") === expected;
+  try {
+    const response = await fetch(`${getWorkerApiBaseUrl()}/api/me`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function isAuthorized(request: NextRequest): Promise<boolean> {
+  const expected = getBridgeSecret();
+  if (expected && request.headers.get("x-gemini-bridge-secret") === expected) {
+    return true;
+  }
+
+  return hasValidWorkerAuth(request);
 }
 
 function readApiKey(body: GeminiBridgeRequest): string {
@@ -135,9 +165,13 @@ async function generateWithGemini(
 }
 
 export async function POST(request: NextRequest) {
-  if (!isAuthorized(request)) {
+  if (!(await isAuthorized(request))) {
     const hasSecret = Boolean(getBridgeSecret());
-    return errorResponse(hasSecret ? "Unauthorized Gemini bridge request" : "Gemini bridge is not configured", 401);
+    const hasWorkerToken = Boolean(getBearerToken(request));
+    const message = hasSecret || hasWorkerToken
+      ? "Unauthorized Gemini bridge request"
+      : "Gemini bridge is not configured";
+    return errorResponse(message, 401);
   }
 
   let body: GeminiBridgeRequest | null = null;

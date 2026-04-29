@@ -1,5 +1,6 @@
 import type { AISettings, Env } from "../types";
 import {
+  type AIRuntimeConfig,
   buildAiRuntimeConfig,
   generateAiJson,
   getConfiguredProviderIds,
@@ -746,7 +747,8 @@ async function generateBannerSpec(
   input: BannerInput & {
     providerValue: unknown;
     modelValue: unknown;
-  }
+  },
+  runtimeConfig?: AIRuntimeConfig
 ): Promise<{ spec: BannerSpec; provider: string | null; model: string | null }> {
   const fallback = buildFallbackBannerSpec(input);
   const selection = await resolveImageAiSelection(env, userId, input.providerValue, input.modelValue);
@@ -761,7 +763,7 @@ async function generateBannerSpec(
       selection.provider,
       selection.model,
       buildBannerMessages(input),
-      buildAiRuntimeConfig(env)
+      runtimeConfig || buildAiRuntimeConfig(env)
     );
     return {
       spec: normalizeBannerSpec(payload, fallback),
@@ -784,7 +786,8 @@ export async function generateImageBannerPreviewSpecs(
     providerValue: unknown;
     modelValue: unknown;
     count?: number;
-  }
+  },
+  runtimeConfig?: AIRuntimeConfig
 ): Promise<{ specs: BannerSpec[]; provider: string | null; model: string | null }> {
   const fallbacks = buildFallbackBannerPreviewSpecs(input, Math.min(Math.max(input.count || 3, 1), 4));
   const selection = await resolveImageAiSelection(env, userId, input.providerValue, input.modelValue);
@@ -799,7 +802,7 @@ export async function generateImageBannerPreviewSpecs(
       selection.provider,
       selection.model,
       buildBannerPreviewMessages(input, fallbacks),
-      buildAiRuntimeConfig(env)
+      runtimeConfig || buildAiRuntimeConfig(env)
     );
     return {
       specs: normalizeBannerPreviewPayload(payload, fallbacks),
@@ -826,7 +829,8 @@ async function generateSocialContent(
     banner: BannerSpec;
     providerValue: unknown;
     modelValue: unknown;
-  }
+  },
+  runtimeConfig?: AIRuntimeConfig
 ): Promise<{ titles: string[]; descriptions: string[]; hashtags: string[]; provider: string | null; model: string | null }> {
   const fallbackTitles = [
     clipText(input.banner.headline, 70),
@@ -859,7 +863,7 @@ async function generateSocialContent(
       selection.provider,
       selection.model,
       buildSocialMessages(input),
-      buildAiRuntimeConfig(env)
+      runtimeConfig || buildAiRuntimeConfig(env)
     );
     const normalized = normalizeSocialResult(payload, input.count);
     return {
@@ -884,7 +888,8 @@ export async function prepareImageAutomationRunConfig(
   env: Env,
   userId: number,
   automationName: string,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  runtimeConfig?: AIRuntimeConfig
 ): Promise<Record<string, unknown>> {
   const imageMode = normalizeImageMode(config.image_mode || config.image_source);
   const layout = normalizeImageLayout(config.image_layout);
@@ -940,7 +945,7 @@ export async function prepareImageAutomationRunConfig(
         ...bannerInput,
         providerValue: config.social_ai_provider,
         modelValue: config.social_ai_model,
-      })
+      }, runtimeConfig)
     : { spec: fallbackBanner, provider: null, model: null };
 
   // Only generate new social content if user hasn't pre-generated titles in Content tab
@@ -954,7 +959,7 @@ export async function prepareImageAutomationRunConfig(
         banner: bannerResult.spec,
         providerValue: config.social_ai_provider,
         modelValue: config.social_ai_model,
-      });
+      }, runtimeConfig);
 
   // Rotate titles/descriptions into image_render_spec so each run produces a different image
   const titles = socialResult.titles;

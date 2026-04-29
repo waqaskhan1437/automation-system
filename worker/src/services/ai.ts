@@ -25,7 +25,9 @@ export interface AIProviderCatalogItem {
 
 export interface AIRuntimeConfig {
   geminiBridgeUrl?: string | null;
+  geminiBridgeUrls?: string[] | null;
   geminiBridgeSecret?: string | null;
+  authToken?: string | null;
 }
 
 interface GenerationMessages {
@@ -150,23 +152,58 @@ function normalizeBridgeUrl(value: string | null | undefined): string {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
-function resolveGeminiBridgeUrl(runtimeConfig?: AIRuntimeConfig): string {
-  return normalizeBridgeUrl(runtimeConfig?.geminiBridgeUrl);
+function getAuthTokenFromHeader(value: string | null | undefined): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
 }
 
-async function callGeminiBridge(
+function isWorkerLikeOrigin(value: string | null | undefined): boolean {
+  const normalized = normalizeBridgeUrl(value);
+  if (!normalized) return false;
+
+  try {
+    const url = new URL(normalized);
+    return url.hostname.endsWith(".workers.dev");
+  } catch {
+    return normalized.includes("workers.dev");
+  }
+}
+
+function tryParseOrigin(value: string | null | undefined): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
+}
+
+function resolveGeminiBridgeUrls(runtimeConfig?: AIRuntimeConfig): string[] {
+  const direct = normalizeBridgeUrl(runtimeConfig?.geminiBridgeUrl);
+  const explicit = Array.isArray(runtimeConfig?.geminiBridgeUrls)
+    ? runtimeConfig?.geminiBridgeUrls.map((value) => normalizeBridgeUrl(value)).filter(Boolean)
+    : [];
+
+  const combined = [...explicit, direct].filter(Boolean);
+  return Array.from(new Set(combined));
+}
+
+async function callSingleGeminiBridge(
+  bridgeUrl: string,
   runtimeConfig: AIRuntimeConfig | undefined,
   payload: Record<string, unknown>
-): Promise<Record<string, unknown> | null> {
-  const bridgeUrl = resolveGeminiBridgeUrl(runtimeConfig);
-  if (!bridgeUrl) {
-    return null;
-  }
-
+): Promise<Record<string, unknown>> {
   const response = await fetch(bridgeUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...(runtimeConfig?.authToken
+        ? { Authorization: `Bearer ${runtimeConfig.authToken}` }
+        : {}),
       ...(runtimeConfig?.geminiBridgeSecret
         ? { "x-gemini-bridge-secret": runtimeConfig.geminiBridgeSecret }
         : {}),
@@ -185,6 +222,27 @@ async function callGeminiBridge(
 
   const data = await response.json() as Record<string, unknown>;
   return data && typeof data === "object" ? data : {};
+}
+
+async function callGeminiBridge(
+  runtimeConfig: AIRuntimeConfig | undefined,
+  payload: Record<string, unknown>
+): Promise<Record<string, unknown> | null> {
+  const bridgeUrls = resolveGeminiBridgeUrls(runtimeConfig);
+  if (bridgeUrls.length === 0) {
+    return null;
+  }
+
+  let lastError: Error | null = null;
+  for (const bridgeUrl of bridgeUrls) {
+    try {
+      return await callSingleGeminiBridge(bridgeUrl, runtimeConfig, payload);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  throw lastError || new Error("Gemini bridge failed");
 }
 
 async function readProviderError(prefix: string, response: Response): Promise<never> {
@@ -977,6 +1035,13 @@ export async function buildAiCatalog(settings: AISettings): Promise<{
 }>;
 export async function buildAiCatalog(
   settings: AISettings,
+  runtimeConfig: AIRuntimeConfig
+): Promise<{
+  default_provider: SupportedAIProvider | null;
+  providers: AIProviderCatalogItem[];
+}>;
+export async function buildAiCatalog(
+  settings: AISettings,
   runtimeConfig?: AIRuntimeConfig
 ): Promise<{
   default_provider: SupportedAIProvider | null;
@@ -1091,13 +1156,40 @@ export async function testGeminiApiKey(
   await fetchGeminiModelsWithRuntime(apiKey, runtimeConfig);
 }
 
-export function buildAiRuntimeConfig(env: Pick<Env, "FRONTEND_URL" | "GEMINI_BRIDGE_URL" | "GEMINI_BRIDGE_SECRET">): AIRuntimeConfig {
+export function buildAiRuntimeConfig(
+  env: Pick<Env, "FRONTEND_URL" | "GEMINI_BRIDGE_URL" | "GEMINI_BRIDGE_SECRET">,
+  options?: {
+    request?: Request | null;
+    authHeader?: string | null;
+    authToken?: string | null;
+  }
+): AIRuntimeConfig {
   const frontendUrl = normalizeBridgeUrl(env.FRONTEND_URL);
   const directBridgeUrl = normalizeBridgeUrl(env.GEMINI_BRIDGE_URL);
+  const requestOrigin = tryParseOrigin(options?.request?.headers.get("origin"));
+  const refererOrigin = tryParseOrigin(options?.request?.headers.get("referer"));
+  const authToken = String(
+    options?.authToken
+    || getAuthTokenFromHeader(options?.authHeader)
+    || getAuthTokenFromHeader(options?.request?.headers.get("authorization"))
+    || ""
+  ).trim();
+
+  const candidates = [
+    directBridgeUrl,
+    requestOrigin ? `${requestOrigin}/api/internal/gemini` : "",
+    refererOrigin ? `${refererOrigin}/api/internal/gemini` : "",
+    frontendUrl ? `${frontendUrl}/api/internal/gemini` : "",
+  ]
+    .map((value) => normalizeBridgeUrl(value))
+    .filter(Boolean)
+    .filter((value) => !isWorkerLikeOrigin(value));
 
   return {
-    geminiBridgeUrl: directBridgeUrl || (frontendUrl ? `${frontendUrl}/api/internal/gemini` : ""),
+    geminiBridgeUrl: candidates[0] || "",
+    geminiBridgeUrls: Array.from(new Set(candidates)),
     geminiBridgeSecret: String(env.GEMINI_BRIDGE_SECRET || "").trim(),
+    authToken,
   };
 }
 

@@ -152,7 +152,10 @@ export async function handleSettingsRoutes(
 ): Promise<Response> {
   const method = request.method;
   const userId = auth.userId;
-  const aiRuntimeConfig = buildAiRuntimeConfig(env);
+  const aiRuntimeConfig = buildAiRuntimeConfig(env, {
+    request,
+    authToken: auth.token,
+  });
 
   // POSTFORME SETTINGS
   if (path === "/api/settings/postforme") {
@@ -609,7 +612,7 @@ export async function handleSettingsRoutes(
           providerValue: body.provider,
           modelValue: body.model,
           count: Math.min(Math.max(Number(body.count || 3), 1), 4),
-        });
+        }, aiRuntimeConfig);
 
         return jsonResponse({
           success: true,
