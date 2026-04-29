@@ -429,6 +429,89 @@ async function getRecentAiLogs(env: Env, userId: number): Promise<Record<string,
   };
 }
 
+
+
+async function githubTextWithTimeout(settings: GithubSettings, endpoint: string, timeoutMs = SNAPSHOT_GITHUB_TIMEOUT_MS): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`https://api.github.com/repos/${settings.repo_owner}/${settings.repo_name}${endpoint}`, {
+      headers: {
+        Authorization: `Bearer ${settings.pat_token}`,
+        Accept: "text/plain, application/vnd.github.v3+json",
+        "User-Agent": "AutomationSystem/1.0",
+      },
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      let message = text;
+      try {
+        const parsed = JSON.parse(text) as { message?: string };
+        message = parsed.message || text;
+      } catch {}
+      throw new Error(`GitHub API ${response.status}: ${message || response.statusText}`);
+    }
+    const maxChars = 120000;
+    return text.length > maxChars ? text.slice(text.length - maxChars) : text;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractAiGithubLogSnippets(logText: string): string[] {
+  const lines = logText.split(/\r?\n/);
+  const patterns = [/::error/i, /\berror\b/i, /failed/i, /exit code/i, /traceback/i, /exception/i, /yt-dlp/i, /youtube/i, /cookies?/i, /sign in/i, /login/i, /private video/i, /age.?restricted/i, /ffmpeg/i, /playwright/i, /chromium/i];
+  const snippets: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!patterns.some((pattern) => pattern.test(lines[i] || ""))) continue;
+    const snippet = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 3)).join("\n").trim();
+    if (!snippet || seen.has(snippet)) continue;
+    seen.add(snippet);
+    snippets.push(snippet.length > 2500 ? snippet.slice(0, 2500) + "..." : snippet);
+    if (snippets.length >= 10) break;
+  }
+  return snippets;
+}
+
+function analyzeAiGithubLog(logText: string): Record<string, unknown> {
+  const lower = logText.toLowerCase();
+  const hasCookieOrSigninSignal = /cookies?|sign in|login|not a bot|confirm.*not.*bot|private video|age.?restricted|members-only|bot check/.test(lower);
+  const hasDownloadSignal = /yt-dlp|youtube|download|http error 403|http error 429|requested format|unable to extract|video unavailable/.test(lower);
+  const hasFfmpegSignal = /ffmpeg|invalid data found|error while decoding|conversion failed|no such file|moov atom/.test(lower);
+  const hasBrowserSignal = /playwright|chromium|browser|page\.goto|timeout.*navigation/.test(lower);
+  const detected = [
+    hasCookieOrSigninSignal ? "cookie_or_signin_possible" : null,
+    hasDownloadSignal ? "video_download_or_ytdlp" : null,
+    hasFfmpegSignal ? "ffmpeg_or_video_processing" : null,
+    hasBrowserSignal ? "browser_or_playwright" : null,
+  ].filter(Boolean);
+  const snippets = extractAiGithubLogSnippets(logText);
+  const summary = hasCookieOrSigninSignal
+    ? "Logs contain cookie/sign-in style signals. Check YouTube cookies/video access first."
+    : hasDownloadSignal
+      ? "Logs point to video download/yt-dlp stage. Check source URL, cookies, and downloader output."
+      : hasFfmpegSignal
+        ? "Logs point to FFmpeg/video processing stage. Check downloaded file and segment timings."
+        : hasBrowserSignal
+          ? "Logs point to browser/Playwright stage. Check Chromium/login/rendering details."
+          : snippets.length > 0
+            ? "Logs contain error snippets, but no cookie/sign-in keyword was detected."
+            : "No clear error keywords found in fetched GitHub logs.";
+  return { detected, has_cookie_or_signin_signal: hasCookieOrSigninSignal, has_video_download_signal: hasDownloadSignal, has_ffmpeg_signal: hasFfmpegSignal, has_browser_signal: hasBrowserSignal, summary, snippets };
+}
+
+function chooseGithubJobForLog(jobsPayload: unknown): { id: number; name?: string } | null {
+  const jobs = jobsPayload && typeof jobsPayload === "object" && Array.isArray((jobsPayload as { jobs?: unknown }).jobs)
+    ? (jobsPayload as { jobs: Array<Record<string, unknown>> }).jobs
+    : [];
+  const selected = jobs.find((job) => job.conclusion === "failure") || jobs.find((job) => job.status === "in_progress") || jobs[0];
+  if (!selected || typeof selected.id !== "number") return null;
+  return { id: selected.id, name: typeof selected.name === "string" ? selected.name : undefined };
+}
+
 async function githubJsonWithTimeout(settings: GithubSettings, endpoint: string, timeoutMs = SNAPSHOT_GITHUB_TIMEOUT_MS): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -566,10 +649,29 @@ async function getJobDiagnostics(request: Request, env: Env, auth: AuthContext, 
     ? (githubConclusion === "success" ? "success" : (githubConclusion === "cancelled" ? "cancelled" : "failed"))
     : (githubStatus === "in_progress" ? "running" : null);
 
+  const jobsPayload = unwrapSnapshotSection(jobsSection);
+  const selectedLogJob = jobsSection.ok ? chooseGithubJobForLog(jobsSection.data) : null;
+  let githubLogAnalysis: Record<string, unknown> | null = null;
+  if (selectedLogJob && url.searchParams.get("include_log_text") !== "0") {
+    const logSection = await collectSnapshotSection("github_job_log", () => githubTextWithTimeout(settings, `/actions/jobs/${selectedLogJob.id}/logs`, SNAPSHOT_GITHUB_TIMEOUT_MS), SNAPSHOT_GITHUB_TIMEOUT_MS);
+    if (logSection.ok) {
+      githubLogAnalysis = {
+        ok: true,
+        github_job_id: selectedLogJob.id,
+        github_job_name: selectedLogJob.name || null,
+        analysis: analyzeAiGithubLog(String(logSection.data || "")),
+      };
+    } else {
+      githubLogAnalysis = { ok: false, github_job_id: selectedLogJob.id, github_job_name: selectedLogJob.name || null, error: logSection.error };
+    }
+  }
+
   diagnostics.github = {
     run: unwrapSnapshotSection(runSection),
-    jobs: unwrapSnapshotSection(jobsSection),
+    jobs: jobsPayload,
     artifacts: unwrapSnapshotSection(artifactsSection),
+    selected_log_job: selectedLogJob,
+    log_analysis: githubLogAnalysis,
   };
   diagnostics.analysis = {
     normalized_github_status: normalizedGithubStatus,
@@ -579,7 +681,7 @@ async function getJobDiagnostics(request: Request, env: Env, auth: AuthContext, 
     likely_old_swallowed_workflow_failure: job.status === "failed" && githubConclusion === "success" && (!job.error_message || String(job.error_message).trim() === ""),
     recommendation: job.status === "failed" && githubConclusion === "success" && (!job.error_message || String(job.error_message).trim() === "")
       ? "This looks like an old runner/workflow mismatch. New fixes preserve runner exit codes and store error details; call /api/jobs/:id/status from the UI to reconcile this historical job or retry the automation."
-      : "Use run/jobs/artifacts above to inspect the failure source. Future failures should include error_message and failure-report output.",
+      : "Use run/jobs/artifacts/log_analysis above to inspect the failure source. If log_analysis reports cookie_or_signin_possible, update YouTube cookies or use a source that does not require login.",
   };
 
   return diagnostics;

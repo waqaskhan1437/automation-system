@@ -7,7 +7,10 @@ import { Automation } from "@/components/automations/types";
 import { api, ApiError } from "@/lib/api";
 
 interface StepInfo { name: string; status: string; conclusion: string | null }
-interface RunningJob { jobId: number; status: string; githubRunUrl: string | null; steps: StepInfo[]; error: string | null; progress: number }
+interface GithubLogAnalysis { summary?: string | null; detected?: string[]; has_cookie_or_signin_signal?: boolean; snippets?: string[] }
+interface GithubLogPreview { ok?: boolean; github_job_id?: number; github_job_name?: string; error?: string; analysis?: GithubLogAnalysis }
+interface JobArtifact { name: string; archive_download_url?: string; size_in_bytes?: number }
+interface RunningJob { jobId: number; status: string; githubRunUrl: string | null; steps: StepInfo[]; error: string | null; progress: number; githubLog?: GithubLogPreview | null; artifacts?: JobArtifact[]; diagnostics?: { summary?: string | null; cookie_or_signin_possible?: boolean } | null }
 interface AutomationPostStats { scheduled: number; posted: number }
 interface LinkQueueStatus { totalLinks: number; processedLinks: number; currentIndex: number; remainingLinks: number; allCompleted: boolean }
 interface AutomationStats { totalJobs: number; successJobs: number; failedJobs: number; runningJobs: number; queuedJobs: number; otherJobs: number }
@@ -105,6 +108,9 @@ function buildFailedRunState(existing: RunningJob | undefined, message: string, 
     ],
     error: message,
     progress: 100,
+    githubLog: null,
+    artifacts: [],
+    diagnostics: { summary: message, cookie_or_signin_possible: false },
   };
 }
 
@@ -116,6 +122,9 @@ function buildRunningJobSummary(job: DashboardActiveJob): RunningJob {
     steps: [],
     error: job.error,
     progress: estimateProgress(job.status),
+    githubLog: null,
+    artifacts: [],
+    diagnostics: null,
   };
 }
 
@@ -220,7 +229,11 @@ export default function AutomationsPage() {
         run_conclusion: string;
         run_url: string;
         steps: StepInfo[];
-      }>(`/api/jobs/${job.jobId}/logs?t=${Date.now()}`);
+        error?: string | null;
+        github_log?: GithubLogPreview | null;
+        artifacts?: JobArtifact[];
+        diagnostics?: { summary?: string | null; cookie_or_signin_possible?: boolean } | null;
+      }>(`/api/jobs/${job.jobId}/logs?include_log_text=1&t=${Date.now()}`);
       if (!response.success || !response.data) {
         return job;
       }
@@ -233,13 +246,19 @@ export default function AutomationsPage() {
       if (status === "completed") {
         status = payload.run_conclusion === "success" ? "success" : "failed";
       }
+      const logSummary = payload.diagnostics?.summary || payload.github_log?.analysis?.summary || null;
+      const logSnippets = Array.isArray(payload.github_log?.analysis?.snippets) ? payload.github_log?.analysis?.snippets || [] : [];
 
       return {
         ...job,
         status,
         githubRunUrl: payload.run_url || job.githubRunUrl,
         steps,
+        error: payload.error || (status === "failed" ? logSummary || logSnippets[0] || job.error : job.error),
         progress: Math.max(estimateProgress(status), Math.round((done / total) * 100)),
+        githubLog: payload.github_log || job.githubLog || null,
+        artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : (job.artifacts || []),
+        diagnostics: payload.diagnostics || job.diagnostics || null,
       };
     } catch {
       return job;
@@ -343,6 +362,9 @@ export default function AutomationsPage() {
         steps: [],
         error: null,
         progress: 20,
+        githubLog: null,
+        artifacts: [],
+        diagnostics: null,
       },
     }));
 
@@ -698,6 +720,36 @@ export default function AutomationsPage() {
                 </div>
               )}
               {showLogs.job.error && <div className="p-3 rounded-lg bg-[rgba(239,68,68,0.1)]"><p className="text-xs text-[#ef4444]">{showLogs.job.error}</p></div>}
+              {showLogs.job.diagnostics?.summary && (
+                <div className="p-3 rounded-lg bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.18)]">
+                  <p className="text-xs font-semibold text-indigo-200">AI log diagnosis</p>
+                  <p className="text-xs text-[#c4c4cc] mt-1">{showLogs.job.diagnostics.summary}</p>
+                  {showLogs.job.diagnostics.cookie_or_signin_possible && (
+                    <p className="text-xs text-[#f59e0b] mt-2">Cookie/sign-in signal detected. Update YouTube cookies or use a public source URL.</p>
+                  )}
+                </div>
+              )}
+              {Array.isArray(showLogs.job.githubLog?.analysis?.snippets) && (showLogs.job.githubLog?.analysis?.snippets?.length || 0) > 0 && (
+                <div className="p-3 rounded-lg bg-[rgba(0,0,0,0.25)] border border-[rgba(255,255,255,0.08)]">
+                  <p className="text-xs font-semibold text-[#f4f4f5] mb-2">GitHub error snippets</p>
+                  <div className="space-y-2">
+                    {(showLogs.job.githubLog?.analysis?.snippets || []).slice(0, 5).map((snippet, index) => (
+                      <pre key={index} className="text-[11px] whitespace-pre-wrap break-words text-[#d4d4d8] bg-black/30 p-2 rounded">{snippet}</pre>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {showLogs.job.githubLog && showLogs.job.githubLog.ok === false && (
+                <div className="p-3 rounded-lg bg-[rgba(245,158,11,0.1)] border border-[rgba(245,158,11,0.2)]">
+                  <p className="text-xs text-[#f59e0b]">GitHub log fetch failed: {showLogs.job.githubLog.error || "Unknown error"}</p>
+                </div>
+              )}
+              {Array.isArray(showLogs.job.artifacts) && showLogs.job.artifacts.length > 0 && (
+                <div className="p-3 rounded-lg bg-[rgba(16,185,129,0.08)] border border-[rgba(16,185,129,0.18)]">
+                  <p className="text-xs font-semibold text-emerald-200">Debug artifacts</p>
+                  <p className="text-xs text-[#a1a1aa] mt-1">{showLogs.job.artifacts.map((artifact) => artifact.name).join(", ")}</p>
+                </div>
+              )}
               <div className="flex gap-3">
                 {showLogs.job.githubRunUrl && <a href={showLogs.job.githubRunUrl} target="_blank" rel="noopener" className="glass-button-primary text-sm py-2 px-4">GitHub</a>}
                 <button onClick={() => setShowLogs(null)} className="glass-button text-sm py-2 px-4">Close</button>
