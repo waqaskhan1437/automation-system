@@ -3,6 +3,38 @@ setlocal
 
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
+set "LOCAL_LAUNCHER=%SCRIPT_DIR%Launch-Local-Runner.bat"
+set "LOCAL_BOOTSTRAP=%SCRIPT_DIR%bootstrap.ps1"
+set "INSTALL_ROOT=%LOCALAPPDATA%\AutomationLocalRunner"
+
+if exist "%SCRIPT_DIR%supervisor.js" (
+    goto :run_local_supervisor
+)
+
+if exist "%LOCAL_LAUNCHER%" (
+    call "%LOCAL_LAUNCHER%"
+    exit /b %errorlevel%
+)
+
+echo ========================================
+echo   Local Background Supervisor
+echo   Downloading latest launcher...
+echo ========================================
+echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $tmp = Join-Path $env:TEMP 'automation-local-runner-bootstrap.ps1'; $headers = @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache'; 'User-Agent' = 'AutomationLocalRunner' }; $bootstrapUri = 'https://raw.githubusercontent.com/waqaskhan1437/automation-system/master/local-runner/bootstrap.ps1'; try { $commit = Invoke-RestMethod -Uri 'https://api.github.com/repos/waqaskhan1437/automation-system/commits/master' -Headers $headers -UseBasicParsing; if ($commit.sha) { $bootstrapUri = 'https://raw.githubusercontent.com/waqaskhan1437/automation-system/' + $commit.sha + '/local-runner/bootstrap.ps1' } Invoke-WebRequest -Uri $bootstrapUri -Headers $headers -OutFile $tmp -UseBasicParsing; $bootstrapPath = $tmp } catch { if (Test-Path -LiteralPath '%LOCAL_BOOTSTRAP%') { $bootstrapPath = '%LOCAL_BOOTSTRAP%' } else { throw } }; & $bootstrapPath -InstallRoot '%INSTALL_ROOT%' -SourceDir '%SCRIPT_DIR%'"
+
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Local runner bootstrap failed.
+  pause
+  exit /b 1
+)
+
+exit /b 0
+
+:run_local_supervisor
 set "TOOLS_DIR=%SCRIPT_DIR%tools"
 set "NODE_DIR=%TOOLS_DIR%\node"
 set "NODE_EXE=%NODE_DIR%\node.exe"
