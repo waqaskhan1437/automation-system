@@ -513,6 +513,9 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     setData((prev) => ({
       ...prev,
       prompt_source_type: value,
+      video_source: value === "youtube" ? "youtube" : value === "direct" ? "direct" : prev.video_source,
+      google_photos_links: value === "youtube" || value === "direct" ? "" : prev.google_photos_links,
+      google_photos_album_url: value === "youtube" || value === "direct" ? "" : prev.google_photos_album_url,
       prompt_video_url: value === "local_file" ? "" : String(prev.prompt_video_url || ""),
       prompt_local_file_path: value === "local_file" ? String(prev.prompt_local_file_path || "") : "",
     }));
@@ -539,7 +542,16 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     if (!name.trim()) { alert("Name is required"); return; }
     setSaving(true);
     try {
-      const body = { name, type, config: JSON.stringify(data), schedule: null };
+      const configToSave = { ...data };
+      if (configToSave.short_generation_mode === "prompt") {
+        const promptSourceType = typeof configToSave.prompt_source_type === "string" ? configToSave.prompt_source_type : "youtube";
+        if (promptSourceType === "youtube" || promptSourceType === "direct") {
+          configToSave.video_source = promptSourceType;
+          configToSave.google_photos_links = "";
+          configToSave.google_photos_album_url = "";
+        }
+      }
+      const body = { name, type, config: JSON.stringify(configToSave), schedule: null };
       const result = editData
         ? await api.put<{ success: boolean; error?: string }>(`/api/automations/${editData.id}`, body)
         : await api.post<{ success: boolean; error?: string }>("/api/automations", body);

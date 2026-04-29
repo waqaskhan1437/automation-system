@@ -82,11 +82,45 @@ async function safeGetLinkQueueStatus(env: Env, automationId: number, userId: nu
   }
 }
 
-function normalizeConfigText(config: unknown): string {
-  if (typeof config === "string") {
-    return config;
+function normalizeConfigRecord(config: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...config };
+  if (next.short_generation_mode === "prompt") {
+    const promptSourceType = typeof next.prompt_source_type === "string" ? next.prompt_source_type : "youtube";
+    if (promptSourceType === "youtube" || promptSourceType === "direct") {
+      next.video_source = promptSourceType;
+      next.google_photos_links = "";
+      next.google_photos_album_url = "";
+    }
   }
-  return JSON.stringify(config || {});
+
+  if (next.video_source === "google_photos") {
+    const googleLinks = typeof next.google_photos_links === "string" ? next.google_photos_links.trim() : "";
+    const googleAlbum = typeof next.google_photos_album_url === "string" ? next.google_photos_album_url.trim() : "";
+    const promptUrl = typeof next.prompt_video_url === "string" ? next.prompt_video_url.trim() : "";
+    const videoUrl = typeof next.video_url === "string" ? next.video_url.trim() : "";
+    const candidate = promptUrl || videoUrl;
+    if (!googleLinks && !googleAlbum && /^https?:\/\//i.test(candidate) && !/photos\.google\.com|photos\.app\.goo\.gl/i.test(candidate)) {
+      next.video_source = /youtube\.com|youtu\.be/i.test(candidate) ? "youtube" : "direct";
+    }
+  }
+
+  return next;
+}
+
+function normalizeConfigText(config: unknown): string {
+  let parsed: Record<string, unknown>;
+  if (typeof config === "string") {
+    try {
+      parsed = JSON.parse(config || "{}");
+    } catch {
+      return config;
+    }
+  } else if (config && typeof config === "object" && !Array.isArray(config)) {
+    parsed = config as Record<string, unknown>;
+  } else {
+    parsed = {};
+  }
+  return JSON.stringify(normalizeConfigRecord(parsed));
 }
 
 function validateExecutionModeRules(configText: string, auth: AuthContext): string | null {

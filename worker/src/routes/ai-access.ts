@@ -516,16 +516,20 @@ function analyzeAiGithubLog(logText: string): Record<string, unknown> {
   const hasDownloadSignal = /yt-dlp|youtube|download|http error 403|http error 429|requested format|unable to extract|video unavailable/.test(lower);
   const hasFfmpegSignal = /ffmpeg|invalid data found|error while decoding|conversion failed|no such file|moov atom/.test(lower);
   const hasBrowserSignal = /playwright|chromium|browser|page\.goto|timeout.*navigation/.test(lower);
+  const hasSourceMismatchSignal = /no valid google photos source urls found|google_photos_source_mismatch|requested_video_source|effective_video_source/.test(lower);
   const detected = [
+    hasSourceMismatchSignal ? "source_type_mismatch" : null,
     hasCookieOrSigninSignal ? "cookie_or_signin_possible" : null,
     hasDownloadSignal ? "video_download_or_ytdlp" : null,
     hasFfmpegSignal ? "ffmpeg_or_video_processing" : null,
     hasBrowserSignal ? "browser_or_playwright" : null,
   ].filter(Boolean);
   const snippets = extractAiGithubLogSnippets(logText);
-  const summary = hasCookieOrSigninSignal
-    ? "Logs contain cookie/sign-in style signals. Check YouTube cookies/video access first."
-    : hasDownloadSignal
+  const summary = hasSourceMismatchSignal
+    ? "Logs show a source-type mismatch: a YouTube/direct source was treated as Google Photos. Save the automation again after this fix or retry; the backend now recovers this mismatch automatically."
+    : hasCookieOrSigninSignal
+      ? "Logs contain cookie/sign-in style signals. Check YouTube cookies/video access first."
+      : hasDownloadSignal
       ? "Logs point to video download/yt-dlp stage. Check source URL, cookies, and downloader output."
       : hasFfmpegSignal
         ? "Logs point to FFmpeg/video processing stage. Check downloaded file and segment timings."
@@ -534,7 +538,7 @@ function analyzeAiGithubLog(logText: string): Record<string, unknown> {
           : snippets.length > 0
             ? "Logs contain error snippets, but no cookie/sign-in keyword was detected."
             : "No clear error keywords found in fetched GitHub logs.";
-  return { detected, has_cookie_or_signin_signal: hasCookieOrSigninSignal, has_video_download_signal: hasDownloadSignal, has_ffmpeg_signal: hasFfmpegSignal, has_browser_signal: hasBrowserSignal, summary, snippets };
+  return { detected, has_source_type_mismatch_signal: hasSourceMismatchSignal, has_cookie_or_signin_signal: hasCookieOrSigninSignal, has_video_download_signal: hasDownloadSignal, has_ffmpeg_signal: hasFfmpegSignal, has_browser_signal: hasBrowserSignal, summary, snippets };
 }
 
 function chooseGithubJobForLog(jobsPayload: unknown): { id: number; name?: string } | null {
@@ -888,6 +892,44 @@ function sanitizeSettingsPatch(section: string, values: Record<string, unknown>)
   return sanitized;
 }
 
+function normalizeAiAutomationConfig(config: unknown): string {
+  let parsed: Record<string, unknown>;
+  if (typeof config === "string") {
+    try {
+      parsed = JSON.parse(config || "{}");
+    } catch {
+      return config;
+    }
+  } else if (config && typeof config === "object" && !Array.isArray(config)) {
+    parsed = config as Record<string, unknown>;
+  } else {
+    parsed = {};
+  }
+
+  const next = { ...parsed };
+  if (next.short_generation_mode === "prompt") {
+    const promptSourceType = typeof next.prompt_source_type === "string" ? next.prompt_source_type : "youtube";
+    if (promptSourceType === "youtube" || promptSourceType === "direct") {
+      next.video_source = promptSourceType;
+      next.google_photos_links = "";
+      next.google_photos_album_url = "";
+    }
+  }
+
+  if (next.video_source === "google_photos") {
+    const googleLinks = typeof next.google_photos_links === "string" ? next.google_photos_links.trim() : "";
+    const googleAlbum = typeof next.google_photos_album_url === "string" ? next.google_photos_album_url.trim() : "";
+    const promptUrl = typeof next.prompt_video_url === "string" ? next.prompt_video_url.trim() : "";
+    const videoUrl = typeof next.video_url === "string" ? next.video_url.trim() : "";
+    const candidate = promptUrl || videoUrl;
+    if (!googleLinks && !googleAlbum && /^https?:\/\//i.test(candidate) && !/photos\.google\.com|photos\.app\.goo\.gl/i.test(candidate)) {
+      next.video_source = /youtube\.com|youtu\.be/i.test(candidate) ? "youtube" : "direct";
+    }
+  }
+
+  return JSON.stringify(next);
+}
+
 async function handleAutomationsAiRoutes(request: Request, env: Env, path: string, auth: AuthContext): Promise<Response> {
   const method = request.method;
   const segments = path.split("/").filter(Boolean);
@@ -913,7 +955,7 @@ async function handleAutomationsAiRoutes(request: Request, env: Env, path: strin
       return jsonResponse({ success: false, error: "type must be video or image" }, 400);
     }
 
-    const config = typeof body.config === "string" ? body.config : JSON.stringify(body.config || {});
+    const config = normalizeAiAutomationConfig(body.config || {});
     const result = await env.DB.prepare(
       "INSERT INTO automations (user_id, name, type, status, config, schedule, next_run) VALUES (?, ?, ?, ?, ?, ?, ?)"
     ).bind(auth.userId, body.name, body.type, body.status || "active", config, body.schedule || null, body.next_run || null).run();
@@ -951,7 +993,7 @@ async function handleAutomationsAiRoutes(request: Request, env: Env, path: strin
     const nextName = body.name || existing.name;
     const nextType = body.type || existing.type;
     const nextStatus = body.status || existing.status;
-    const nextConfig = body.config !== undefined ? (typeof body.config === "string" ? body.config : JSON.stringify(body.config || {})) : existing.config;
+    const nextConfig = body.config !== undefined ? normalizeAiAutomationConfig(body.config) : existing.config;
     const nextSchedule = body.schedule !== undefined ? body.schedule : existing.schedule;
     const nextRun = body.next_run !== undefined ? body.next_run : existing.next_run;
 
@@ -1019,6 +1061,7 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     const section = await collectSnapshotSection("monitor", () => getAutomationMonitor(env, auth.userId));
     return jsonResponse({
       success: section.ok,
+      partial: !section.ok,
       data: unwrapSnapshotSection(section),
     }, section.ok ? 200 : 206);
   }
@@ -1031,6 +1074,7 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     const section = await collectSnapshotSection("recent_jobs", () => getRecentJobs(env, auth.userId, limit));
     return jsonResponse({
       success: section.ok,
+      partial: !section.ok,
       data: unwrapSnapshotSection(section),
     }, section.ok ? 200 : 206);
   }
@@ -1046,7 +1090,7 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     const section = await collectSnapshotSection("job_diagnostics", () => getJobDiagnostics(request, env, auth, jobId), SNAPSHOT_TIMEOUT_MS + SNAPSHOT_GITHUB_TIMEOUT_MS + 1000);
     const data = unwrapSnapshotSection(section);
     const status = section.ok && (data as Record<string, unknown>).found === false ? 404 : (section.ok ? 200 : 206);
-    return jsonResponse({ success: section.ok && (data as Record<string, unknown>).found !== false, data }, status);
+    return jsonResponse({ success: section.ok && (data as Record<string, unknown>).found !== false, partial: !section.ok, data }, status);
   }
   if (path === "/api/ai/snapshot" && method === "GET") {
     const denied = requireAiScope(auth, "project.read");

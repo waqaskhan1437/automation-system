@@ -100,7 +100,12 @@ export default function PlanTab({
 
           <button
             type="button"
-            onClick={() => onChange("short_generation_mode", "prompt")}
+            onClick={() => {
+              onChange("short_generation_mode", "prompt");
+              if (selectedPromptSource !== "local_file") {
+                onChange("video_source", selectedPromptSource === "direct" ? "direct" : "youtube");
+              }
+            }}
             className={`rounded-2xl border p-4 text-left transition-all ${
               selectedMode === "prompt"
                 ? "border-cyan-400/40 bg-cyan-400/10"

@@ -114,6 +114,70 @@ function readString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
+function splitHttpLines(value: unknown): string[] {
+  const raw = readString(value);
+  return raw
+    .split(/\r?\n|,/g)
+    .map((line) => line.trim())
+    .filter((line) => /^https?:\/\//i.test(line));
+}
+
+function firstHttpUrl(value: unknown): string {
+  return splitHttpLines(value)[0] || "";
+}
+
+function isYoutubeUrl(value: string): boolean {
+  return /(^|\.)youtube\.com\/|youtu\.be\//i.test(value);
+}
+
+function isGooglePhotosUrl(value: string): boolean {
+  return /photos\.google\.com|photos\.app\.goo\.gl/i.test(value);
+}
+
+function normalizePromptSourceType(value: unknown, fallback = "youtube"): "youtube" | "direct" | "local_file" {
+  const source = readString(value, fallback).trim();
+  if (source === "direct" || source === "local_file" || source === "youtube") {
+    return source;
+  }
+  return fallback === "local_file" ? "local_file" : "youtube";
+}
+
+function inferRemoteSourceFromUrl(url: string): "youtube" | "direct" | "google_photos" | "" {
+  if (!url) return "";
+  if (isYoutubeUrl(url)) return "youtube";
+  if (isGooglePhotosUrl(url)) return "google_photos";
+  if (/^https?:\/\//i.test(url)) return "direct";
+  return "";
+}
+
+function recoverSourceMismatch(
+  config: Record<string, unknown>,
+  requestedVideoSource: string,
+  promptSource: { videoSource: string; singleSource: string; error: string | null },
+): { videoSource: string; singleSourceOverride: string; reason: string | null } {
+  const promptMode = readString(config.short_generation_mode, "normal") === "prompt";
+  const googlePhotoLinks = readString(config.google_photos_links).trim();
+  const googlePhotoAlbum = readString(config.google_photos_album_url).trim();
+  const promptUrl = firstHttpUrl(config.prompt_video_url);
+  const normalUrl = firstHttpUrl(config.video_url);
+  const candidateUrl = promptSource.singleSource || (promptMode ? promptUrl || normalUrl : normalUrl || promptUrl);
+  const inferredSource = inferRemoteSourceFromUrl(candidateUrl);
+
+  if (!requestedVideoSource && inferredSource) {
+    return { videoSource: inferredSource, singleSourceOverride: candidateUrl, reason: "missing_video_source_inferred_from_url" };
+  }
+
+  if (requestedVideoSource === "google_photos" && !googlePhotoLinks && !googlePhotoAlbum && inferredSource && inferredSource !== "google_photos") {
+    return { videoSource: inferredSource, singleSourceOverride: candidateUrl, reason: "google_photos_source_mismatch_recovered_from_url" };
+  }
+
+  if (promptMode && candidateUrl && inferredSource && promptSource.videoSource !== inferredSource) {
+    return { videoSource: inferredSource, singleSourceOverride: candidateUrl, reason: "prompt_source_type_inferred_from_prompt_url" };
+  }
+
+  return { videoSource: requestedVideoSource, singleSourceOverride: "", reason: null };
+}
+
 function readBoolean(value: unknown, fallback = false): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -236,7 +300,7 @@ function resolvePromptModeSource(
   }
 
   const defaultSource = executionMode === "local" ? "local_file" : "youtube";
-  const sourceType = readString(config.prompt_source_type, defaultSource) || defaultSource;
+  const sourceType = normalizePromptSourceType(config.prompt_source_type, defaultSource);
 
   if (sourceType === "local_file") {
     if (executionMode !== "local") {
@@ -284,7 +348,7 @@ function resolveConfiguredVideoSourceForStatus(config: Record<string, unknown>):
     };
   }
 
-  const sourceType = readString(config.prompt_source_type, "youtube") || "youtube";
+  const sourceType = normalizePromptSourceType(config.prompt_source_type, "youtube");
   if (sourceType === "local_file") {
     return {
       videoSource: "prompt_local_file",
@@ -1180,7 +1244,13 @@ export async function triggerAutomationRun(
     return { success: false, jobId: jobId || undefined, executionMode, error: promptSource.error };
   }
 
-  const videoSource = promptSource.videoSource || readString(config.video_source);
+  const requestedVideoSource = promptSource.videoSource || readString(config.video_source);
+  const recoveredSource = recoverSourceMismatch(config, requestedVideoSource, promptSource);
+  const videoSource = recoveredSource.videoSource;
+  const singleSourceOverride = recoveredSource.singleSourceOverride;
+  if (recoveredSource.reason) {
+    console.warn(`[TRIGGER] Source mismatch recovered: ${requestedVideoSource || "<empty>"} -> ${videoSource} (${recoveredSource.reason})`);
+  }
   const localFolderPath = readString(config.local_folder_path);
   const videosPerRun = parsePositiveInteger(config.videos_per_run) ?? 1;
   let videoUrls: string[] = [];
@@ -1216,9 +1286,9 @@ export async function triggerAutomationRun(
 
     case "direct":
     case "youtube": {
-      const raw = readString(config.short_generation_mode, "normal") === "prompt"
+      const raw = singleSourceOverride || (readString(config.short_generation_mode, "normal") === "prompt"
         ? promptSource.singleSource
-        : readString(config.video_url);
+        : readString(config.video_url));
       if (raw) {
         videoUrls = raw.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("http"));
         if (videoUrls.length === 0 && raw.trim().startsWith("http")) videoUrls = [raw.trim()];
@@ -1370,6 +1440,8 @@ export async function triggerAutomationRun(
   const jobConfig = {
     ...config,
     ...promptPlanOverride.metadata,
+    video_source: videoSource,
+    ...(videoSource === "youtube" || videoSource === "direct" ? { video_url: (singleSourceOverride || promptSource.singleSource || readString(config.video_url)).trim() } : {}),
     video_urls: videoUrls.map((url) => url.trim()),
     source_urls: videoUrls.map((url) => url.trim()),
     fetch_stats: fetchStats,
@@ -1380,6 +1452,13 @@ export async function triggerAutomationRun(
     ...(videoSource === "google_photos"
       ? { google_photos_cookies: readString(videoSourceSettings?.google_photos_cookies).trim() }
       : {}),
+    source_detection: {
+      requested_video_source: requestedVideoSource,
+      effective_video_source: videoSource,
+      recovery_reason: recoveredSource.reason,
+      prompt_source_type: readString(config.prompt_source_type),
+      short_generation_mode: readString(config.short_generation_mode, "normal"),
+    },
   };
 
   // Validate: If no videos found, return error
@@ -1396,7 +1475,9 @@ export async function triggerAutomationRun(
         } as Record<string, string>)[videoSource || ""] || "No video URL provided";
 
     const jobId = await createFailedAutomationJob(env, automation, userId, jobConfig, errorMsg, "preflight.no_source_videos", {
-      video_source: videoSource,
+      requested_video_source: requestedVideoSource,
+      effective_video_source: videoSource,
+      recovery_reason: recoveredSource.reason,
       fetch_stats: fetchStats,
       short_generation_mode: readString(config.short_generation_mode, "normal"),
       prompt_source_type: readString(config.prompt_source_type),
