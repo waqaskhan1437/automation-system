@@ -813,7 +813,10 @@ async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): P
             html_url: repo.html_url || null,
           };
         } else {
-          snapshot.github = { ...(snapshot.github as Record<string, unknown>), ...unwrapSnapshotSection(repoSection) };
+          snapshot.github = {
+            ...(snapshot.github as Record<string, unknown>),
+            ...(unwrapSnapshotSection(repoSection) as Record<string, unknown>),
+          };
         }
 
         if (getBooleanQueryFlag(url, "include_tree")) {
