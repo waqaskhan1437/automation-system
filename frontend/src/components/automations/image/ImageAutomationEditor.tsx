@@ -178,6 +178,7 @@ export default function ImageAutomationEditor({ editData, onSaved, onClose }: Pr
     try {
       const res = await fetch("/api/settings/ai/generate", {
         method: "POST",
+        signal: AbortSignal.timeout(60000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "social",

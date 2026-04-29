@@ -376,7 +376,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
         model,
         prompt,
         count: genCount,
-      });
+      }, { timeout: 60000 });
       const result = res;
       if (result.success && result.data) {
         let newTop = result.data.top || [];
@@ -438,7 +438,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
         topic,
         platform,
         count: Number.isFinite(count) ? count : 10,
-      });
+      }, { timeout: 60000 });
       const result = res;
       if (result.success && result.data) {
         onChange("titles", result.data.titles || []);
@@ -485,7 +485,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
         provider,
         model,
         prompt,
-      });
+      }, { timeout: 60000 });
       const result = res;
       if (result.success && result.data?.plan) {
         const plan = result.data.plan as PromptPlanPayload & {
