@@ -28,5 +28,5 @@ if "%EXIT_CODE%"=="10" (
 )
 echo.
 echo [WARN] supervisor.js exited. Restarting in 5 seconds...
-timeout /t 5 /nobreak >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 5" >nul
 goto loop

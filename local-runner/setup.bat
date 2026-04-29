@@ -177,9 +177,15 @@ if /I "%AUTOMATION_SKIP_RESTART%"=="1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "restart-local-runner.ps1"
 )
 
-timeout /t 2 /nobreak >nul
-if /I "%SHOULD_OPEN_BROWSER%"=="1" (
-    start "" http://localhost:3000/open
+set "DASHBOARD_READY=0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$deadline = (Get-Date).AddSeconds(20); while ((Get-Date) -lt $deadline) { try { $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3000/api/self-check' -TimeoutSec 2; if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { exit 0 } } catch {} Start-Sleep -Milliseconds 750 }; exit 1"
+if %errorlevel% equ 0 (
+    set "DASHBOARD_READY=1"
+)
+
+if /I "%SHOULD_OPEN_BROWSER%"=="1" if /I "%DASHBOARD_READY%"=="1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process 'http://localhost:3000/open'"
 )
 
 echo.
@@ -188,8 +194,11 @@ echo   Ready
 echo   Background runner started
 if /I "%SHOULD_OPEN_BROWSER%"=="0" (
     echo   Browser auto-open skipped
-) else (
+) else if /I "%DASHBOARD_READY%"=="1" (
     echo   Browser opening on localhost:3000
+) else (
+    echo   Dashboard is still warming up
+    echo   Open this link manually if browser does not open: http://localhost:3000/open
 )
 echo ========================================
 echo.

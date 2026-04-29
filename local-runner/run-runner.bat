@@ -17,5 +17,5 @@ if exist "%NODE_EXE%" (
 
 :loop
 call "%NODE_CMD%" runner.js
-timeout /t 5 /nobreak >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 5" >nul
 goto loop
