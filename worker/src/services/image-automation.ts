@@ -1,5 +1,6 @@
 import type { AISettings, Env } from "../types";
 import {
+  buildAiRuntimeConfig,
   generateAiJson,
   getConfiguredProviderIds,
   normalizeSocialResult,
@@ -759,7 +760,8 @@ async function generateBannerSpec(
       selection.settings,
       selection.provider,
       selection.model,
-      buildBannerMessages(input)
+      buildBannerMessages(input),
+      buildAiRuntimeConfig(env)
     );
     return {
       spec: normalizeBannerSpec(payload, fallback),
@@ -796,7 +798,8 @@ export async function generateImageBannerPreviewSpecs(
       selection.settings,
       selection.provider,
       selection.model,
-      buildBannerPreviewMessages(input, fallbacks)
+      buildBannerPreviewMessages(input, fallbacks),
+      buildAiRuntimeConfig(env)
     );
     return {
       specs: normalizeBannerPreviewPayload(payload, fallbacks),
@@ -855,7 +858,8 @@ async function generateSocialContent(
       selection.settings,
       selection.provider,
       selection.model,
-      buildSocialMessages(input)
+      buildSocialMessages(input),
+      buildAiRuntimeConfig(env)
     );
     const normalized = normalizeSocialResult(payload, input.count);
     return {

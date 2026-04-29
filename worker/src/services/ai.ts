@@ -1,4 +1,4 @@
-import type { AISettings } from "../types";
+import type { AISettings, Env } from "../types";
 
 export type SupportedAIProvider =
   | "openai"
@@ -21,6 +21,11 @@ export interface AIProviderCatalogItem {
   label: string;
   models: AIModelOption[];
   error?: string;
+}
+
+export interface AIRuntimeConfig {
+  geminiBridgeUrl?: string | null;
+  geminiBridgeSecret?: string | null;
 }
 
 interface GenerationMessages {
@@ -139,6 +144,47 @@ function parseContextWindow(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function normalizeBridgeUrl(value: string | null | undefined): string {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function resolveGeminiBridgeUrl(runtimeConfig?: AIRuntimeConfig): string {
+  return normalizeBridgeUrl(runtimeConfig?.geminiBridgeUrl);
+}
+
+async function callGeminiBridge(
+  runtimeConfig: AIRuntimeConfig | undefined,
+  payload: Record<string, unknown>
+): Promise<Record<string, unknown> | null> {
+  const bridgeUrl = resolveGeminiBridgeUrl(runtimeConfig);
+  if (!bridgeUrl) {
+    return null;
+  }
+
+  const response = await fetch(bridgeUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(runtimeConfig?.geminiBridgeSecret
+        ? { "x-gemini-bridge-secret": runtimeConfig.geminiBridgeSecret }
+        : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = (await response.text()).trim();
+    throw new Error(
+      errorText
+        ? `Gemini bridge failed: ${response.status} ${errorText}`
+        : `Gemini bridge failed: ${response.status}`
+    );
+  }
+
+  const data = await response.json() as Record<string, unknown>;
+  return data && typeof data === "object" ? data : {};
 }
 
 async function readProviderError(prefix: string, response: Response): Promise<never> {
@@ -532,8 +578,23 @@ async function generateWithOpenAICompatible(
 async function generateWithGemini(
   apiKey: string,
   model: string,
-  messages: GenerationMessages
+  messages: GenerationMessages,
+  runtimeConfig?: AIRuntimeConfig
 ): Promise<string> {
+  const bridged = await callGeminiBridge(runtimeConfig, {
+    action: "generate",
+    apiKey,
+    model,
+    messages,
+  });
+  if (bridged) {
+    const text = typeof bridged.text === "string" ? bridged.text : "";
+    if (!text.trim()) {
+      throw new Error("Gemini bridge returned no usable text");
+    }
+    return text;
+  }
+
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
@@ -656,6 +717,34 @@ async function fetchOpenAIModels(apiKey: string): Promise<AIModelOption[]> {
 }
 
 async function fetchGeminiModels(apiKey: string): Promise<AIModelOption[]> {
+  return fetchGeminiModelsWithRuntime(apiKey);
+}
+
+async function fetchGeminiModelsWithRuntime(
+  apiKey: string,
+  runtimeConfig?: AIRuntimeConfig
+): Promise<AIModelOption[]> {
+  const bridged = await callGeminiBridge(runtimeConfig, {
+    action: "models",
+    apiKey,
+  });
+  if (bridged) {
+    const models = Array.isArray(bridged.models) ? bridged.models : [];
+    return uniqueModels(
+      models
+        .filter((model): model is Record<string, unknown> => Boolean(model && typeof model === "object"))
+        .map((model) => ({
+          id: String(model.id || "").trim(),
+          label: String(model.label || model.id || "").trim(),
+          description: typeof model.description === "string" ? model.description : undefined,
+          contextWindow: parseContextWindow(model.contextWindow ?? model.context_window),
+          tier: "paid" as const,
+        }))
+        .filter((model) => model.id && isGeminiTextModel(model.id))
+        .sort(compareGeminiModels)
+    );
+  }
+
   const params = new URLSearchParams({ key: apiKey.trim() });
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`);
   if (!response.ok) {
@@ -831,13 +920,14 @@ async function fetchGroqModels(apiKey: string): Promise<AIModelOption[]> {
 
 async function fetchProviderModels(
   provider: SupportedAIProvider,
-  apiKey: string
+  apiKey: string,
+  runtimeConfig?: AIRuntimeConfig
 ): Promise<AIModelOption[]> {
   switch (provider) {
     case "openai":
       return fetchOpenAIModels(apiKey);
     case "gemini":
-      return fetchGeminiModels(apiKey);
+      return fetchGeminiModelsWithRuntime(apiKey, runtimeConfig);
     case "grok":
       return fetchGrokModels(apiKey);
     case "cohere":
@@ -884,13 +974,20 @@ export function getConfiguredProviderIds(settings: AISettings): SupportedAIProvi
 export async function buildAiCatalog(settings: AISettings): Promise<{
   default_provider: SupportedAIProvider | null;
   providers: AIProviderCatalogItem[];
+}>;
+export async function buildAiCatalog(
+  settings: AISettings,
+  runtimeConfig?: AIRuntimeConfig
+): Promise<{
+  default_provider: SupportedAIProvider | null;
+  providers: AIProviderCatalogItem[];
 }> {
   const configuredProviders = getConfiguredProviderIds(settings);
   const providers = await Promise.all(
     configuredProviders.map(async (provider) => {
       const apiKey = getProviderApiKey(settings, provider);
       try {
-        const models = await fetchProviderModels(provider, apiKey);
+        const models = await fetchProviderModels(provider, apiKey, runtimeConfig);
         return {
           id: provider,
           label: PROVIDER_LABELS[provider],
@@ -940,7 +1037,8 @@ export async function generateAiJson(
   settings: AISettings,
   provider: SupportedAIProvider,
   model: string,
-  messages: GenerationMessages
+  messages: GenerationMessages,
+  runtimeConfig?: AIRuntimeConfig
 ): Promise<Record<string, unknown>> {
   const apiKey = getProviderApiKey(settings, provider);
   if (!apiKey) {
@@ -953,7 +1051,7 @@ export async function generateAiJson(
       rawText = await generateWithOpenAI(apiKey, model, messages);
       break;
     case "gemini":
-      rawText = await generateWithGemini(apiKey, model, messages);
+      rawText = await generateWithGemini(apiKey, model, messages, runtimeConfig);
       break;
     case "grok":
       rawText = await generateWithOpenAICompatible("https://api.x.ai/v1", apiKey, model, messages);
@@ -984,6 +1082,23 @@ export async function generateAiJson(
   }
 
   return parseJsonObject(rawText);
+}
+
+export async function testGeminiApiKey(
+  apiKey: string,
+  runtimeConfig?: AIRuntimeConfig
+): Promise<void> {
+  await fetchGeminiModelsWithRuntime(apiKey, runtimeConfig);
+}
+
+export function buildAiRuntimeConfig(env: Pick<Env, "FRONTEND_URL" | "GEMINI_BRIDGE_URL" | "GEMINI_BRIDGE_SECRET">): AIRuntimeConfig {
+  const frontendUrl = normalizeBridgeUrl(env.FRONTEND_URL);
+  const directBridgeUrl = normalizeBridgeUrl(env.GEMINI_BRIDGE_URL);
+
+  return {
+    geminiBridgeUrl: directBridgeUrl || (frontendUrl ? `${frontendUrl}/api/internal/gemini` : ""),
+    geminiBridgeSecret: String(env.GEMINI_BRIDGE_SECRET || "").trim(),
+  };
 }
 
 export function normalizeTaglinesResult(

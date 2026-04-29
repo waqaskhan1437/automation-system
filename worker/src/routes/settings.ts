@@ -1,6 +1,7 @@
 import { AuthContext, Env, PostformeSettings, GithubSettings, VideoSourceSettings, AISettings, TailscaleSettings } from "../types";
 import { jsonResponse, safeRequestJson } from "../utils";
 import {
+  buildAiRuntimeConfig,
   buildAiCatalog,
   generateAiJson,
   getConfiguredProviderIds,
@@ -11,6 +12,7 @@ import {
   normalizeSocialResult,
   normalizeTaglinesResult,
   resolveModelForProvider,
+  testGeminiApiKey,
   type SupportedAIProvider,
 } from "../services/ai";
 import { generateImageBannerPreviewSpecs, normalizeBannerFormat } from "../services/image-automation";
@@ -150,6 +152,7 @@ export async function handleSettingsRoutes(
 ): Promise<Response> {
   const method = request.method;
   const userId = auth.userId;
+  const aiRuntimeConfig = buildAiRuntimeConfig(env);
 
   // POSTFORME SETTINGS
   if (path === "/api/settings/postforme") {
@@ -498,10 +501,14 @@ export async function handleSettingsRoutes(
           break;
         }
         case "gemini": {
-          const params = new URLSearchParams({ key: apiKey });
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`);
-          testResult = res.ok;
-          message = await buildProviderTestMessage("Gemini", res);
+          try {
+            await testGeminiApiKey(apiKey, aiRuntimeConfig);
+            testResult = true;
+            message = "Gemini connected successfully";
+          } catch (error) {
+            testResult = false;
+            message = error instanceof Error ? error.message : "Gemini connection failed";
+          }
           break;
         }
         case "grok": {
@@ -560,7 +567,7 @@ export async function handleSettingsRoutes(
       });
     }
 
-    const catalog = await buildAiCatalog(aiSettings);
+    const catalog = await buildAiCatalog(aiSettings, aiRuntimeConfig);
     return jsonResponse({ success: true, data: catalog });
   }
 
@@ -629,7 +636,7 @@ export async function handleSettingsRoutes(
     }
 
     try {
-      const catalog = await buildAiCatalog(aiSettings);
+      const catalog = await buildAiCatalog(aiSettings, aiRuntimeConfig);
       const requestedProvider = body.provider as SupportedAIProvider | undefined;
       const provider = requestedProvider && configuredProviders.includes(requestedProvider)
         ? requestedProvider
@@ -652,7 +659,8 @@ export async function handleSettingsRoutes(
           aiSettings,
           provider,
           resolvedModel,
-          getTaglinesMessages({ topic, count })
+          getTaglinesMessages({ topic, count }),
+          aiRuntimeConfig
         );
         const normalized = normalizeTaglinesResult(parsed, count);
 
@@ -679,7 +687,8 @@ export async function handleSettingsRoutes(
           aiSettings,
           provider,
           resolvedModel,
-          getSocialMessages({ topic, platform, count })
+          getSocialMessages({ topic, platform, count }),
+          aiRuntimeConfig
         );
         const normalized = normalizeSocialResult(parsed, count);
 
@@ -703,7 +712,8 @@ export async function handleSettingsRoutes(
           aiSettings,
           provider,
           resolvedModel,
-          getShortPromptPlanMessages({ prompt })
+          getShortPromptPlanMessages({ prompt }),
+          aiRuntimeConfig
         );
         const normalized = normalizeShortPromptPlanResult(parsed);
 

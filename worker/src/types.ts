@@ -1,6 +1,9 @@
 export interface Env {
   DB: D1Database;
   ENVIRONMENT: string;
+  FRONTEND_URL?: string;
+  GEMINI_BRIDGE_URL?: string;
+  GEMINI_BRIDGE_SECRET?: string;
   ADMIN_KEY?: string;
   ADMIN_EMAIL?: string;
   ADMIN_PASSWORD?: string;
