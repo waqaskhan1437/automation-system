@@ -655,6 +655,11 @@ export default {
         return jsonResponse({ success: false, error: "Job config is unreadable" }, 500);
       }
 
+      const postformeSettings = await getScopedSettings<PostformeSettings>(env.DB, "postforme", job.user_id);
+      if (postformeSettings?.api_key && !("postforme_api_key" in automationConfig)) {
+        automationConfig.postforme_api_key = postformeSettings.api_key;
+      }
+
       return new Response(JSON.stringify({
         success: true,
         data: {

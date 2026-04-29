@@ -3,8 +3,34 @@ const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, 'automation-config.json');
 
-function parseBaseConfig() {
-  const raw = String(process.env.CONFIG || '').trim();
+function readGithubEventInputs() {
+  const eventPath = String(process.env.GITHUB_EVENT_PATH || '').trim();
+  if (!eventPath || !fs.existsSync(eventPath)) {
+    return {};
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+    return payload && typeof payload === 'object' && payload.inputs && typeof payload.inputs === 'object'
+      ? payload.inputs
+      : {};
+  } catch (error) {
+    throw new Error(`Could not read GitHub event payload: ${error.message}`);
+  }
+}
+
+function readInputValue(eventInputs, envName, inputName) {
+  const envValue = String(process.env[envName] || '').trim();
+  if (envValue) {
+    return envValue;
+  }
+
+  const rawValue = eventInputs && typeof eventInputs[inputName] === 'string' ? eventInputs[inputName] : '';
+  return String(rawValue || '').trim();
+}
+
+function parseBaseConfig(eventInputs) {
+  const raw = readInputValue(eventInputs, 'CONFIG', 'automation_config');
   if (!raw) {
     return {};
   }
@@ -56,10 +82,11 @@ async function fetchRuntimeConfig(jobId, workerWebhookUrl, runtimeToken) {
 }
 
 async function main() {
-  const baseConfig = parseBaseConfig();
-  const runtimeToken = String(process.env.RUNTIME_CONFIG_TOKEN || '').trim();
-  const workerWebhookUrl = String(process.env.WORKER_WEBHOOK_URL || '').trim();
-  const jobId = Number.parseInt(process.env.JOB_ID || '', 10);
+  const eventInputs = readGithubEventInputs();
+  const baseConfig = parseBaseConfig(eventInputs);
+  const runtimeToken = readInputValue(eventInputs, 'RUNTIME_CONFIG_TOKEN', 'runtime_config_token');
+  const workerWebhookUrl = readInputValue(eventInputs, 'WORKER_WEBHOOK_URL', 'worker_webhook_url');
+  const jobId = Number.parseInt(readInputValue(eventInputs, 'JOB_ID', 'job_id') || '', 10);
 
   let finalConfig = baseConfig;
 

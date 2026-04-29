@@ -5,53 +5,6 @@ const WORKFLOW_NAME = "video-automation.yml";
 const GITHUB_FETCH_TIMEOUT_MS = 15000;
 const WORKER_WEBHOOK_URL = "https://automation-api.waqaskhan1437.workers.dev/api/webhook/github";
 const RUNTIME_CONFIG_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
-const DISPATCH_CONFIG_DROP_KEYS = new Set([
-  "youtube_cookies",
-  "google_photos_cookies",
-  "prompt_analysis_text",
-  "prompt_short_plan",
-  "social_topic",
-  "social_platform",
-  "social_count",
-  "ai_gen_provider",
-  "ai_gen_model",
-  "social_ai_provider",
-  "social_ai_model",
-  "prompt_ai_provider",
-  "prompt_ai_model",
-]);
-
-function sanitizeAutomationConfigForDispatch(config: Record<string, unknown>): Record<string, unknown> {
-  const sanitized: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(config || {})) {
-    if (value === undefined || DISPATCH_CONFIG_DROP_KEYS.has(key)) {
-      continue;
-    }
-    sanitized[key] = value;
-  }
-
-  const preparedVideoUrls = Array.isArray(sanitized.video_urls)
-    ? sanitized.video_urls
-        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-        .map((value) => value.trim())
-    : [];
-
-  if (preparedVideoUrls.length > 0) {
-    sanitized.video_urls = preparedVideoUrls;
-    sanitized.source_urls = preparedVideoUrls;
-    delete sanitized.video_url;
-    delete sanitized.manual_links;
-    delete sanitized.google_photos_links;
-    delete sanitized.google_photos_album_url;
-    delete sanitized.youtube_channel_url;
-    delete sanitized.prompt_video_url;
-    delete sanitized.prompt_local_file_path;
-  }
-
-  return sanitized;
-}
-
 export interface DispatchResult {
   success: boolean;
   runId: number | null;
@@ -358,7 +311,7 @@ export async function dispatchWorkflow(
           success: false,
           runId: null,
           runUrl: null,
-          error: `GitHub workflow dispatch payload is too large (${payloadBytes} bytes) even after trimming automation_config.`,
+          error: `GitHub workflow dispatch payload is too large (${payloadBytes} bytes).`,
           payloadBytes,
           dispatchStatus: status,
           dispatchNonce,
@@ -507,25 +460,14 @@ export async function getWorkflowRunJobs(
 
 export function buildWorkflowInputs(
   jobId: number,
-  automationId: number,
-  config: Record<string, unknown>,
-  postformeApiKey?: string
+  automationId: number
 ): WorkflowInputs {
-  const dispatchConfig = sanitizeAutomationConfigForDispatch(config);
-  const automationConfig = JSON.stringify(dispatchConfig);
-  console.log("[buildWorkflowInputs] automation_config bytes:", new TextEncoder().encode(automationConfig).length);
-
   const inputs: WorkflowInputs = {
     job_id: String(jobId),
     automation_id: String(automationId),
     dispatch_nonce: createDispatchNonce(jobId, automationId),
-    automation_config: automationConfig,
     worker_webhook_url: WORKER_WEBHOOK_URL,
   };
-
-  if (postformeApiKey) {
-    inputs.postforme_api_key = postformeApiKey;
-  }
 
   return inputs;
 }

@@ -102,6 +102,24 @@ function looksLikeNetscapeCookieFile(value: string): boolean {
   return lines.some((line) => line.split("\t").length >= 7);
 }
 
+function maskStoredCookieValue(value: string | null | undefined): string | null {
+  return typeof value === "string" && value.trim() ? "[stored]" : null;
+}
+
+function maskVideoSourceSettingsForApiKey(
+  value: (VideoSourceSettings & { youtube_cookies_meta?: string | null; google_photos_cookies_meta?: string | null }) | null
+): (VideoSourceSettings & { youtube_cookies_meta?: string | null; google_photos_cookies_meta?: string | null }) | null {
+  if (!value) {
+    return value;
+  }
+
+  return {
+    ...value,
+    youtube_cookies: maskStoredCookieValue(value.youtube_cookies),
+    google_photos_cookies: maskStoredCookieValue(value.google_photos_cookies),
+  };
+}
+
 async function ensureVideoSourceCookieMetadataColumns(env: Env): Promise<void> {
   for (const statement of [
     "ALTER TABLE settings_video_sources ADD COLUMN youtube_cookies_meta TEXT",
@@ -336,7 +354,8 @@ export async function handleSettingsRoutes(
     if (method === "GET") {
       await ensureVideoSourceCookieMetadataColumns(env);
       const result = await getScopedSettings<VideoSourceSettings & { youtube_cookies_meta?: string | null; google_photos_cookies_meta?: string | null }>(env.DB, "video-sources", userId);
-      return jsonResponse({ success: true, data: result || null });
+      const payload = auth.apiKeyId ? maskVideoSourceSettingsForApiKey(result || null) : (result || null);
+      return jsonResponse({ success: true, data: payload });
     }
 
     if (method === "POST") {

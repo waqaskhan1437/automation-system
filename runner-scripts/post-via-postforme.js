@@ -202,16 +202,11 @@ async function notifyWorker(workerUrl, jobId, status, outputData) {
 async function main() {
   console.log("=== PostForMe Posting ===");
 
-  const apiKey = process.env.POSTFORME_API_KEY;
+  const apiKeyFromEnv = process.env.POSTFORME_API_KEY;
   const workerUrl = process.env.WORKER_WEBHOOK_URL;
   const jobId = process.env.JOB_ID;
   // Litterbox URL passed from workflow env
   const litterboxUrl = process.env.LITTERBOX_URL;
-
-  if (!apiKey) {
-    console.log("No POSTFORME_API_KEY — skipping PostForMe");
-    process.exit(0);
-  }
 
   let config = {};
   try {
@@ -221,6 +216,13 @@ async function main() {
     }
   } catch (e) {
     console.log("Could not read config file");
+  }
+
+  const apiKey = apiKeyFromEnv || (typeof config.postforme_api_key === "string" ? config.postforme_api_key.trim() : "");
+
+  if (!apiKey) {
+    console.log("No POSTFORME_API_KEY â€” skipping PostForMe");
+    process.exit(0);
   }
 
   const autoPublish = config.auto_publish || false;

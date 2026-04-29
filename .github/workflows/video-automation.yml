@@ -15,10 +15,6 @@ on:
         description: 'Unique dispatch nonce used by the worker to correlate this exact GitHub run'
         required: false
         type: string
-      automation_config:
-        description: 'Full automation config as JSON (with pre-fetched video_urls)'
-        required: true
-        type: string
       worker_webhook_url:
         description: 'Worker webhook URL'
         required: false
@@ -29,10 +25,6 @@ on:
         type: string
       runner_labels:
         description: 'JSON array of runner labels'
-        required: false
-        type: string
-      postforme_api_key:
-        description: 'PostForMe API key'
         required: false
         type: string
 
@@ -46,13 +38,9 @@ jobs:
     timeout-minutes: 60
 
     env:
-      CONFIG: ${{ github.event.inputs.automation_config }}
       WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
       JOB_ID: ${{ github.event.inputs.job_id }}
       AUTOMATION_ID: ${{ github.event.inputs.automation_id }}
-      DISPATCH_NONCE: ${{ github.event.inputs.dispatch_nonce }}
-      RUNTIME_CONFIG_TOKEN: ${{ github.event.inputs.runtime_config_token }}
-      POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
       RUNNER_EXECUTION_MODE: github
 
     steps:
@@ -130,4 +118,4 @@ jobs:
         uses: ./.github/actions/upload-runner-artifacts
         with:
           name: job-debug-${{ github.event.inputs.job_id }}
-          path: runner-scripts/
+          path: runner-scripts/output/

@@ -943,29 +943,26 @@ export async function getSchedulePersistenceValues(
 
 function buildImageWorkflowInputs(
   jobId: number,
-  automationId: number,
-  config: Record<string, unknown>,
-  postformeApiKey?: string
+  automationId: number
 ): WorkflowDispatchConfig {
   return {
     workflowName: "image-automation.yml",
-    inputs: { ...buildWorkflowInputs(jobId, automationId, config, postformeApiKey) },
+    inputs: { ...buildWorkflowInputs(jobId, automationId) },
   };
 }
 
 function buildWorkflowDispatch(
   automation: Automation,
   jobId: number,
-  config: Record<string, unknown>,
-  postformeApiKey?: string
+  config: Record<string, unknown>
 ): WorkflowDispatchConfig {
   if (automation.type === "image") {
-    return buildImageWorkflowInputs(jobId, automation.id as number, config, postformeApiKey);
+    return buildImageWorkflowInputs(jobId, automation.id as number);
   }
 
   return {
     workflowName: "video-automation.yml",
-    inputs: { ...buildWorkflowInputs(jobId, automation.id as number, config, postformeApiKey) },
+    inputs: { ...buildWorkflowInputs(jobId, automation.id as number) },
   };
 }
 
@@ -1206,8 +1203,8 @@ export async function triggerAutomationRun(
       return { success: false, jobId, executionMode, error };
     }
 
-    const postformeSettings = await getScopedSettings<PostformeSettings>(env.DB, "postforme", userId);
-    const workflow = buildWorkflowDispatch(automation, jobId, imageJobConfig, postformeSettings?.api_key);
+    const workflow = buildWorkflowDispatch(automation, jobId, imageJobConfig);
+    workflow.inputs.runtime_config_token = await buildWorkflowRuntimeConfigToken(jobId, githubSettings.pat_token);
     workflow.inputs.runner_labels = serializeRunnerLabels(githubSettings.runner_labels);
     const dispatchResult = await dispatchWorkflow(githubSettings, workflow.inputs, workflow.workflowName);
 
@@ -1285,6 +1282,24 @@ export async function triggerAutomationRun(
   }
 
   const videoSourceSettings = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
+  const youtubeCookiesConfigured = Boolean(readString(videoSourceSettings?.youtube_cookies).trim());
+  const isYoutubeSource =
+    videoSource === "youtube" ||
+    videoSource === "youtube_channel" ||
+    (readString(config.short_generation_mode, "normal") === "prompt" && readString(config.prompt_source_type) === "youtube");
+
+  if (executionMode === "github" && isYoutubeSource && youtubeCookiesConfigured) {
+    const error =
+      "YouTube account cookies are not reliable on GitHub-hosted runners because YouTube ties them to the browser/IP session. Run this automation from a local runner workspace instead of GitHub for YouTube sources.";
+    const jobId = await createFailedAutomationJob(env, automation, userId, config, error, "preflight.youtube_runner_mode", {
+      video_source: videoSource,
+      execution_mode: executionMode,
+      short_generation_mode: readString(config.short_generation_mode, "normal"),
+      prompt_source_type: readString(config.prompt_source_type),
+      youtube_cookies_configured: youtubeCookiesConfigured,
+    });
+    return { success: false, jobId: jobId || undefined, executionMode, error };
+  }
 
   // Handle video sources based on type
   switch (videoSource) {
@@ -1531,22 +1546,10 @@ export async function triggerAutomationRun(
     return { success: false, jobId, executionMode, error };
   }
 
-  const postformeSettings = await getScopedSettings<PostformeSettings>(env.DB, "postforme", userId);
-
-  const workflow = buildWorkflowDispatch(automation, jobId, jobConfig, postformeSettings?.api_key);
+  const workflow = buildWorkflowDispatch(automation, jobId, jobConfig);
   workflow.inputs.runtime_config_token = await buildWorkflowRuntimeConfigToken(jobId, githubSettings.pat_token);
   workflow.inputs.runner_labels = serializeRunnerLabels(githubSettings.runner_labels);
-  
-  // Debug: Check if segment_info is in the workflow inputs
-  let workflowConfig;
-  try {
-    workflowConfig = JSON.parse(workflow.inputs.automation_config);
-    console.log("[triggerAutomationRun] workflow.automation_config has segment_info:", !!workflowConfig.segment_info);
-    console.log("[triggerAutomationRun] segment_info value:", JSON.stringify(workflowConfig.segment_info));
-  } catch (e) {
-    console.log("[triggerAutomationRun] ERROR parsing workflow config:", (e as Error).message);
-  }
-  
+
   const workflowInputsForLog = {
     ...workflow.inputs,
     ...(workflow.inputs.runtime_config_token ? { runtime_config_token: "[redacted]" } : {}),

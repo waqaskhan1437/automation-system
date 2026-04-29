@@ -134,9 +134,7 @@ export interface WorkflowInputs {
   job_id: string;
   automation_id: string;
   dispatch_nonce?: string;
-  automation_config: string;
   worker_webhook_url: string;
-  postforme_api_key?: string;
   runtime_config_token?: string;
   runner_labels?: string;
 }
