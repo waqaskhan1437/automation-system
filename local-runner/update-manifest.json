@@ -13,6 +13,7 @@
     { "source": "local-runner/inspect-local-runner.ps1", "target": "inspect-local-runner.ps1" },
     { "source": "local-runner/install-startup-task.ps1", "target": "install-startup-task.ps1" },
     { "source": "local-runner/Launch-Local-Runner.bat", "target": "Launch-Local-Runner.bat" },
+    { "source": "local-runner/lib/config.js", "target": "lib/config.js" },
     { "source": "local-runner/package.json", "target": "package.json" },
     { "source": "local-runner/package-lock.json", "target": "package-lock.json" },
     { "source": "local-runner/restart-local-runner.ps1", "target": "restart-local-runner.ps1" },

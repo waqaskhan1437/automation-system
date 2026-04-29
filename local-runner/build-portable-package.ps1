@@ -67,6 +67,7 @@ Ensure-Directory $stagingRoot
 
 $itemsToCopy = @(
     "bootstrap.ps1",
+    "lib",
     "install-tailscale.ps1",
     "install-startup-task.ps1",
     "Launch-Local-Runner.bat",
