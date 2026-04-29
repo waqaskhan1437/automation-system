@@ -20,6 +20,11 @@ if not exist "%TOOLS_DIR%" mkdir "%TOOLS_DIR%" >nul 2>nul
 
 set "PATH=%NODE_DIR%;%ProgramFiles%\nodejs;%ProgramFiles(x86)%\nodejs;%USERPROFILE%\AppData\Roaming\npm;%USERPROFILE%\AppData\Local\Microsoft\WinGet\Links;%LOCALAPPDATA%\Microsoft\WindowsApps;%FFMPEG_DIR%\bin;%YTDLP_DIR%;%PATH%"
 set "NODE_CMD=node"
+set "SHOULD_OPEN_BROWSER=1"
+
+if /I "%AUTOMATION_NO_BROWSER%"=="1" (
+    set "SHOULD_OPEN_BROWSER=0"
+)
 
 if exist "%NODE_EXE%" (
     set "NODE_CMD=%NODE_EXE%"
@@ -117,13 +122,15 @@ if /I "!HAS_DEPENDENCIES!"=="yes" (
 )
 
 echo [5/9] Checking portable pipeline files...
-if not exist "runner-scripts\\main.js" (
+if not exist "runner-scripts\\main.js" if not exist "..\\runner-scripts\\main.js" (
     echo [ERROR] runner-scripts package is missing. Rebuild the portable zip and extract it again.
     exit /b 1
 )
 if not exist "tools\\ffmpeg\\bin\\ffprobe.exe" (
-    echo [ERROR] ffprobe.exe is missing from the portable package. Rebuild the portable zip and extract it again.
-    exit /b 1
+    where ffprobe >nul 2>nul
+    if %errorlevel% neq 0 (
+        echo [WARN] ffprobe.exe is not bundled yet and not available in PATH. Extra video validation may be skipped until FFmpeg portable files are cached.
+    )
 )
 echo [OK] Portable runner-scripts ready
 
@@ -140,33 +147,50 @@ if not exist "config.txt" (
 echo [OK] Configuration file ready
 
 echo [7/9] Checking Tailscale + SSH...
-powershell -NoProfile -ExecutionPolicy Bypass -File "install-tailscale.ps1"
-if %errorlevel% neq 0 (
-    echo [WARN] Tailscale/OpenSSH bootstrap failed. Remote access will stay disabled until setup succeeds.
+if /I "%AUTOMATION_SKIP_TAILSCALE%"=="1" (
+    echo [SKIP] Remote access bootstrap skipped by AUTOMATION_SKIP_TAILSCALE
 ) else (
-    echo [OK] Remote access bootstrap checked
+    powershell -NoProfile -ExecutionPolicy Bypass -File "install-tailscale.ps1"
+    if %errorlevel% neq 0 (
+        echo [WARN] Tailscale/OpenSSH bootstrap failed. Remote access will stay disabled until setup succeeds.
+    ) else (
+        echo [OK] Remote access bootstrap checked
+    )
 )
 
 echo [8/9] Installing auto-start task...
-powershell -NoProfile -ExecutionPolicy Bypass -File "install-startup-task.ps1"
-if %errorlevel% neq 0 (
-    echo [WARN] Startup task install failed. You can still use restart-local-runner.ps1 manually.
+if /I "%AUTOMATION_SKIP_AUTOSTART%"=="1" (
+    echo [SKIP] Startup task install skipped by AUTOMATION_SKIP_AUTOSTART
 ) else (
-    echo [OK] Startup task installed
+    powershell -NoProfile -ExecutionPolicy Bypass -File "install-startup-task.ps1"
+    if %errorlevel% neq 0 (
+        echo [WARN] Startup task install failed. You can still use restart-local-runner.ps1 manually.
+    ) else (
+        echo [OK] Startup task installed
+    )
 )
 
 echo [9/9] Starting background services...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'node.exe' -and $_.CommandLine -like '*supervisor.js*') -or ($_.Name -eq 'node.exe' -and $_.CommandLine -like '*server.js*') -or ($_.Name -eq 'node.exe' -and $_.CommandLine -like '*runner.js*') -or ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*run-runner.bat*') -or ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*run-background-supervisor.bat*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -WindowStyle Hidden -FilePath 'cmd.exe' -ArgumentList '/c','call run-background-supervisor.bat' -WorkingDirectory '%SCRIPT_DIR%'"
+if /I "%AUTOMATION_SKIP_RESTART%"=="1" (
+    echo [SKIP] Background restart skipped by AUTOMATION_SKIP_RESTART
+) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "restart-local-runner.ps1"
+)
 
 timeout /t 2 /nobreak >nul
-start "" http://localhost:3000
+if /I "%SHOULD_OPEN_BROWSER%"=="1" (
+    start "" http://localhost:3000/open
+)
 
 echo.
 echo ========================================
 echo   Ready
 echo   Background runner started
-echo   Browser opening on localhost:3000
+if /I "%SHOULD_OPEN_BROWSER%"=="0" (
+    echo   Browser auto-open skipped
+) else (
+    echo   Browser opening on localhost:3000
+)
 echo ========================================
 echo.
 exit /b 0

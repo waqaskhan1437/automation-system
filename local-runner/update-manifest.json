@@ -1,5 +1,5 @@
 {
-  "version": "2026.04.04.1",
+  "version": "2026.04.29.1",
   "repo_owner": "waqaskhan1437",
   "repo_name": "automation-system",
   "branch": "master",
@@ -8,9 +8,11 @@
   "restart_after_sync": true,
   "files": [
     { "source": "local-runner/build-portable-package.ps1", "target": "build-portable-package.ps1" },
+    { "source": "local-runner/bootstrap.ps1", "target": "bootstrap.ps1" },
     { "source": "local-runner/install-tailscale.ps1", "target": "install-tailscale.ps1" },
     { "source": "local-runner/inspect-local-runner.ps1", "target": "inspect-local-runner.ps1" },
     { "source": "local-runner/install-startup-task.ps1", "target": "install-startup-task.ps1" },
+    { "source": "local-runner/Launch-Local-Runner.bat", "target": "Launch-Local-Runner.bat" },
     { "source": "local-runner/package.json", "target": "package.json" },
     { "source": "local-runner/package-lock.json", "target": "package-lock.json" },
     { "source": "local-runner/restart-local-runner.ps1", "target": "restart-local-runner.ps1" },

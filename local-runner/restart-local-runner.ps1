@@ -3,9 +3,22 @@ param()
 $ErrorActionPreference = "SilentlyContinue"
 
 $scriptDir = $PSScriptRoot
+$installRoot = Join-Path $env:LOCALAPPDATA "AutomationLocalRunner"
+$bootstrapScript = Join-Path $scriptDir "bootstrap.ps1"
 $nodeExe = Join-Path $scriptDir "tools\node\node.exe"
 if (-not (Test-Path -LiteralPath $nodeExe)) {
     $nodeExe = "node"
+}
+
+if (
+    (Test-Path -LiteralPath $bootstrapScript) -and
+    ([System.IO.Path]::GetFullPath($scriptDir).TrimEnd('\') -eq [System.IO.Path]::GetFullPath($installRoot).TrimEnd('\'))
+) {
+    try {
+        & $bootstrapScript -InstallRoot $scriptDir -SourceDir $scriptDir -RefreshOnly -Quiet
+    } catch {
+        Write-Output ("[WARN] Bootstrap refresh skipped: " + $_.Exception.Message)
+    }
 }
 
 $targets = Get-CimInstance Win32_Process | Where-Object {
