@@ -15,6 +15,7 @@ import {
   listRepositoryFiles,
   logAiChange,
   maskObjectSecrets,
+  maskSecretValue,
   readRepositoryFile,
   requireAiScope,
   canUseAiScope,
@@ -590,6 +591,27 @@ function parseStoredJobOutput(value: string | null): unknown {
   }
 }
 
+function sanitizeStoredJobText(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return value == null ? null : String(value);
+  }
+  try {
+    return JSON.stringify(maskSecretValue(JSON.parse(value)));
+  } catch {
+    const masked = maskSecretValue(value);
+    return typeof masked === "string" ? masked : JSON.stringify(masked);
+  }
+}
+
+function sanitizeJobRowForAi(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    input_data: sanitizeStoredJobText(row.input_data),
+    output_data: sanitizeStoredJobText(row.output_data),
+    logs: sanitizeStoredJobText(row.logs),
+  };
+}
+
 async function getRecentJobs(env: Env, userId: number, limit: number): Promise<Record<string, unknown>> {
   const safeLimit = Math.min(Math.max(limit || 25, 1), 100);
   const rows = await env.DB.prepare(
@@ -598,7 +620,7 @@ async function getRecentJobs(env: Env, userId: number, limit: number): Promise<R
   return {
     generated_at: new Date().toISOString(),
     count: rows.results?.length || 0,
-    jobs: (rows.results || []).map(normalizeJobForMonitor),
+    jobs: (rows.results || []).map((row) => normalizeJobForMonitor(sanitizeJobRowForAi(row))),
   };
 }
 
@@ -613,9 +635,9 @@ async function getJobDiagnostics(request: Request, env: Env, auth: AuthContext, 
     return { found: false, error: "Job not found" };
   }
 
-  const outputData = parseStoredJobOutput(typeof job.output_data === "string" ? job.output_data : null);
-  const inputData = parseStoredJobOutput(typeof job.input_data === "string" ? job.input_data : null);
-  const logsData = parseStoredJobOutput(typeof job.logs === "string" ? job.logs : null);
+  const outputData = maskSecretValue(parseStoredJobOutput(typeof job.output_data === "string" ? job.output_data : null));
+  const inputData = maskSecretValue(parseStoredJobOutput(typeof job.input_data === "string" ? job.input_data : null));
+  const logsData = maskSecretValue(parseStoredJobOutput(typeof job.logs === "string" ? job.logs : null));
   const failureStage = getJobFailureStage(job);
   const diagnostics: Record<string, unknown> = {
     found: true,

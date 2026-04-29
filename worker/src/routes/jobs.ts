@@ -2,6 +2,7 @@ import { AuthContext, Env, Job, GithubSettings, Automation } from "../types";
 import { jsonResponse, githubHeaders, safeRequestJson } from "../utils";
 import { getScopedSettings } from "../services/user-settings";
 import { triggerAutomationRun } from "../services/automation-scheduler";
+import { maskSecretValue } from "../services/ai-developer";
 
 
 type GithubWorkflowStep = { name: string; status: string; conclusion: string | null; number: number };
@@ -19,6 +20,26 @@ function safeJsonParse<T>(value: string): T | null {
   } catch {
     return null;
   }
+}
+
+function sanitizeStoredJobFieldForApiKey(value: string | null | undefined): string | null {
+  if (!value) return value ?? null;
+  const parsed = safeJsonParse<unknown>(value);
+  if (parsed !== null) {
+    return JSON.stringify(maskSecretValue(parsed));
+  }
+  const masked = maskSecretValue(value);
+  return typeof masked === "string" ? masked : JSON.stringify(masked);
+}
+
+function sanitizeJobForApiKey<T extends Job | null>(job: T): T {
+  if (!job) return job;
+  return {
+    ...job,
+    input_data: sanitizeStoredJobFieldForApiKey(job.input_data),
+    output_data: sanitizeStoredJobFieldForApiKey(job.output_data),
+    logs: sanitizeStoredJobFieldForApiKey(job.logs),
+  } as T;
 }
 
 async function githubFetchWithTimeout(url: string, init: RequestInit, timeoutMs = GITHUB_FETCH_TIMEOUT_MS): Promise<Response> {
@@ -263,7 +284,8 @@ export async function handleJobsRoutes(
     params.push(limit);
 
     const result = await env.DB.prepare(query).bind(...params).all<Job>();
-    return jsonResponse({ success: true, data: result.results });
+    const jobs = auth.apiKeyId ? (result.results || []).map((job) => sanitizeJobForApiKey(job)) : result.results;
+    return jsonResponse({ success: true, data: jobs });
   }
 
   // Single job routes
@@ -274,7 +296,7 @@ export async function handleJobsRoutes(
       if (!result) {
         return jsonResponse({ success: false, error: "Job not found" }, 404);
       }
-      return jsonResponse({ success: true, data: result });
+      return jsonResponse({ success: true, data: auth.apiKeyId ? sanitizeJobForApiKey(result) : result });
     }
   }
 

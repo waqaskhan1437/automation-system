@@ -97,7 +97,7 @@ type GitHubWorkflowRun = {
   status?: string;
 };
 
-const SECRET_KEY_PATTERN = /(token|secret|password|api_key|apikey|private|cookie|pat|key)$/i;
+const SECRET_KEY_PATTERN = /(token|secret|password|api_key|apikey|private|cookies?|pat|key)$/i;
 const TEXT_DECODER = new TextDecoder();
 const TEXT_ENCODER = new TextEncoder();
 const GITHUB_API_TIMEOUT_MS = 15000;
