@@ -62,6 +62,7 @@ export interface DispatchResult {
   pendingRunLookup?: boolean;
   payloadBytes?: number;
   dispatchStatus?: number;
+  dispatchNonce?: string;
 }
 
 
@@ -95,6 +96,33 @@ function expectedWorkflowNames(workflowFile: string): string[] {
     return ["Video Automation Runner"];
   }
   return [];
+}
+
+function createDispatchNonce(jobId: number, automationId: number): string {
+  const randomPart = crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10);
+  return `job-${jobId}-automation-${automationId}-${Date.now()}-${randomPart}`;
+}
+
+function isMatchingWorkflowRun(
+  run: { event?: string; display_title?: string; name?: string; created_at?: string },
+  dispatchNonce: string,
+  jobId: string,
+  dispatchStartedAt: number
+): boolean {
+  if (run.event && run.event !== "workflow_dispatch") return false;
+  const title = `${run.display_title || ""} ${run.name || ""}`;
+  if (dispatchNonce && title.includes(dispatchNonce)) return true;
+
+  // Fallback only when the run title explicitly includes this job id.
+  // Never attach by "latest created_at" alone because that can map a new DB job
+  // to another automation's GitHub run and corrupt logs/status diagnostics.
+  if (jobId && new RegExp(`\\bjob\\s+${jobId}\\b`, "i").test(title)) {
+    if (!run.created_at) return true;
+    const createdAt = Date.parse(run.created_at);
+    return Number.isFinite(createdAt) && createdAt >= dispatchStartedAt - 5000;
+  }
+
+  return false;
 }
 
 async function resolveWorkflowDispatchTarget(
@@ -238,20 +266,33 @@ export async function dispatchWorkflow(
 ): Promise<DispatchResult> {
   try {
     const workflowFile = workflowName || WORKFLOW_NAME;
+    const dispatchStartedAt = Date.now();
+    const jobId = String(workflowInputs.job_id || "");
+    const automationId = String(workflowInputs.automation_id || "");
+    const dispatchNonce = String(workflowInputs.dispatch_nonce || createDispatchNonce(Number(jobId) || 0, Number(automationId) || 0));
+    const correlatedInputs = { ...workflowInputs, dispatch_nonce: dispatchNonce };
+    const legacyInputs = { ...workflowInputs };
+    delete legacyInputs.dispatch_nonce;
+    let activeDispatchInputs: Record<string, string> = correlatedInputs;
+    let dispatchNonceAccepted = true;
     console.log("[dispatchWorkflow] Workflow file:", workflowFile);
-    console.log("[dispatchWorkflow] Workflow inputs keys:", Object.keys(workflowInputs));
+    console.log("[dispatchWorkflow] Dispatch nonce:", dispatchNonce);
+    console.log("[dispatchWorkflow] Workflow inputs keys:", Object.keys(correlatedInputs));
 
-    const requestBody = JSON.stringify({ ref: "master", inputs: workflowInputs });
-    const payloadBytes = new TextEncoder().encode(requestBody).length;
+    const getPayloadBytes = (inputs: Record<string, string>) =>
+      new TextEncoder().encode(JSON.stringify({ ref: "master", inputs })).length;
+    let payloadBytes = getPayloadBytes(activeDispatchInputs);
     console.log("[dispatchWorkflow] Payload bytes:", payloadBytes);
 
     let workflowDispatchTarget = workflowFile;
     let workflowResolveWarning: string | undefined;
 
-    async function postDispatch(idOrFile: string): Promise<{ status: number; text: string }> {
+    async function postDispatch(idOrFile: string, inputs: Record<string, string>): Promise<{ status: number; text: string }> {
       const encodedWorkflow = encodeURIComponent(idOrFile);
       const dispatchUrl = `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${encodedWorkflow}/dispatches`;
+      const requestBody = JSON.stringify({ ref: "master", inputs });
       console.log("[dispatchWorkflow] Dispatch URL:", dispatchUrl);
+      console.log("[dispatchWorkflow] Dispatch input keys:", Object.keys(inputs));
       const response = await fetchGithubWithTimeout(dispatchUrl, {
         method: "POST",
         headers: {
@@ -268,7 +309,7 @@ export async function dispatchWorkflow(
       return { status, text };
     }
 
-    let dispatchResponse = await postDispatch(workflowDispatchTarget);
+    let dispatchResponse = await postDispatch(workflowDispatchTarget, activeDispatchInputs);
     let status = dispatchResponse.status;
     let responseText = dispatchResponse.text;
 
@@ -284,10 +325,30 @@ export async function dispatchWorkflow(
       if (resolved.idOrFile !== workflowDispatchTarget) {
         workflowDispatchTarget = resolved.idOrFile;
         console.log("[dispatchWorkflow] Retrying dispatch with resolved workflow target:", workflowDispatchTarget);
-        dispatchResponse = await postDispatch(workflowDispatchTarget);
+        dispatchResponse = await postDispatch(workflowDispatchTarget, activeDispatchInputs);
         status = dispatchResponse.status;
         responseText = dispatchResponse.text;
       }
+    }
+
+    if (
+      status === 422 &&
+      /unexpected inputs provided/i.test(responseText) &&
+      /dispatch_nonce/i.test(responseText)
+    ) {
+      // Backward compatibility: a Worker deploy can go live before the GitHub
+      // workflow file on the default branch has the new dispatch_nonce input.
+      // Older workflow_dispatch definitions reject unknown inputs. Retry without
+      // dispatch_nonce so jobs still reach GitHub Actions. Run lookup then uses
+      // the explicit job-id/title fallback and otherwise stays pending instead
+      // of attaching the wrong latest run.
+      console.warn("[dispatchWorkflow] Workflow does not accept dispatch_nonce; retrying with legacy inputs");
+      activeDispatchInputs = legacyInputs;
+      dispatchNonceAccepted = false;
+      payloadBytes = getPayloadBytes(activeDispatchInputs);
+      dispatchResponse = await postDispatch(workflowDispatchTarget, activeDispatchInputs);
+      status = dispatchResponse.status;
+      responseText = dispatchResponse.text;
     }
 
     if (status !== 204 && status !== 201 && status !== 200) {
@@ -300,6 +361,7 @@ export async function dispatchWorkflow(
           error: `GitHub workflow dispatch payload is too large (${payloadBytes} bytes) even after trimming automation_config.`,
           payloadBytes,
           dispatchStatus: status,
+          dispatchNonce,
         };
       }
       const workflowHint = workflowResolveWarning
@@ -312,6 +374,7 @@ export async function dispatchWorkflow(
         error: `GitHub API error while dispatching ${workflowFile}: ${status} - ${responseText}.${workflowHint}`,
         payloadBytes,
         dispatchStatus: status,
+        dispatchNonce,
       };
     }
     console.log("[dispatchWorkflow] Workflow dispatched, checking for run ID...");
@@ -340,15 +403,19 @@ export async function dispatchWorkflow(
           runLookupWarning = `Workflow dispatched but run lookup failed: GitHub API ${runsRes.status} - ${body.substring(0, 300)}`;
           console.error("[dispatchWorkflow] Failed to get workflow runs:", runsRes.status, body);
         } else {
-          const runsData = await runsRes.json() as { workflow_runs?: Array<{ id: number; html_url: string; event?: string; head_branch?: string }> };
-          const run = (runsData.workflow_runs || []).find((item) => item.event === "workflow_dispatch") || runsData.workflow_runs?.[0];
+          const runsData = await runsRes.json() as { workflow_runs?: Array<{ id: number; html_url: string; event?: string; display_title?: string; name?: string; created_at?: string }> };
+          const runs = runsData.workflow_runs || [];
+          const run = runs.find((item) => isMatchingWorkflowRun(item, dispatchNonce, jobId, dispatchStartedAt));
           if (run) {
             runId = run.id;
             runUrl = run.html_url;
-            console.log("[dispatchWorkflow] Got run ID:", runId);
+            console.log("[dispatchWorkflow] Got correlated run ID:", runId, "title:", run.display_title || run.name || "");
             break;
           }
-          runLookupWarning = "Workflow dispatched but no workflow_dispatch run was visible yet.";
+          const titles = runs.map((item) => `${item.id}:${item.display_title || item.name || "untitled"}`).slice(0, 5).join(", ");
+          runLookupWarning = dispatchNonceAccepted
+            ? `Workflow dispatched but no correlated run was visible yet for nonce ${dispatchNonce}. Recent runs: ${titles || "none"}`
+            : `Workflow dispatched with legacy inputs because the default-branch workflow does not accept dispatch_nonce. No safe correlated run was visible yet for job ${jobId}. Recent runs: ${titles || "none"}`;
           console.log("[dispatchWorkflow] No workflow runs found yet");
         }
       } catch (e) {
@@ -369,10 +436,20 @@ export async function dispatchWorkflow(
         pendingRunLookup: true,
         payloadBytes,
         dispatchStatus: status,
+        dispatchNonce,
       };
     }
 
-    return { success: true, runId, runUrl, dispatched: true, payloadBytes, dispatchStatus: status };
+    return {
+      success: true,
+      runId,
+      runUrl,
+      dispatched: true,
+      payloadBytes,
+      dispatchStatus: status,
+      dispatchNonce,
+      warning: dispatchNonceAccepted ? undefined : "Workflow accepted legacy inputs only. Update .github/workflows/video-automation.yml and image-automation.yml on the default branch to enable exact dispatch_nonce correlation.",
+    };
   } catch (err) {
     console.error("[dispatchWorkflow] Error:", err instanceof Error ? err.message : String(err));
     return {
@@ -441,6 +518,7 @@ export function buildWorkflowInputs(
   const inputs: WorkflowInputs = {
     job_id: String(jobId),
     automation_id: String(automationId),
+    dispatch_nonce: createDispatchNonce(jobId, automationId),
     automation_config: automationConfig,
     worker_webhook_url: WORKER_WEBHOOK_URL,
   };

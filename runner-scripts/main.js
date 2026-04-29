@@ -2,6 +2,7 @@
  * Main Orchestrator - Video processing pipeline with segment support
  */
 const { fs, path, execSync } = require('./lib/core');
+const crypto = require('crypto');
 const { OUTPUT_DIR, CONFIG_PATH } = require('./lib/paths');
 
 const download = require('./steps/download');
@@ -50,34 +51,38 @@ function normalizeCookieText(value) {
   return value.replace(/\r\n/g, '\n').trim();
 }
 
+function removeFileIfExists(filePath, label) {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`[COOKIES] Removed stale ${label} cookie file: ${filePath}`);
+    }
+  } catch (error) {
+    console.log(`[COOKIES] Could not remove stale ${label} cookie file ${filePath}: ${error.message}`);
+  }
+}
+
 function syncManagedCookieFile(targetFile, rawCookieText, label) {
   const normalized = normalizeCookieText(rawCookieText);
-
-  if (normalized === null) {
-    if (fs.existsSync(targetFile)) {
-      console.log(`[COOKIES] Keeping existing ${label} cookie file: ${targetFile}`);
-      return targetFile;
-    }
+  if (normalized === null || !normalized) {
+    removeFileIfExists(targetFile, label);
     return null;
   }
-
-  if (!normalized) {
-    if (fs.existsSync(targetFile)) {
-      fs.unlinkSync(targetFile);
-      console.log(`[COOKIES] Removed expired ${label} cookie file: ${targetFile}`);
-    }
-    return null;
-  }
-
-  fs.writeFileSync(targetFile, `${normalized}\n`, 'utf8');
-  console.log(`[COOKIES] Updated ${label} cookie file: ${targetFile}`);
+  const fingerprint = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 12);
+  fs.writeFileSync(targetFile, `${normalized}
+`, 'utf8');
+  console.log(`[COOKIES] Materialized ${label} cookie file: ${targetFile} fingerprint=${fingerprint} bytes=${Buffer.byteLength(normalized, 'utf8')}`);
   return targetFile;
 }
 
 function materializeManagedCookieFiles(config) {
   const runnerRoot = __dirname;
-  syncManagedCookieFile(path.join(runnerRoot, 'cookies.youtube.txt'), config?.youtube_cookies, 'YouTube');
-  syncManagedCookieFile(path.join(runnerRoot, 'cookies.google-photos.txt'), config?.google_photos_cookies, 'Google Photos');
+  const youtubeFile = syncManagedCookieFile(path.join(runnerRoot, 'cookies.youtube.txt'), config?.youtube_cookies, 'YouTube');
+  const googlePhotosFile = syncManagedCookieFile(path.join(runnerRoot, 'cookies.google-photos.txt'), config?.google_photos_cookies, 'Google Photos');
+  if (youtubeFile) process.env.YOUTUBE_COOKIES_FILE = youtubeFile;
+  else delete process.env.YOUTUBE_COOKIES_FILE;
+  if (googlePhotosFile) process.env.GOOGLE_PHOTOS_COOKIES_FILE = googlePhotosFile;
+  else delete process.env.GOOGLE_PHOTOS_COOKIES_FILE;
 }
 
 function resolveFinalOutputDir(config) {

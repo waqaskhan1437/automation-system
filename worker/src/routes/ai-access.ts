@@ -811,9 +811,10 @@ async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): P
             html_url: repo.html_url || null,
           };
         } else {
+          const repoFallback = unwrapSnapshotSection(repoSection);
           snapshot.github = {
             ...(snapshot.github as Record<string, unknown>),
-            ...(unwrapSnapshotSection(repoSection) as Record<string, unknown>),
+            ...(repoFallback && typeof repoFallback === "object" ? repoFallback : { unavailable: true, error: String(repoFallback) }),
           };
         }
 

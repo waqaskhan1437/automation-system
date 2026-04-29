@@ -1,4 +1,5 @@
 name: "Video Automation Runner"
+run-name: "Video job ${{ inputs.job_id }} ${{ inputs.dispatch_nonce }}"
 on:
   workflow_dispatch:
     inputs:
@@ -9,6 +10,10 @@ on:
       automation_id:
         description: 'Automation ID'
         required: true
+        type: string
+      dispatch_nonce:
+        description: 'Unique dispatch nonce used by the worker to correlate this exact GitHub run'
+        required: false
         type: string
       automation_config:
         description: 'Full automation config as JSON (with pre-fetched video_urls)'
@@ -45,6 +50,7 @@ jobs:
       WORKER_WEBHOOK_URL: ${{ github.event.inputs.worker_webhook_url }}
       JOB_ID: ${{ github.event.inputs.job_id }}
       AUTOMATION_ID: ${{ github.event.inputs.automation_id }}
+      DISPATCH_NONCE: ${{ github.event.inputs.dispatch_nonce }}
       RUNTIME_CONFIG_TOKEN: ${{ github.event.inputs.runtime_config_token }}
       POSTFORME_API_KEY: ${{ github.event.inputs.postforme_api_key }}
       RUNNER_EXECUTION_MODE: github

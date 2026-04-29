@@ -96,6 +96,8 @@ export interface VideoSourceSettings {
   bunny_library_id: string | null;
   youtube_cookies: string | null;
   google_photos_cookies: string | null;
+  youtube_cookies_meta?: string | null;
+  google_photos_cookies_meta?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -131,6 +133,7 @@ export interface TailscaleSettings {
 export interface WorkflowInputs {
   job_id: string;
   automation_id: string;
+  dispatch_nonce?: string;
   automation_config: string;
   worker_webhook_url: string;
   postforme_api_key?: string;

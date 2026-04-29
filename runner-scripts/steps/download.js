@@ -550,50 +550,62 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
   throw lastError || new Error('YouTube InnerTube download failed');
 }
 
+function analyzeCookieFile(rawText, label) {
+  const lines = String(rawText || '').split(/\r?\n/g).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const names = new Set();
+  let expired = 0;
+  let persistent = 0;
+  for (const line of lines) {
+    const fields = line.split('	');
+    if (fields.length < 7) continue;
+    const expires = Number.parseInt(fields[4], 10);
+    const name = fields[5];
+    if (name) names.add(name);
+    if (Number.isFinite(expires) && expires > 0) {
+      persistent += 1;
+      if (expires <= nowSeconds) expired += 1;
+    }
+  }
+  const recommended = ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', 'LOGIN_INFO'];
+  const missing = label === 'YouTube' ? recommended.filter((name) => !names.has(name)) : [];
+  if (persistent > 0 && expired === persistent) console.log(`[DOWNLOAD] ${label} cookie warning: all persistent cookies appear expired.`);
+  if (missing.length > 0) console.log(`[DOWNLOAD] ${label} cookie warning: missing recommended auth cookies: ${missing.join(', ')}`);
+  return { count: lines.length, missing };
+}
+
 function resolveCookiesFile(sourceUrl) {
   const stepsDir = path.resolve(__dirname);
   const runnerScriptsDir = path.resolve(stepsDir, '..');
   const normalizedSource = String(sourceUrl || '').toLowerCase();
   const isYouTubeSource = /youtube\.com|youtu\.be/.test(normalizedSource);
   const isGooglePhotosSource = /photos\.google\.com|photos\.app\.goo\.gl/.test(normalizedSource);
+  const label = isYouTubeSource ? 'YouTube' : isGooglePhotosSource ? 'Google Photos' : 'source';
   const candidates = isYouTubeSource
-    ? [
-        process.env.YOUTUBE_COOKIES_FILE || '',
-        path.join(runnerScriptsDir, 'cookies.youtube.txt'),
-      ]
+    ? [process.env.YOUTUBE_COOKIES_FILE || '', path.join(runnerScriptsDir, 'cookies.youtube.txt')]
     : isGooglePhotosSource
-      ? [
-          process.env.GOOGLE_PHOTOS_COOKIES_FILE || '',
-          path.join(runnerScriptsDir, 'cookies.google-photos.txt'),
-        ]
+      ? [process.env.GOOGLE_PHOTOS_COOKIES_FILE || '', path.join(runnerScriptsDir, 'cookies.google-photos.txt')]
       : [];
 
-  for (const candidate of candidates) {
-    if (!candidate || !fs.existsSync(candidate)) {
-      continue;
-    }
+  const existingCandidates = Array.from(new Set(candidates.filter(Boolean)))
+    .filter((candidate) => fs.existsSync(candidate))
+    .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs);
 
-    const rawText = (() => {
-      try {
-        return fs.readFileSync(candidate, 'utf8');
-      } catch {
-        return '';
-      }
-    })();
-
+  for (const candidate of existingCandidates) {
+    let rawText = '';
+    try { rawText = fs.readFileSync(candidate, 'utf8'); } catch {}
     if (!looksLikeNetscapeCookieFile(rawText)) {
       console.log(`[DOWNLOAD] Ignoring invalid cookie file: ${candidate}`);
       continue;
     }
-
     const size = fs.statSync(candidate).size;
-    console.log(`[DOWNLOAD] Found managed cookie file: ${candidate} (${(size / 1024).toFixed(1)} KB)`);
+    const diagnostics = analyzeCookieFile(rawText, label);
+    console.log(`[DOWNLOAD] Using managed ${label} cookie file: ${candidate} (${(size / 1024).toFixed(1)} KB, ${diagnostics.count} records, mtime=${new Date(fs.statSync(candidate).mtimeMs).toISOString()})`);
     return candidate;
   }
 
-  if (isYouTubeSource) {
-    console.log('[DOWNLOAD] No managed YouTube cookie file found - sign-in protected videos may fail');
-  }
+  if (isYouTubeSource) console.log('[DOWNLOAD] No managed YouTube cookie file found - sign-in protected videos may fail');
+  else if (isGooglePhotosSource) console.log('[DOWNLOAD] No managed Google Photos cookie file found - private Google Photos links may fail');
   return null;
 }
 

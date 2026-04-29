@@ -2,6 +2,33 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import { ExternalLink, Info } from "lucide-react";
 
+type CookieDiagnostics = {
+  file_name?: string;
+  uploaded_at?: string;
+  fingerprint?: string;
+  cookie_count?: number;
+  session_cookie_count?: number;
+  expired_cookie_count?: number;
+  domains?: string[];
+  summary?: {
+    total_cookies?: number;
+    expired_cookies?: number;
+    session_cookies?: number;
+    domains?: string[];
+  };
+  critical_warnings?: string[];
+  warnings?: string[];
+};
+
+function parseCookieDiagnostics(value: unknown): CookieDiagnostics | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try { return JSON.parse(value) as CookieDiagnostics; } catch { return null; }
+  }
+  if (typeof value === "object") return value as CookieDiagnostics;
+  return null;
+}
+
 export default function VideoSourceSettings() {
   const [bunnyApiKey, setBunnyApiKey] = useState("");
   const [bunnyLibraryId, setBunnyLibraryId] = useState("");
@@ -17,6 +44,8 @@ export default function VideoSourceSettings() {
   const [googlePhotosUploadError, setGooglePhotosUploadError] = useState("");
   const [uploadingSource, setUploadingSource] = useState<"youtube" | "google_photos" | null>(null);
   const [activeTab, setActiveTab] = useState<"youtube" | "google_photos" | "bunny">("youtube");
+  const [youtubeDiagnostics, setYoutubeDiagnostics] = useState<CookieDiagnostics | null>(null);
+  const [googlePhotosDiagnostics, setGooglePhotosDiagnostics] = useState<CookieDiagnostics | null>(null);
   const [saveError, setSaveError] = useState("");
 
   const loadSettings = async () => {
@@ -27,8 +56,12 @@ export default function VideoSourceSettings() {
       setBunnyLibraryId(data.data.bunny_library_id || "");
       setYoutubeCookies(data.data.youtube_cookies || "");
       setGooglePhotosCookies(data.data.google_photos_cookies || "");
-      setYoutubeCookieFileName(data.data.youtube_cookies ? "Stored on server" : "");
-      setGooglePhotosCookieFileName(data.data.google_photos_cookies ? "Stored on server" : "");
+      const youtubeMeta = parseCookieDiagnostics(data.data.youtube_cookies_meta);
+      const googlePhotosMeta = parseCookieDiagnostics(data.data.google_photos_cookies_meta);
+      setYoutubeDiagnostics(youtubeMeta);
+      setGooglePhotosDiagnostics(googlePhotosMeta);
+      setYoutubeCookieFileName(youtubeMeta?.file_name || (data.data.youtube_cookies ? "Stored on server" : ""));
+      setGooglePhotosCookieFileName(googlePhotosMeta?.file_name || (data.data.google_photos_cookies ? "Stored on server" : ""));
       return;
     }
 
@@ -38,6 +71,8 @@ export default function VideoSourceSettings() {
     setGooglePhotosCookies("");
     setYoutubeCookieFileName("");
     setGooglePhotosCookieFileName("");
+    setYoutubeDiagnostics(null);
+    setGooglePhotosDiagnostics(null);
   };
 
   const handleCookieUpload = async (source: "youtube" | "google_photos", event: ChangeEvent<HTMLInputElement>) => {
@@ -70,12 +105,17 @@ export default function VideoSourceSettings() {
         throw new Error(result.error || "Cookies upload failed");
       }
 
+      const diagnostics = parseCookieDiagnostics(result.data?.diagnostics);
       if (source === "youtube") {
-        setYoutubeCookieFileName(file.name);
-        setYoutubeUploadMessage("YouTube cookies file upload ho gayi. New session ab server par save ho gayi hai aur GitHub Actions plus local runner dono next runs me isi ko use karenge.");
+        setYoutubeDiagnostics(diagnostics);
+        setYoutubeCookieFileName(diagnostics?.file_name || file.name);
+        const warningCount = diagnostics?.critical_warnings?.length || 0;
+        setYoutubeUploadMessage(warningCount ? `YouTube cookies upload ho gayi, lekin ${warningCount} warning(s) mili hain. Neeche diagnostics check karein.` : "YouTube cookies file upload ho gayi. New session ab server par save ho gayi hai aur GitHub Actions plus local runner dono next runs me isi ko use karenge.");
       } else {
-        setGooglePhotosCookieFileName(file.name);
-        setGooglePhotosUploadMessage("Google Photos cookies file upload ho gayi. Private album/share downloads ab fresh server session se chalenge.");
+        setGooglePhotosDiagnostics(diagnostics);
+        setGooglePhotosCookieFileName(diagnostics?.file_name || file.name);
+        const warningCount = diagnostics?.critical_warnings?.length || 0;
+        setGooglePhotosUploadMessage(warningCount ? `Google Photos cookies upload ho gayi, lekin ${warningCount} warning(s) mili hain. Neeche diagnostics check karein.` : "Google Photos cookies file upload ho gayi. Private album/share downloads ab fresh server session se chalenge.");
       }
       await loadSettings();
     } catch (error) {
@@ -120,6 +160,35 @@ export default function VideoSourceSettings() {
       setSaveError(error instanceof Error ? error.message : "Failed to save settings");
     }
     setSaving(false);
+  };
+
+
+  const renderCookieDiagnostics = (diagnostics: CookieDiagnostics | null) => {
+    if (!diagnostics) return null;
+    const warnings = Array.isArray(diagnostics.critical_warnings) ? diagnostics.critical_warnings : (Array.isArray(diagnostics.warnings) ? diagnostics.warnings : []);
+    const domainList = Array.isArray(diagnostics.domains) ? diagnostics.domains : (Array.isArray(diagnostics.summary?.domains) ? diagnostics.summary?.domains || [] : []);
+    const domains = domainList.slice(0, 6).join(", ");
+    const totalCookies = diagnostics.cookie_count ?? diagnostics.summary?.total_cookies ?? 0;
+    const sessionCookies = diagnostics.session_cookie_count ?? diagnostics.summary?.session_cookies ?? 0;
+    const expiredCookies = diagnostics.expired_cookie_count ?? diagnostics.summary?.expired_cookies ?? 0;
+    return (
+      <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-[#d4d4d8] space-y-1">
+        <div className="font-medium text-white">Active uploaded cookies</div>
+        <div>File: {diagnostics.file_name || "server-stored cookies"}</div>
+        {diagnostics.uploaded_at && <div>Uploaded: {diagnostics.uploaded_at}</div>}
+        {diagnostics.fingerprint && <div>Fingerprint: <span className="font-mono">{diagnostics.fingerprint}</span></div>}
+        <div>Cookies: {totalCookies} total, {expiredCookies} expired, {sessionCookies} session</div>
+        {domains && <div>Domains: {domains}</div>}
+        {warnings.length > 0 && (
+          <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-2 text-amber-200">
+            <div className="font-medium">Warnings</div>
+            <ul className="list-disc pl-4">
+              {warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -192,6 +261,7 @@ export default function VideoSourceSettings() {
               {youtubeUploadError}
             </div>
           )}
+          {renderCookieDiagnostics(youtubeDiagnostics)}
           <div className="mt-4">
             <label className="block text-sm text-[#a1a1aa] mb-2">YouTube Cookies (Netscape format)</label>
             <textarea
@@ -241,6 +311,7 @@ export default function VideoSourceSettings() {
               {googlePhotosUploadError}
             </div>
           )}
+          {renderCookieDiagnostics(googlePhotosDiagnostics)}
           <div>
             <label className="block text-sm text-[#a1a1aa] mb-2">Google Photos Cookies (Netscape format)</label>
             <textarea

@@ -214,3 +214,21 @@ export function summarizeCookieFile(rawValue: string | null | undefined, updated
     warnings,
   };
 }
+
+
+export function buildCookieUploadDiagnostics(rawValue: string, purpose: "youtube" | "google_photos", fileName: string): CookieSummary & { file_name: string; uploaded_at: string; fingerprint: string; critical_warnings: string[] } {
+  const normalized = normalizeCookieFile(rawValue);
+  const summary = summarizeCookieFile(normalized.normalized || rawValue, new Date().toISOString(), purpose);
+  const criticalWarnings: string[] = [];
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const entries = normalized.entries;
+  if (entries.length === 0) criticalWarnings.push("No valid cookie records found in uploaded file.");
+  const nonSession = entries.filter((entry) => entry.expires > 0);
+  const expired = nonSession.filter((entry) => entry.expires <= nowSeconds);
+  if (nonSession.length > 0 && expired.length === nonSession.length) criticalWarnings.push("All persistent cookies in this file are expired.");
+  if (purpose === "youtube" && !summary.youtube_auth_likely) criticalWarnings.push("YouTube auth cookies look incomplete. Export from a signed-in YouTube browser session, not an incognito/logged-out session.");
+  const hashInput = `${fileName}\n${normalized.normalized || rawValue}`;
+  let hash = 0;
+  for (let index = 0; index < hashInput.length; index += 1) hash = (Math.imul(31, hash) + hashInput.charCodeAt(index)) | 0;
+  return { ...summary, file_name: fileName, uploaded_at: new Date().toISOString(), fingerprint: Math.abs(hash).toString(16).padStart(8, "0"), critical_warnings: criticalWarnings };
+}

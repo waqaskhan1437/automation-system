@@ -126,6 +126,18 @@ function firstHttpUrl(value: unknown): string {
   return splitHttpLines(value)[0] || "";
 }
 
+function normalizeHttpUrlText(value: unknown): string {
+  return splitHttpLines(value).join("\n");
+}
+
+function getGooglePhotosSourceUrls(config: Record<string, unknown>): { text: string; migratedFromAlbumUrl: boolean } {
+  const linksText = normalizeHttpUrlText(config.google_photos_links);
+  if (linksText) return { text: linksText, migratedFromAlbumUrl: false };
+  const albumText = normalizeHttpUrlText(config.google_photos_album_url);
+  if (albumText && splitHttpLines(albumText).some(isGooglePhotosUrl)) return { text: albumText, migratedFromAlbumUrl: true };
+  return { text: "", migratedFromAlbumUrl: false };
+}
+
 function isYoutubeUrl(value: string): boolean {
   return /(^|\.)youtube\.com\/|youtu\.be\//i.test(value);
 }
@@ -156,8 +168,9 @@ function recoverSourceMismatch(
   promptSource: { videoSource: string; singleSource: string; error: string | null },
 ): { videoSource: string; singleSourceOverride: string; reason: string | null } {
   const promptMode = readString(config.short_generation_mode, "normal") === "prompt";
-  const googlePhotoLinks = readString(config.google_photos_links).trim();
-  const googlePhotoAlbum = readString(config.google_photos_album_url).trim();
+  const googlePhotoBundle = getGooglePhotosSourceUrls(config);
+  const googlePhotoLinks = googlePhotoBundle.text;
+  const googlePhotoAlbum = googlePhotoBundle.migratedFromAlbumUrl ? googlePhotoBundle.text : normalizeHttpUrlText(config.google_photos_album_url);
   const promptUrl = firstHttpUrl(config.prompt_video_url);
   const normalUrl = firstHttpUrl(config.video_url);
   const candidateUrl = promptSource.singleSource || (promptMode ? promptUrl || normalUrl : normalUrl || promptUrl);
@@ -1204,6 +1217,7 @@ export async function triggerAutomationRun(
         workflow: workflow.workflowName,
         dispatch_status: dispatchResult.dispatchStatus,
         payload_bytes: dispatchResult.payloadBytes,
+        dispatch_nonce: dispatchResult.dispatchNonce,
       });
 
       return { success: false, jobId, executionMode, error };
@@ -1214,7 +1228,7 @@ export async function triggerAutomationRun(
     ).bind(
       dispatchResult.runId,
       dispatchResult.runUrl,
-      dispatchResult.warning ? JSON.stringify([{ at: new Date().toISOString(), stage: "dispatch.run_lookup", level: "warning", message: dispatchResult.warning }]) : null,
+      dispatchResult.warning ? JSON.stringify([{ at: new Date().toISOString(), stage: "dispatch.run_lookup", level: "warning", message: dispatchResult.warning, dispatch_nonce: dispatchResult.dispatchNonce }]) : null,
       jobId
     ).run();
 
@@ -1323,20 +1337,16 @@ export async function triggerAutomationRun(
     }
 
     case "google_photos": {
-      const rawLinks = readString(config.google_photos_links);
-      if (rawLinks) {
-        const shareLinks = rawLinks.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("http"));
+      const googleSource = getGooglePhotosSourceUrls(config);
+      if (googleSource.text) {
+        const shareLinks = splitHttpLines(googleSource.text).filter(isGooglePhotosUrl);
         videoUrls = shareLinks;
-        console.log(`[TRIGGER] google_photos: queued ${shareLinks.length} source URL(s) for runner-side resolution`);
+        console.log(`[TRIGGER] google_photos: queued ${shareLinks.length} source URL(s) for runner-side resolution${googleSource.migratedFromAlbumUrl ? " (migrated from legacy google_photos_album_url)" : ""}`);
         fetchStats = { total: shareLinks.length, unprocessed: shareLinks.length, to_process: Math.min(shareLinks.length, videosPerRun), processed_already: 0 };
       } else {
-        const albumUrl = readString(config.google_photos_album_url);
-        if (albumUrl) {
-          console.log(`[TRIGGER] google_photos: ${albumUrl}`);
-          const preFetched = readString(config.video_url);
-          if (preFetched) {
-            videoUrls = preFetched.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("http"));
-          }
+        const preFetched = normalizeHttpUrlText(config.video_url);
+        if (preFetched) {
+          videoUrls = splitHttpLines(preFetched).filter((url) => url.startsWith("http"));
           fetchStats = { total: videoUrls.length, unprocessed: videoUrls.length, to_process: Math.min(videoUrls.length, videosPerRun), processed_already: 0 };
         }
       }
@@ -1450,7 +1460,11 @@ export async function triggerAutomationRun(
       ? { youtube_cookies: readString(videoSourceSettings?.youtube_cookies).trim() }
       : {}),
     ...(videoSource === "google_photos"
-      ? { google_photos_cookies: readString(videoSourceSettings?.google_photos_cookies).trim() }
+      ? {
+          google_photos_cookies: readString(videoSourceSettings?.google_photos_cookies).trim(),
+          google_photos_links: getGooglePhotosSourceUrls(config).text,
+          google_photos_migrated_from_album_url: getGooglePhotosSourceUrls(config).migratedFromAlbumUrl,
+        }
       : {}),
     source_detection: {
       requested_video_source: requestedVideoSource,
@@ -1481,6 +1495,8 @@ export async function triggerAutomationRun(
       fetch_stats: fetchStats,
       short_generation_mode: readString(config.short_generation_mode, "normal"),
       prompt_source_type: readString(config.prompt_source_type),
+      google_photos_links_count: splitHttpLines(config.google_photos_links).length,
+      google_photos_album_url_count: splitHttpLines(config.google_photos_album_url).length,
     });
     return { success: false, jobId: jobId || undefined, executionMode, error: errorMsg };
   }
@@ -1545,6 +1561,7 @@ export async function triggerAutomationRun(
       workflow: workflow.workflowName,
       dispatch_status: dispatchResult.dispatchStatus,
       payload_bytes: dispatchResult.payloadBytes,
+      dispatch_nonce: dispatchResult.dispatchNonce,
     });
 
     return { success: false, jobId, executionMode, error };
@@ -1555,7 +1572,7 @@ export async function triggerAutomationRun(
   ).bind(
     dispatchResult.runId,
     dispatchResult.runUrl,
-    dispatchResult.warning ? JSON.stringify([{ at: new Date().toISOString(), stage: "dispatch.run_lookup", level: "warning", message: dispatchResult.warning }]) : null,
+    dispatchResult.warning ? JSON.stringify([{ at: new Date().toISOString(), stage: "dispatch.run_lookup", level: "warning", message: dispatchResult.warning, dispatch_nonce: dispatchResult.dispatchNonce }]) : null,
     jobId
   ).run();
 

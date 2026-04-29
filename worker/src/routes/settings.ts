@@ -15,6 +15,7 @@ import {
 } from "../services/ai";
 import { generateImageBannerPreviewSpecs, normalizeBannerFormat } from "../services/image-automation";
 import { getScopedSettings, upsertScopedSettings } from "../services/user-settings";
+import { buildCookieUploadDiagnostics } from "../services/cookie-files";
 
 type SyncedPostformeAccount = {
   id: string;
@@ -99,6 +100,19 @@ function looksLikeNetscapeCookieFile(value: string): boolean {
     .filter((line) => !line.startsWith("#"));
 
   return lines.some((line) => line.split("\t").length >= 7);
+}
+
+async function ensureVideoSourceCookieMetadataColumns(env: Env): Promise<void> {
+  for (const statement of [
+    "ALTER TABLE settings_video_sources ADD COLUMN youtube_cookies_meta TEXT",
+    "ALTER TABLE settings_video_sources ADD COLUMN google_photos_cookies_meta TEXT",
+  ]) {
+    try { await env.DB.prepare(statement).run(); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/duplicate column name|already exists/i.test(message)) console.warn("[settings.video-sources] Cookie metadata migration skipped:", message);
+    }
+  }
 }
 
 export async function handleSettingsRoutes(
@@ -320,7 +334,8 @@ export async function handleSettingsRoutes(
   // VIDEO SOURCE SETTINGS
   if (path === "/api/settings/video-sources") {
     if (method === "GET") {
-      const result = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
+      await ensureVideoSourceCookieMetadataColumns(env);
+      const result = await getScopedSettings<VideoSourceSettings & { youtube_cookies_meta?: string | null; google_photos_cookies_meta?: string | null }>(env.DB, "video-sources", userId);
       return jsonResponse({ success: true, data: result || null });
     }
 
@@ -331,11 +346,16 @@ export async function handleSettingsRoutes(
       }
 
       try {
+        await ensureVideoSourceCookieMetadataColumns(env);
+        const normalizedYoutubeCookies = normalizeOptionalCookieValue(body.youtube_cookies, "YouTube cookies");
+        const normalizedGooglePhotosCookies = normalizeOptionalCookieValue(body.google_photos_cookies, "Google Photos cookies");
         await upsertScopedSettings(env.DB, "settings_video_sources", userId, {
           bunny_api_key: body.bunny_api_key || null,
           bunny_library_id: body.bunny_library_id || null,
-          youtube_cookies: normalizeOptionalCookieValue(body.youtube_cookies, "YouTube cookies"),
-          google_photos_cookies: normalizeOptionalCookieValue(body.google_photos_cookies, "Google Photos cookies"),
+          youtube_cookies: normalizedYoutubeCookies,
+          google_photos_cookies: normalizedGooglePhotosCookies,
+          youtube_cookies_meta: normalizedYoutubeCookies ? JSON.stringify(buildCookieUploadDiagnostics(normalizedYoutubeCookies, "youtube", "manual-paste.txt")) : null,
+          google_photos_cookies_meta: normalizedGooglePhotosCookies ? JSON.stringify(buildCookieUploadDiagnostics(normalizedGooglePhotosCookies, "google_photos", "manual-paste.txt")) : null,
         });
         return jsonResponse({ success: true, message: "Video source settings saved" });
       } catch (error) {
@@ -375,22 +395,22 @@ export async function handleSettingsRoutes(
         return jsonResponse({ success: false, error: "Uploaded cookies file is empty" }, 400);
       }
 
-      const existing = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
+      await ensureVideoSourceCookieMetadataColumns(env);
+      const diagnostics = buildCookieUploadDiagnostics(normalized, source === "youtube" ? "youtube" : "google_photos", fileName);
+      const existing = await getScopedSettings<VideoSourceSettings & { youtube_cookies_meta?: string | null; google_photos_cookies_meta?: string | null }>(env.DB, "video-sources", userId);
       await upsertScopedSettings(env.DB, "settings_video_sources", userId, {
         bunny_api_key: existing?.bunny_api_key || null,
         bunny_library_id: existing?.bunny_library_id || null,
         youtube_cookies: sourceConfig.field === "youtube_cookies" ? normalized : existing?.youtube_cookies || null,
         google_photos_cookies: sourceConfig.field === "google_photos_cookies" ? normalized : existing?.google_photos_cookies || null,
+        youtube_cookies_meta: sourceConfig.field === "youtube_cookies" ? JSON.stringify(diagnostics) : existing?.youtube_cookies_meta || null,
+        google_photos_cookies_meta: sourceConfig.field === "google_photos_cookies" ? JSON.stringify(diagnostics) : existing?.google_photos_cookies_meta || null,
       });
 
       return jsonResponse({
         success: true,
         message: `${sourceConfig.label} uploaded and replaced successfully`,
-        data: {
-          source,
-          file_name: fileName,
-          bytes: normalized.length,
-        },
+        data: { source, file_name: fileName, bytes: normalized.length, diagnostics },
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Cookies upload failed";

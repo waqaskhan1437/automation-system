@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS settings_video_sources (
   bunny_library_id TEXT,
   youtube_cookies TEXT,
   google_photos_cookies TEXT,
+  youtube_cookies_meta TEXT,
+  google_photos_cookies_meta TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id)

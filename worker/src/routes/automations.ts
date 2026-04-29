@@ -82,6 +82,15 @@ async function safeGetLinkQueueStatus(env: Env, automationId: number, userId: nu
   }
 }
 
+function splitHttpLines(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  return value.split(/\r?\n|,/g).map((line) => line.trim()).filter((line) => /^https?:\/\//i.test(line));
+}
+
+function isGooglePhotosUrl(value: string): boolean {
+  return /photos\.google\.com|photos\.app\.goo\.gl/i.test(value);
+}
+
 function normalizeConfigRecord(config: Record<string, unknown>): Record<string, unknown> {
   const next = { ...config };
   if (next.short_generation_mode === "prompt") {
@@ -94,8 +103,14 @@ function normalizeConfigRecord(config: Record<string, unknown>): Record<string, 
   }
 
   if (next.video_source === "google_photos") {
-    const googleLinks = typeof next.google_photos_links === "string" ? next.google_photos_links.trim() : "";
-    const googleAlbum = typeof next.google_photos_album_url === "string" ? next.google_photos_album_url.trim() : "";
+    const googleLinks = splitHttpLines(next.google_photos_links).join("\n");
+    const googleAlbumUrls = splitHttpLines(next.google_photos_album_url);
+    const googleAlbum = googleAlbumUrls.join("\n");
+    if (!googleLinks && googleAlbumUrls.some(isGooglePhotosUrl)) {
+      next.google_photos_links = googleAlbum;
+      next.google_photos_album_url = "";
+      next.google_photos_migrated_from_album_url = true;
+    }
     const promptUrl = typeof next.prompt_video_url === "string" ? next.prompt_video_url.trim() : "";
     const videoUrl = typeof next.video_url === "string" ? next.video_url.trim() : "";
     const candidate = promptUrl || videoUrl;

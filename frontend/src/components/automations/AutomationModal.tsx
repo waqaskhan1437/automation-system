@@ -126,6 +126,26 @@ function extractPromptSocialContent(plan: PromptPlanPayload | null | undefined):
   };
 }
 
+
+function splitHttpText(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  return value.split(/\r?\n|,/g).map((line) => line.trim()).filter((line) => /^https?:\/\//i.test(line));
+}
+
+function normalizeLegacyGooglePhotosConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...config };
+  if (next.video_source === "google_photos") {
+    const links = splitHttpText(next.google_photos_links);
+    const albumUrls = splitHttpText(next.google_photos_album_url);
+    if (links.length === 0 && albumUrls.some((url) => /photos\.google\.com|photos\.app\.goo\.gl/i.test(url))) {
+      next.google_photos_links = albumUrls.join("\n");
+      next.google_photos_album_url = "";
+      next.google_photos_migrated_from_album_url = true;
+    }
+  }
+  return next;
+}
+
 export default memo(function AutomationModal({ type, editData, onClose, onSaved }: Props) {
   const sessionUser = useSessionUser();
   const isLocalRunnerUser = sessionUser?.is_admin === false;
@@ -154,7 +174,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
       if (editData?.config) {
         try {
           const cfg = JSON.parse(editData.config);
-          setData({ ...DEFAULT_VIDEO_CONFIG, ...cfg });
+          setData(normalizeLegacyGooglePhotosConfig({ ...DEFAULT_VIDEO_CONFIG, ...cfg }));
           setName(editData.name);
         } catch (e) {
           console.error("Failed to parse config:", e);
@@ -172,9 +192,9 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
   const loadAiCatalog = useCallback(async () => {
     setAiLoading(true);
     try {
-      const res = await api.get<{ default_provider: string | null; providers: Array<{ id: string; name: string; models: string[] }> }>("/api/settings/ai/models");
+      const res = await api.get<unknown>("/api/settings/ai/models");
       if (res.success && res.data) {
-        setAiCatalog(normalizeAiCatalog(res.data as unknown as AIModelCatalogResponse));
+        setAiCatalog(normalizeAiCatalog(res.data as AIModelCatalogResponse));
       } else {
         setAiCatalog({ default_provider: null, providers: [] });
       }
@@ -542,7 +562,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     if (!name.trim()) { alert("Name is required"); return; }
     setSaving(true);
     try {
-      const configToSave = { ...data };
+      const configToSave = normalizeLegacyGooglePhotosConfig({ ...data });
       if (configToSave.short_generation_mode === "prompt") {
         const promptSourceType = typeof configToSave.prompt_source_type === "string" ? configToSave.prompt_source_type : "youtube";
         if (promptSourceType === "youtube" || promptSourceType === "direct") {
