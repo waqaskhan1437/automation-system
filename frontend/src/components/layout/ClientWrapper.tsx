@@ -87,6 +87,7 @@ export default function ClientWrapper({ children }: { children: React.ReactNode 
     setError("");
     try {
       const response = await api.post<{ user: SessionUser }>("/api/auth/token", undefined, {
+        timeout: 30000,
         headers: {
           Authorization: `Bearer ${nextToken}`,
         },
@@ -131,7 +132,16 @@ export default function ClientWrapper({ children }: { children: React.ReactNode 
     } catch (err) {
       clearStoredAccessToken();
       setSessionUser(null);
-      setError(err instanceof Error ? err.message : "Invalid access token");
+      const rawMessage = err instanceof Error ? err.message : "";
+      let message = "Invalid access token";
+      if (err instanceof DOMException && err.name === "AbortError") {
+        message = "Token verification timed out. Please try again.";
+      } else if (/aborted/i.test(rawMessage)) {
+        message = "Token verification was aborted. Please try again.";
+      } else if (rawMessage) {
+        message = rawMessage;
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -144,7 +154,7 @@ export default function ClientWrapper({ children }: { children: React.ReactNode 
       const response = await api.post<{ access_token: string; user: SessionUser }>("/api/auth/admin-login", {
         email: adminEmail.trim(),
         password: adminPassword,
-      });
+      }, { timeout: 30000 });
 
       if (!response.success || !response.data?.access_token || !response.data.user?.is_admin) {
         throw new Error(response.error || "Admin login failed");
@@ -161,7 +171,16 @@ export default function ClientWrapper({ children }: { children: React.ReactNode 
     } catch (err) {
       clearStoredAccessToken();
       setSessionUser(null);
-      setError(err instanceof Error ? err.message : "Admin login failed");
+      const rawMessage = err instanceof Error ? err.message : "";
+      let message = "Admin login failed";
+      if (err instanceof DOMException && err.name === "AbortError") {
+        message = "Admin login timed out. Please try again.";
+      } else if (/aborted/i.test(rawMessage)) {
+        message = "Admin login was aborted. Please try again.";
+      } else if (rawMessage) {
+        message = rawMessage;
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
