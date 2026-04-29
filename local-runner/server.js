@@ -30,7 +30,7 @@ const TOOL_PATHS = {
 };
 const DEFAULTS = {
   SERVER_URL: "https://automation-api.waqaskhan1437.workers.dev",
-  FRONTEND_URL: "https://automation-frontend-woad.vercel.app",
+  FRONTEND_URL: "https://frontend-nine-jet-27.vercel.app",
   RUNNER_TOKEN: "",
   ACCESS_TOKEN: "",
 };
@@ -500,6 +500,7 @@ function renderBadge(ok) {
 
 function renderPage(config, selfCheck, error = "") {
   const existingAccessToken = config.ACCESS_TOKEN || "";
+  const existingFrontendUrl = config.FRONTEND_URL || DEFAULTS.FRONTEND_URL;
   const existingRunnerToken = config.RUNNER_TOKEN || "";
   const supervisor = selfCheck.supervisor;
   const runner = selfCheck.runner;
@@ -549,12 +550,15 @@ function renderPage(config, selfCheck, error = "") {
         <input id="runner_token" name="runner_token" type="password" placeholder="rnr_..." value="${escapeHtml(existingRunnerToken)}" />
         <label for="access_token">Access Token</label>
         <input id="access_token" name="access_token" type="password" placeholder="atk_..." value="${escapeHtml(existingAccessToken)}" />
+        <label for="frontend_url">Frontend URL</label>
+        <input id="frontend_url" name="frontend_url" type="url" placeholder="https://your-frontend.vercel.app" value="${escapeHtml(existingFrontendUrl)}" />
         ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
         <button type="submit">Open Dashboard</button>
         <a class="button-link secondary" href="/open">Resume Current Session</a>
         <div class="meta">Dashboard URL: http://localhost:3000</div>
+        <div class="meta">Frontend URL: ${escapeHtml(existingFrontendUrl)}</div>
         <div class="meta">Worker API: ${escapeHtml(selfCheck.config.serverUrl)}</div>
-        <div class="hint">Checklist: add the same user's <code>RUNNER_TOKEN</code> and <code>ACCESS_TOKEN</code>. Different users on the same PC are blocked.</div>
+        <div class="hint">Checklist: add the same user's <code>RUNNER_TOKEN</code> and <code>ACCESS_TOKEN</code>. Different users on the same PC are blocked. If dashboard open karte waqt Vercel 404 aaye, yahan valid hosted frontend URL update karein.</div>
       </form>
       <div class="card">
         <h2>Runner Self-Check</h2>
@@ -978,23 +982,28 @@ function injectLocalApiRewriteScript(html, req, config) {
   return `${rewriteScript}${html}`;
 }
 
-function getProxyHeaders(req, targetUrl) {
+function getProxyHeaders(req, targetUrl, options = {}) {
   const headers = { ...req.headers };
   headers.host = targetUrl.host;
   headers.connection = "close";
   delete headers["content-length"];
+  if (options.disableCompression) {
+    delete headers["accept-encoding"];
+  }
   return headers;
 }
 
-function proxyFrontend(req, res, config, hooks = {}) {
+function proxyRequest(req, res, targetBaseUrl, hooks = {}) {
   const onProxyResponse = typeof hooks.onProxyResponse === "function" ? hooks.onProxyResponse : null;
   const onProxyError = typeof hooks.onProxyError === "function" ? hooks.onProxyError : null;
+  const interceptResponse = typeof hooks.interceptResponse === "function" ? hooks.interceptResponse : null;
   const transformJson = typeof hooks.transformJson === "function" ? hooks.transformJson : null;
   const transformHtml = typeof hooks.transformHtml === "function" ? hooks.transformHtml : null;
   const requestUrl = new URL(req.url, LOCAL_BASE_URL);
-  const frontendBase = new URL(config.FRONTEND_URL || DEFAULTS.FRONTEND_URL);
-  const targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, frontendBase);
+  const upstreamBase = new URL(targetBaseUrl);
+  const targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, upstreamBase);
   const transport = targetUrl.protocol === "https:" ? https : http;
+  const disableCompression = Boolean(transformJson || transformHtml);
 
   const proxyReq = transport.request({
     protocol: targetUrl.protocol,
@@ -1002,7 +1011,7 @@ function proxyFrontend(req, res, config, hooks = {}) {
     port: targetUrl.port || (targetUrl.protocol === "https:" ? 443 : 80),
     method: req.method,
     path: `${targetUrl.pathname}${targetUrl.search}`,
-    headers: getProxyHeaders(req, targetUrl),
+    headers: getProxyHeaders(req, targetUrl, { disableCompression }),
   }, (proxyRes) => {
     const responseHeaders = { ...proxyRes.headers };
     if (responseHeaders.location) {
@@ -1011,6 +1020,11 @@ function proxyFrontend(req, res, config, hooks = {}) {
 
     if (onProxyResponse) {
       onProxyResponse(proxyRes);
+    }
+
+    if (interceptResponse && interceptResponse(proxyRes, responseHeaders)) {
+      proxyRes.resume();
+      return;
     }
 
     const contentType = String(proxyRes.headers["content-type"] || "");
@@ -1025,6 +1039,8 @@ function proxyFrontend(req, res, config, hooks = {}) {
           const parsed = body ? JSON.parse(body) : null;
           const transformed = transformJson(parsed, proxyRes) ?? parsed;
           const nextBody = JSON.stringify(transformed);
+          delete responseHeaders["content-encoding"];
+          delete responseHeaders["transfer-encoding"];
           responseHeaders["content-length"] = Buffer.byteLength(nextBody);
           res.writeHead(proxyRes.statusCode || 502, responseHeaders);
           res.end(nextBody);
@@ -1044,6 +1060,8 @@ function proxyFrontend(req, res, config, hooks = {}) {
       });
       proxyRes.on("end", () => {
         const nextBody = transformHtml(body, proxyRes) ?? body;
+        delete responseHeaders["content-encoding"];
+        delete responseHeaders["transfer-encoding"];
         responseHeaders["content-length"] = Buffer.byteLength(nextBody);
         res.writeHead(proxyRes.statusCode || 502, responseHeaders);
         res.end(nextBody);
@@ -1068,6 +1086,14 @@ function proxyFrontend(req, res, config, hooks = {}) {
   }
 
   req.pipe(proxyReq);
+}
+
+function proxyFrontend(req, res, config, hooks = {}) {
+  return proxyRequest(req, res, config.FRONTEND_URL || DEFAULTS.FRONTEND_URL, hooks);
+}
+
+function proxyApi(req, res, config, hooks = {}) {
+  return proxyRequest(req, res, config.SERVER_URL || DEFAULTS.SERVER_URL, hooks);
 }
 
 function isLocalAutomationRunRequest(method, pathname) {
@@ -1309,6 +1335,7 @@ const server = http.createServer((req, res) => {
     req.on("end", () => {
       const params = new URLSearchParams(body);
       const accessToken = (params.get("access_token") || params.get("token") || "").trim();
+      const frontendUrl = (params.get("frontend_url") || "").trim();
       const runnerToken = (params.get("runner_token") || "").trim();
       if (!runnerToken) {
         serveLauncher(res, config, selfCheck, "Runner token is required.", 400);
@@ -1319,7 +1346,12 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      const nextConfig = { ...config, RUNNER_TOKEN: runnerToken, ACCESS_TOKEN: accessToken };
+      const nextConfig = {
+        ...config,
+        FRONTEND_URL: frontendUrl || config.FRONTEND_URL || DEFAULTS.FRONTEND_URL,
+        RUNNER_TOKEN: runnerToken,
+        ACCESS_TOKEN: accessToken,
+      };
       void resolveWorkspaceBinding(nextConfig, accessToken).then((workspaceBinding) => {
         if (!workspaceBinding.ok) {
           serveLauncher(res, config, selfCheck, workspaceBinding.error, 409);
@@ -1327,7 +1359,7 @@ const server = http.createServer((req, res) => {
         }
 
         saveConfig(nextConfig);
-        redirect(res, "/open");
+        redirect(res, `/?token=${encodeURIComponent(accessToken)}`);
       }).catch((error) => {
         serveLauncher(
           res,
@@ -1344,7 +1376,7 @@ const server = http.createServer((req, res) => {
   if ((req.method === "GET" || req.method === "HEAD") && pathname === "/open") {
     const token = config.ACCESS_TOKEN || "";
     if (token && config.RUNNER_TOKEN) {
-      redirect(res, "/");
+      redirect(res, `/?token=${encodeURIComponent(token)}`);
     } else {
       redirect(res, "/launcher");
     }
@@ -1385,13 +1417,34 @@ const server = http.createServer((req, res) => {
   }
 
   if (isJobsApiRequest(req.method, pathname)) {
-    proxyFrontend(req, res, config, {
+    proxyApi(req, res, config, {
       transformJson: (payload) => rewriteJobsApiPayload(payload, req),
     });
     return;
   }
 
+  if (pathname.startsWith("/api/")) {
+    proxyApi(req, res, config);
+    return;
+  }
+
   proxyFrontend(req, res, config, {
+    interceptResponse: (proxyRes, responseHeaders) => {
+      const vercelError = String(responseHeaders["x-vercel-error"] || "").toUpperCase();
+      if ((proxyRes.statusCode || 0) !== 404 || vercelError !== "NOT_FOUND") {
+        return false;
+      }
+
+      const configuredFrontendUrl = config.FRONTEND_URL || DEFAULTS.FRONTEND_URL;
+      serveLauncher(
+        res,
+        config,
+        getSelfCheck(config),
+        `Configured FRONTEND_URL ${configuredFrontendUrl} returned Vercel NOT_FOUND. Runner token aur access token valid lag rahe hain, lekin hosted dashboard URL missing ya undeployed hai. FRONTEND_URL ko correct deployed dashboard URL par update karein.`,
+        502
+      );
+      return true;
+    },
     transformHtml: (html) => injectLocalApiRewriteScript(html, req, config),
   });
 });

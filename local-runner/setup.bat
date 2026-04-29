@@ -139,7 +139,7 @@ if not exist "config.txt" (
     (
         echo # Lightweight local launcher
         echo SERVER_URL=https://automation-api.waqaskhan1437.workers.dev
-        echo FRONTEND_URL=https://automation-frontend-woad.vercel.app
+        echo FRONTEND_URL=https://frontend-nine-jet-27.vercel.app
         echo RUNNER_TOKEN=
         echo ACCESS_TOKEN=
     ) > config.txt

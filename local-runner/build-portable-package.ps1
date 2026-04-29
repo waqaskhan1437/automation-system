@@ -8,7 +8,7 @@ $runnerRoot = $PSScriptRoot
 $stagingRoot = Join-Path $OutputDir "portable-runner"
 $zipPath = Join-Path $OutputDir "local-runner-portable.zip"
 $portableServerUrl = "https://automation-api.waqaskhan1437.workers.dev"
-$portableFrontendUrl = "https://automation-frontend-woad.vercel.app"
+$portableFrontendUrl = "https://frontend-nine-jet-27.vercel.app"
 
 Import-Module (Join-Path $PSScriptRoot "build-helpers.psm1") -Force
 

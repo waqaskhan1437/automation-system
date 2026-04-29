@@ -17,7 +17,7 @@ database_id = "d1a88132-78e9-4fab-9855-4cd554f7febc"
 
 [vars]
 ENVIRONMENT = "production"
-FRONTEND_URL = "https://automation-frontend-woad.vercel.app"
+FRONTEND_URL = "https://frontend-nine-jet-27.vercel.app"
 
 [triggers]
 crons = ["* * * * *"]

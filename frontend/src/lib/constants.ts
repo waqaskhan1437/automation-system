@@ -1,5 +1,5 @@
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://automation-api.waqaskhan1437.workers.dev";
-export const HOSTED_FRONTEND_URL = process.env.NEXT_PUBLIC_HOSTED_FRONTEND_URL || "https://automation-frontend-woad.vercel.app";
+export const HOSTED_FRONTEND_URL = process.env.NEXT_PUBLIC_HOSTED_FRONTEND_URL || "https://frontend-nine-jet-27.vercel.app";
 export const WORKER_WEBHOOK_URL = `${API_BASE_URL}/api/webhook/github`;
 export const GITHUB_API_URL = "https://api.github.com";
 
