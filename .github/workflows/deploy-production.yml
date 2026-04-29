@@ -18,21 +18,18 @@ permissions:
   contents: read
   actions: read
 
-env:
-  VERCEL_ORG_ID: team_xQveLh5tkEuV829DuVHcbAWZ
-  VERCEL_PROJECT_ID: prj_BVtIbisfUzhsuaE0iTzokA952icO
-
 concurrency:
   group: deploy-production-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  deploy:
-    name: Deploy Production
+  validate-and-handoff:
+    name: Validate code and hand off deploys
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Setup Node for Worker
         uses: actions/setup-node@v5
@@ -42,7 +39,6 @@ jobs:
           cache-dependency-path: 'worker/package-lock.json'
 
       - name: Check Worker
-        id: worker_check
         shell: bash
         run: |
           set -euo pipefail
@@ -50,80 +46,7 @@ jobs:
           npm ci
           npm run check
 
-      - name: Deploy Cloudflare Worker
-        id: cloudflare_deploy
-        if: ${{ always() }}
-        continue-on-error: true
-        shell: bash
-        env:
-          CF_TOKEN_PRIMARY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_TOKEN_FALLBACK: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_PRIMARY: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CF_ACCOUNT_FALLBACK: ${{ secrets.CF_ACCOUNT_ID }}
-        run: |
-          set -u
-          mkdir -p .deploy-status
-          status_file=".deploy-status/cloudflare.txt"
-
-          if [ "${{ steps.worker_check.outcome }}" != "success" ]; then
-            echo "failed: worker check failed" > "$status_file"
-            echo "Worker check failed, so Cloudflare deploy was not attempted." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          token="${CF_TOKEN_PRIMARY:-${CF_TOKEN_FALLBACK:-}}"
-          account_id="${CF_ACCOUNT_PRIMARY:-${CF_ACCOUNT_FALLBACK:-}}"
-
-          if [ -n "$token" ]; then echo "::add-mask::$token"; fi
-          if [ -n "$account_id" ]; then echo "::add-mask::$account_id"; fi
-
-          if [ -z "$token" ]; then
-            echo "failed: CLOUDFLARE_API_TOKEN/CF_API_TOKEN missing" > "$status_file"
-            echo "### Cloudflare deploy blocked" >> "$GITHUB_STEP_SUMMARY"
-            echo "GitHub secret CLOUDFLARE_API_TOKEN is missing. CF_API_TOKEN is also supported." >> "$GITHUB_STEP_SUMMARY"
-            echo "Create a Cloudflare token with Workers Scripts Write/Edit access for this account, then save it in GitHub Actions secrets." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          if [ -z "$account_id" ]; then
-            echo "failed: CLOUDFLARE_ACCOUNT_ID/CF_ACCOUNT_ID missing" > "$status_file"
-            echo "GitHub secret CLOUDFLARE_ACCOUNT_ID is missing. CF_ACCOUNT_ID is also supported." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          response_file="$(mktemp)"
-          status_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            https://api.cloudflare.com/client/v4/user/tokens/verify || true)"
-
-          if [ "$status_code" != "200" ]; then
-            echo "failed: Cloudflare token verify HTTP $status_code" > "$status_file"
-            echo "### Cloudflare token validation failed" >> "$GITHUB_STEP_SUMMARY"
-            echo "Cloudflare returned HTTP $status_code for /user/tokens/verify." >> "$GITHUB_STEP_SUMMARY"
-            echo "Rotate CLOUDFLARE_API_TOKEN/CF_API_TOKEN. The current token is missing, expired, malformed, or has no access to this account." >> "$GITHUB_STEP_SUMMARY"
-            cat "$response_file" >&2 || true
-            exit 1
-          fi
-
-          if ! node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(!p.success || (p.result && p.result.status && p.result.status !== 'active')){ console.error(JSON.stringify(p)); process.exit(1); }" "$response_file"; then
-            echo "failed: Cloudflare token is not active" > "$status_file"
-            exit 1
-          fi
-
-          cd worker
-          export CLOUDFLARE_API_TOKEN="$token"
-          export CLOUDFLARE_ACCOUNT_ID="$account_id"
-          if npx wrangler deploy; then
-            echo "success" > ../"$status_file"
-          else
-            code=$?
-            echo "failed: wrangler deploy exited $code" > ../"$status_file"
-            exit "$code"
-          fi
-
       - name: Setup Node for Frontend
-        if: ${{ always() }}
         uses: actions/setup-node@v5
         with:
           node-version: '24'
@@ -131,8 +54,6 @@ jobs:
           cache-dependency-path: 'frontend/package-lock.json'
 
       - name: Build Frontend
-        id: frontend_build
-        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -140,68 +61,19 @@ jobs:
           npm ci
           npm run build
 
-      - name: Deploy Vercel Frontend
-        id: vercel_deploy
-        if: ${{ always() }}
-        continue-on-error: true
-        shell: bash
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: |
-          set -u
-          mkdir -p .deploy-status
-          status_file=".deploy-status/vercel.txt"
-
-          if [ "${{ steps.frontend_build.outcome }}" != "success" ]; then
-            echo "failed: frontend build failed" > "$status_file"
-            echo "Frontend build failed, so Vercel deploy was not attempted." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          if [ -z "${VERCEL_TOKEN:-}" ]; then
-            echo "failed: VERCEL_TOKEN missing" > "$status_file"
-            echo "GitHub secret VERCEL_TOKEN is missing." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          cd frontend
-          npm install --global vercel@latest
-          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-          if vercel deploy --prod --yes --token="$VERCEL_TOKEN"; then
-            echo "success" > ../"$status_file"
-          else
-            code=$?
-            echo "failed: vercel deploy exited $code" > ../"$status_file"
-            exit "$code"
-          fi
-
-      - name: Deployment Summary
-        if: ${{ always() }}
+      - name: Deployment handoff summary
         shell: bash
         run: |
-          set +e
-          cf_status="not-run"
-          vercel_status="not-run"
-          if [ -f .deploy-status/cloudflare.txt ]; then cf_status="$(cat .deploy-status/cloudflare.txt)"; fi
-          if [ -f .deploy-status/vercel.txt ]; then vercel_status="$(cat .deploy-status/vercel.txt)"; fi
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ### Deploy Production summary
 
-          echo "### Deploy Production summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Stage | Result |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Worker check | ${{ steps.worker_check.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Cloudflare Worker deploy | $cf_status |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Frontend build | ${{ steps.frontend_build.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Vercel deploy | $vercel_status |" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Single-job pipeline prevents extra dependent jobs from appearing as skipped." >> "$GITHUB_STEP_SUMMARY"
+          | Stage | Result |
+          |---|---|
+          | Worker TypeScript check | success |
+          | Frontend production build | success |
+          | Cloudflare Worker deploy | handled by Cloudflare Git integration |
+          | Vercel frontend deploy | handled by Vercel Git integration |
 
-          failed=0
-          [ "${{ steps.worker_check.outcome }}" = "success" ] || failed=1
-          [ "$cf_status" = "success" ] || failed=1
-          [ "${{ steps.frontend_build.outcome }}" = "success" ] || failed=1
-          [ "$vercel_status" = "success" ] || failed=1
-
-          if [ "$failed" -ne 0 ]; then
-            echo "One or more deployment stages failed. See the summary above."
-            exit 1
-          fi
+          This workflow intentionally does not run `wrangler deploy` or `vercel deploy`.
+          The repository is already connected directly to Cloudflare and Vercel, so GitHub Actions only validates the code and lets those providers deploy from the pushed commit. This prevents duplicate deploys, invalid CLI-token failures, and skipped dependent deploy jobs.
+          SUMMARY
