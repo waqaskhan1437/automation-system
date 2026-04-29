@@ -431,6 +431,28 @@ async function getRecentAiLogs(env: Env, userId: number): Promise<Record<string,
 
 
 
+async function fetchSignedGithubTextUrl(location: string, timeoutMs = SNAPSHOT_GITHUB_TIMEOUT_MS): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(location, {
+      headers: {
+        Accept: "text/plain, application/octet-stream, */*",
+      },
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`GitHub signed log URL ${response.status}: ${text.slice(0, 600) || response.statusText}`);
+    }
+    const maxChars = 120000;
+    return text.length > maxChars ? text.slice(text.length - maxChars) : text;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function githubTextWithTimeout(settings: GithubSettings, endpoint: string, timeoutMs = SNAPSHOT_GITHUB_TIMEOUT_MS): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -442,8 +464,17 @@ async function githubTextWithTimeout(settings: GithubSettings, endpoint: string,
         "User-Agent": "AutomationSystem/1.0",
       },
       signal: controller.signal,
-      redirect: "follow",
+      redirect: "manual",
     });
+
+    const location = response.headers.get("Location") || response.headers.get("location");
+    if (response.status >= 300 && response.status < 400 && location) {
+      // GitHub's job-log endpoint returns a short-lived signed storage URL.
+      // Fetch that URL without the GitHub Authorization header; otherwise
+      // Azure/S3-style storage can reject it as malformed auth.
+      return fetchSignedGithubTextUrl(location, timeoutMs);
+    }
+
     const text = await response.text();
     if (!response.ok) {
       let message = text;
@@ -451,7 +482,10 @@ async function githubTextWithTimeout(settings: GithubSettings, endpoint: string,
         const parsed = JSON.parse(text) as { message?: string };
         message = parsed.message || text;
       } catch {}
-      throw new Error(`GitHub API ${response.status}: ${message || response.statusText}`);
+      const missingLocation = response.status >= 300 && response.status < 400 && !location
+        ? " Missing redirect Location header."
+        : "";
+      throw new Error(`GitHub API ${response.status}: ${message || response.statusText}${missingLocation}`);
     }
     const maxChars = 120000;
     return text.length > maxChars ? text.slice(text.length - maxChars) : text;
@@ -773,7 +807,10 @@ async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): P
             html_url: repo.html_url || null,
           };
         } else {
-          snapshot.github = { ...(snapshot.github as Record<string, unknown>), ...unwrapSnapshotSection(repoSection) };
+          snapshot.github = {
+            ...(snapshot.github as Record<string, unknown>),
+            ...(unwrapSnapshotSection(repoSection) as Record<string, unknown>),
+          };
         }
 
         if (getBooleanQueryFlag(url, "include_tree")) {
@@ -982,7 +1019,6 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     const section = await collectSnapshotSection("monitor", () => getAutomationMonitor(env, auth.userId));
     return jsonResponse({
       success: section.ok,
-      partial: !section.ok,
       data: unwrapSnapshotSection(section),
     }, section.ok ? 200 : 206);
   }
@@ -995,7 +1031,6 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     const section = await collectSnapshotSection("recent_jobs", () => getRecentJobs(env, auth.userId, limit));
     return jsonResponse({
       success: section.ok,
-      partial: !section.ok,
       data: unwrapSnapshotSection(section),
     }, section.ok ? 200 : 206);
   }
@@ -1011,7 +1046,7 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     const section = await collectSnapshotSection("job_diagnostics", () => getJobDiagnostics(request, env, auth, jobId), SNAPSHOT_TIMEOUT_MS + SNAPSHOT_GITHUB_TIMEOUT_MS + 1000);
     const data = unwrapSnapshotSection(section);
     const status = section.ok && (data as Record<string, unknown>).found === false ? 404 : (section.ok ? 200 : 206);
-    return jsonResponse({ success: section.ok && (data as Record<string, unknown>).found !== false, partial: !section.ok, data }, status);
+    return jsonResponse({ success: section.ok && (data as Record<string, unknown>).found !== false, data }, status);
   }
   if (path === "/api/ai/snapshot" && method === "GET") {
     const denied = requireAiScope(auth, "project.read");

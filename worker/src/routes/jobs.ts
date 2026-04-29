@@ -47,6 +47,27 @@ async function githubJson<T>(settings: GithubSettings, endpoint: string): Promis
   return (parsed ?? (text as unknown as T));
 }
 
+async function fetchSignedGithubLogUrl(location: string, timeoutMs = GITHUB_FETCH_TIMEOUT_MS): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(location, {
+      headers: {
+        Accept: "text/plain, application/octet-stream, */*",
+      },
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`GitHub signed log URL ${response.status}: ${text.slice(0, 600) || response.statusText}`);
+    }
+    return text.length > MAX_GITHUB_LOG_CHARS ? text.slice(text.length - MAX_GITHUB_LOG_CHARS) : text;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function githubJobLogText(settings: GithubSettings, githubJobId: number): Promise<string> {
   const response = await githubFetchWithTimeout(
     `https://api.github.com/repos/${settings.repo_owner}/${settings.repo_name}/actions/jobs/${githubJobId}/logs`,
@@ -55,13 +76,26 @@ async function githubJobLogText(settings: GithubSettings, githubJobId: number): 
         ...githubHeaders(settings.pat_token),
         Accept: "text/plain, application/vnd.github.v3+json",
       },
+      redirect: "manual",
     },
     GITHUB_FETCH_TIMEOUT_MS
   );
+
+  const location = response.headers.get("Location") || response.headers.get("location");
+  if (response.status >= 300 && response.status < 400 && location) {
+    // GitHub returns a short-lived signed storage URL for logs. Do not forward the
+    // GitHub Bearer token to that URL; Azure/S3-style storage treats it as a
+    // malformed storage auth header and returns InvalidAuthenticationInfo.
+    return fetchSignedGithubLogUrl(location, GITHUB_FETCH_TIMEOUT_MS);
+  }
+
   const text = await response.text();
   if (!response.ok) {
     const parsed = safeJsonParse<{ message?: string }>(text);
-    throw new Error(`GitHub job logs ${response.status}: ${parsed?.message || text || response.statusText}`);
+    const missingLocation = response.status >= 300 && response.status < 400 && !location
+      ? " Missing redirect Location header."
+      : "";
+    throw new Error(`GitHub job logs ${response.status}: ${parsed?.message || text || response.statusText}${missingLocation}`);
   }
   return text.length > MAX_GITHUB_LOG_CHARS ? text.slice(text.length - MAX_GITHUB_LOG_CHARS) : text;
 }

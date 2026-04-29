@@ -174,7 +174,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     try {
       const res = await api.get<{ default_provider: string | null; providers: Array<{ id: string; name: string; models: string[] }> }>("/api/settings/ai/models");
       if (res.success && res.data) {
-        setAiCatalog(normalizeAiCatalog(res.data as AIModelCatalogResponse));
+        setAiCatalog(normalizeAiCatalog(res.data as unknown as AIModelCatalogResponse));
       } else {
         setAiCatalog({ default_provider: null, providers: [] });
       }
