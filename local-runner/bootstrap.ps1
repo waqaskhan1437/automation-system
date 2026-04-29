@@ -9,6 +9,9 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+$DefaultRepoOwner = "waqaskhan1437"
+$DefaultRepoName = "automation-system"
+$DefaultBranch = "master"
 $DefaultManifestUrl = "https://raw.githubusercontent.com/waqaskhan1437/automation-system/master/local-runner/update-manifest.json"
 $DefaultServerUrl = "https://automation-api.waqaskhan1437.workers.dev"
 $DefaultFrontendUrl = "https://automation-frontend-woad.vercel.app"
@@ -113,16 +116,51 @@ function Get-ManifestJson {
     return Invoke-RestMethod -Uri $Url -Headers $NoCacheHeaders -UseBasicParsing
 }
 
+function Get-LatestCommitSha {
+    param(
+        [string]$Owner,
+        [string]$Repo,
+        [string]$Branch
+    )
+
+    $apiUrl = "https://api.github.com/repos/$Owner/$Repo/commits/$Branch"
+    $headers = @{
+        "User-Agent" = "AutomationLocalRunner"
+        "Cache-Control" = "no-cache"
+        "Pragma" = "no-cache"
+    }
+
+    try {
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -UseBasicParsing
+        if ($response.sha) {
+            return [string]$response.sha
+        }
+    } catch {
+        Write-Status "[BOOTSTRAP] Commit SHA lookup failed. Falling back to branch URLs." "Yellow"
+    }
+
+    return ""
+}
+
 function Get-RawBaseUrl {
-    param($Manifest)
+    param(
+        $Manifest,
+        [string]$Owner,
+        [string]$Repo,
+        [string]$Branch,
+        [string]$CommitSha
+    )
 
     if ($Manifest.raw_base_url) {
         return ([string]$Manifest.raw_base_url).TrimEnd("/")
     }
 
-    $owner = if ($Manifest.repo_owner) { [string]$Manifest.repo_owner } else { "waqaskhan1437" }
-    $repo = if ($Manifest.repo_name) { [string]$Manifest.repo_name } else { "automation-system" }
-    $branch = if ($Manifest.branch) { [string]$Manifest.branch } else { "master" }
+    $owner = if ($Manifest.repo_owner) { [string]$Manifest.repo_owner } else { $Owner }
+    $repo = if ($Manifest.repo_name) { [string]$Manifest.repo_name } else { $Repo }
+    $branch = if ($Manifest.branch) { [string]$Manifest.branch } else { $Branch }
+    if (-not [string]::IsNullOrWhiteSpace($CommitSha)) {
+        return "https://raw.githubusercontent.com/$owner/$repo/$CommitSha"
+    }
     return "https://raw.githubusercontent.com/$owner/$repo/$branch"
 }
 
@@ -223,8 +261,15 @@ function Sync-InstallRoot {
     Write-Status "[BOOTSTRAP] Syncing latest local runner into $RootPath"
     Ensure-Directory $RootPath
 
-    $manifest = Get-ManifestJson -Url $DefaultManifestUrl
-    $rawBaseUrl = Get-RawBaseUrl -Manifest $manifest
+    $commitSha = Get-LatestCommitSha -Owner $DefaultRepoOwner -Repo $DefaultRepoName -Branch $DefaultBranch
+    $manifestUrl = if ([string]::IsNullOrWhiteSpace($commitSha)) {
+        $DefaultManifestUrl
+    } else {
+        "https://raw.githubusercontent.com/$DefaultRepoOwner/$DefaultRepoName/$commitSha/local-runner/update-manifest.json"
+    }
+
+    $manifest = Get-ManifestJson -Url $manifestUrl
+    $rawBaseUrl = Get-RawBaseUrl -Manifest $manifest -Owner $DefaultRepoOwner -Repo $DefaultRepoName -Branch $DefaultBranch -CommitSha $commitSha
     $entries = Get-ManifestFileEntries -Manifest $manifest -RootPath $RootPath
 
     foreach ($entry in $entries) {
