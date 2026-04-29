@@ -175,6 +175,7 @@ export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;
   message?: string;
+  partial?: boolean;
 }
 
 export interface VideoUpload {

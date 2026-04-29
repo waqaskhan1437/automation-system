@@ -1081,10 +1081,14 @@ export default {
       const status = body.status as string;
       const videoUrl = body.video_url as string | undefined;
       const outputDataRaw = body.output_data;
+      const rawErrorMessage = body.error_message;
       const automationId = body.automation_id as number | undefined;
       const processedVideosArray = (body.processed_videos as Array<Record<string, unknown>>) || [];
       const videosCompleted = body.videos_completed as number | undefined;
       const allLinksProcessed = body.all_links_processed as boolean | undefined;
+      const errorMessage = typeof rawErrorMessage === "string" && rawErrorMessage.trim()
+        ? rawErrorMessage.trim().slice(0, 2000)
+        : null;
       const isTerminalStatus = status === "success" || status === "failed";
       const completedAt = isTerminalStatus ? new Date() : null;
       const completedAtText = completedAt ? formatDatabaseDate(completedAt) : null;
@@ -1145,17 +1149,20 @@ export default {
         if (processedVideosArray.length > 0) {
           mergedOutputData = { ...(mergedOutputData || {}), processed_videos: processedVideosArray };
         }
+        if (errorMessage) {
+          mergedOutputData = { ...(mergedOutputData || {}), error_message: errorMessage };
+        }
 
         if (isTerminalStatus) {
           await env.DB.prepare(
-            "UPDATE jobs SET status = ?, output_data = ?, video_url = ?, completed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
-          ).bind(status, mergedOutputData ? JSON.stringify(mergedOutputData) : null, videoUrl || null, completedAtText, jobId, jobRecord.user_id).run();
+            "UPDATE jobs SET status = ?, output_data = ?, video_url = ?, error_message = ?, completed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+          ).bind(status, mergedOutputData ? JSON.stringify(mergedOutputData) : null, videoUrl || null, status === "failed" ? (errorMessage || "Runner reported failure without details") : null, completedAtText, jobId, jobRecord.user_id).run();
 
           await markAutomationRunCompleted(env, jobId, completedAt as Date);
         } else {
           await env.DB.prepare(
-            "UPDATE jobs SET status = ?, output_data = ?, video_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
-          ).bind(status, mergedOutputData ? JSON.stringify(mergedOutputData) : null, videoUrl || null, jobId, jobRecord.user_id).run();
+            "UPDATE jobs SET status = ?, output_data = ?, video_url = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+          ).bind(status, mergedOutputData ? JSON.stringify(mergedOutputData) : null, videoUrl || null, status === "failed" ? (errorMessage || "Runner reported failure without details") : null, jobId, jobRecord.user_id).run();
         }
 
         const uploadRecords = processedVideosArray.length > 0

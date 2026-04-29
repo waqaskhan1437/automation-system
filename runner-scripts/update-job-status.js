@@ -2,6 +2,38 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 
+function readJson(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    return { read_error: error.message };
+  }
+}
+
+function readTextTail(filePath, maxChars = 4000) {
+  try {
+    if (!fs.existsSync(filePath)) return "";
+    const text = fs.readFileSync(filePath, "utf8");
+    return text.length > maxChars ? text.slice(-maxChars) : text;
+  } catch (error) {
+    return `Could not read ${path.basename(filePath)}: ${error.message}`;
+  }
+}
+
+function buildErrorMessage(failureReport, errorLogTail) {
+  const reportError = failureReport && typeof failureReport === "object"
+    ? (failureReport.last_error || failureReport.error || failureReport.message)
+    : null;
+  if (typeof reportError === "string" && reportError.trim()) {
+    return reportError.trim().slice(0, 1000);
+  }
+  if (errorLogTail && errorLogTail.trim()) {
+    return (errorLogTail.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || errorLogTail.trim()).slice(0, 1000);
+  }
+  return "GitHub Actions workflow failed before the runner returned a detailed error.";
+}
+
 async function main() {
   const workerUrl = process.env.WORKER_WEBHOOK_URL;
   const jobId = process.env.JOB_ID;
@@ -30,8 +62,9 @@ async function main() {
     }
   }
 
+  const outputDir = path.join(__dirname, "output");
   if (!outputData) {
-    const postResultFile = path.join(__dirname, "output", "post_result.json");
+    const postResultFile = path.join(outputDir, "post_result.json");
     if (fs.existsSync(postResultFile)) {
       try {
         outputData = JSON.parse(fs.readFileSync(postResultFile, "utf8"));
@@ -42,10 +75,21 @@ async function main() {
     }
   }
 
+  const failureReport = readJson(path.join(outputDir, "failure-report.json"));
+  const errorLogTail = readTextTail(path.join(outputDir, "error.log"));
+  const errorMessage = status === "failed" ? buildErrorMessage(failureReport, errorLogTail) : null;
+
+  const mergedOutputData = {
+    ...(outputData || {}),
+    ...(failureReport ? { runner_failure: failureReport } : {}),
+    ...(errorLogTail ? { error_log_tail: errorLogTail } : {}),
+  };
+
   const webhookBody = JSON.stringify({
-    job_id: parseInt(jobId),
-    status: status,
-    output_data: outputData ? JSON.stringify(outputData) : undefined,
+    job_id: parseInt(jobId, 10),
+    status,
+    error_message: errorMessage,
+    output_data: Object.keys(mergedOutputData).length > 0 ? JSON.stringify(mergedOutputData) : undefined,
     video_url: rawUrl || null,
   });
 
@@ -62,14 +106,18 @@ async function main() {
           "Content-Length": Buffer.byteLength(webhookBody),
         },
       };
-      
+
       console.log("Sending to:", options.hostname + options.path);
-      
+
       const req = https.request(options, (res) => {
         let data = "";
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
           console.log(`Response (${res.statusCode}): ${data}`);
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`Webhook returned ${res.statusCode}: ${data}`));
+            return;
+          }
           resolve(data);
         });
       });

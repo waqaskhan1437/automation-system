@@ -335,6 +335,7 @@ main().catch(async (error) => {
 
   await sendWebhook({
     status: "failed",
+    error_message: message,
     output_data: { error: message },
   });
   process.exit(1);

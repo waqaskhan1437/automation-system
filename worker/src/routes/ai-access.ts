@@ -242,6 +242,8 @@ function buildOpenApiSpec(request: Request): Record<string, unknown> {
       "/api/ai/tests/run": { post: { summary: "Dispatch validation workflow" } },
       "/api/ai/audit": { get: { summary: "AI change audit" } },
       "/api/ai/logs": { get: { summary: "Recent API logs" } },
+      "/api/ai/jobs/recent": { get: { summary: "Recent jobs with GitHub run ids and error messages" } },
+      "/api/ai/jobs/{id}/diagnostics": { get: { summary: "Single job diagnostics with optional GitHub run/jobs/artifacts metadata" } },
       "/api/ai/monitor": { get: { summary: "One-call monitoring view for browser-based AI tools" } },
       "/api/ai/snapshot": { get: { summary: "Combined project, automation, settings, logs, and GitHub diagnostic bundle" } },
       "/api/ai/browser-links": { get: { summary: "Copyable GET links that work with ChatGPT/browser tools using ai_token query auth" } },
@@ -322,6 +324,8 @@ function buildBrowserAccessLinks(request: Request, auth: AuthContext): Record<st
       settings_masked: withToken("/api/ai/settings"),
       audit: withToken("/api/ai/audit?limit=50"),
       logs: withToken("/api/ai/logs?limit=100"),
+      recent_jobs: withToken("/api/ai/jobs/recent?limit=25"),
+      job_diagnostics_example: withToken("/api/ai/jobs/906/diagnostics"),
       read_worker_index: withToken("/api/ai/files/read?path=worker/src/index.ts"),
       read_ai_access_route: withToken("/api/ai/files/read?path=worker/src/routes/ai-access.ts"),
       file_tree: withToken("/api/ai/files/tree"),
@@ -331,21 +335,30 @@ function buildBrowserAccessLinks(request: Request, auth: AuthContext): Record<st
 }
 
 async function getAutomationMonitor(env: Env, userId: number): Promise<Record<string, unknown>> {
-  const [automationCounts, recentAutomations, jobCounts, recentFailedJobs, runningJobs] = await Promise.all([
+  const [automationCounts, recentAutomations, jobCounts, recentJobs, recentFailedJobs, runningJobs, failedWithoutError] = await Promise.all([
     env.DB.prepare("SELECT status, type, COUNT(*) AS count FROM automations WHERE user_id = ? GROUP BY status, type ORDER BY status, type").bind(userId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT id, name, type, status, schedule, next_run, last_run, updated_at FROM automations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 25").bind(userId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT status, COUNT(*) AS count FROM jobs WHERE user_id = ? GROUP BY status ORDER BY status").bind(userId).all<Record<string, unknown>>(),
-    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_url, j.created_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status = 'failed' ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
-    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.github_run_url, j.started_at, j.created_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status IN ('queued','pending','running') ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.video_url, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 25").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status = 'failed' ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.github_run_id, j.github_run_url, j.started_at, j.created_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status IN ('queued','pending','running') ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT id, automation_id, status, github_run_id, github_run_url, created_at, updated_at FROM jobs WHERE user_id = ? AND status = 'failed' AND (error_message IS NULL OR TRIM(error_message) = '') ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
   ]);
+
+  const failedWithoutDetails = failedWithoutError.results || [];
 
   return {
     generated_at: new Date().toISOString(),
     automation_counts: automationCounts.results || [],
     recent_automations: recentAutomations.results || [],
     job_counts: jobCounts.results || [],
+    recent_jobs: recentJobs.results || [],
     recent_failed_jobs: recentFailedJobs.results || [],
     running_or_queued_jobs: runningJobs.results || [],
+    failed_without_error_message: failedWithoutDetails,
+    warnings: failedWithoutDetails.length > 0
+      ? ["Some failed jobs have no error_message. New runner/webhook fixes prevent this for future jobs; open job diagnostics for GitHub run details."]
+      : [],
   };
 }
 
@@ -359,6 +372,144 @@ async function getRecentAiLogs(env: Env, userId: number): Promise<Record<string,
     ai_changes: audit.results || [],
     api_requests: apiLogs.results || [],
   };
+}
+
+async function githubJsonWithTimeout(settings: GithubSettings, endpoint: string, timeoutMs = SNAPSHOT_GITHUB_TIMEOUT_MS): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`https://api.github.com/repos/${settings.repo_owner}/${settings.repo_name}${endpoint}`, {
+      headers: {
+        Authorization: `Bearer ${settings.pat_token}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "AutomationSystem/1.0",
+      },
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let data: unknown = text;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {}
+    if (!response.ok) {
+      const message = typeof data === "object" && data && "message" in data
+        ? String((data as { message?: unknown }).message)
+        : text;
+      throw new Error(`GitHub API ${response.status}: ${message || response.statusText}`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseStoredJobOutput(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { raw_output: value };
+  }
+}
+
+async function getRecentJobs(env: Env, userId: number, limit: number): Promise<Record<string, unknown>> {
+  const safeLimit = Math.min(Math.max(limit || 25, 1), 100);
+  const rows = await env.DB.prepare(
+    "SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.video_url, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT ?"
+  ).bind(userId, safeLimit).all<Record<string, unknown>>();
+  return {
+    generated_at: new Date().toISOString(),
+    count: rows.results?.length || 0,
+    jobs: rows.results || [],
+  };
+}
+
+async function getJobDiagnostics(request: Request, env: Env, auth: AuthContext, jobId: number): Promise<Record<string, unknown>> {
+  const url = new URL(request.url);
+  const includeGithub = url.searchParams.get("include_github") !== "0";
+  const job = await env.DB.prepare(
+    "SELECT j.*, a.name AS automation_name, a.type AS automation_type FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.id = ? AND j.user_id = ? LIMIT 1"
+  ).bind(jobId, auth.userId).first<Record<string, unknown>>();
+
+  if (!job) {
+    return { found: false, error: "Job not found" };
+  }
+
+  const outputData = parseStoredJobOutput(typeof job.output_data === "string" ? job.output_data : null);
+  const diagnostics: Record<string, unknown> = {
+    found: true,
+    generated_at: new Date().toISOString(),
+    job: {
+      id: job.id,
+      automation_id: job.automation_id,
+      automation_name: job.automation_name,
+      automation_type: job.automation_type,
+      status: job.status,
+      error_message: job.error_message,
+      github_run_id: job.github_run_id,
+      github_run_url: job.github_run_url,
+      video_url: job.video_url,
+      started_at: job.started_at,
+      completed_at: job.completed_at,
+      created_at: job.created_at,
+      updated_at: job.updated_at,
+    },
+    output_data: outputData,
+    signals: {
+      failed_without_error_message: job.status === "failed" && (!job.error_message || String(job.error_message).trim() === ""),
+      has_github_run: Boolean(job.github_run_id),
+      has_video_url: Boolean(job.video_url),
+    },
+  };
+
+  if (!includeGithub || !job.github_run_id) {
+    diagnostics.github = job.github_run_id ? { skipped: true, reason: "include_github=0" } : { skipped: true, reason: "No GitHub run id" };
+    return diagnostics;
+  }
+
+  if (!canUseAiScope(auth, "logs.read")) {
+    diagnostics.github = { skipped: true, reason: "Missing logs.read scope" };
+    return diagnostics;
+  }
+
+  const settingsSection = await collectSnapshotSection("github_settings", () => getGithubSettingsForUser(env, auth.userId));
+  if (!settingsSection.ok || !settingsSection.data) {
+    diagnostics.github = unwrapSnapshotSection(settingsSection);
+    return diagnostics;
+  }
+
+  const settings = settingsSection.data as GithubSettings;
+  const runId = Number(job.github_run_id);
+  const [runSection, jobsSection, artifactsSection] = await Promise.all([
+    collectSnapshotSection("github_run", () => githubJsonWithTimeout(settings, `/actions/runs/${runId}`), SNAPSHOT_GITHUB_TIMEOUT_MS),
+    collectSnapshotSection("github_run_jobs", () => githubJsonWithTimeout(settings, `/actions/runs/${runId}/jobs`), SNAPSHOT_GITHUB_TIMEOUT_MS),
+    collectSnapshotSection("github_artifacts", () => githubJsonWithTimeout(settings, `/actions/runs/${runId}/artifacts`), SNAPSHOT_GITHUB_TIMEOUT_MS),
+  ]);
+
+  const runData = runSection.ok ? (runSection.data as Record<string, unknown>) : null;
+  const githubConclusion = runData && typeof runData.conclusion === "string" ? runData.conclusion : null;
+  const githubStatus = runData && typeof runData.status === "string" ? runData.status : null;
+  const normalizedGithubStatus = githubStatus === "completed"
+    ? (githubConclusion === "success" ? "success" : (githubConclusion === "cancelled" ? "cancelled" : "failed"))
+    : (githubStatus === "in_progress" ? "running" : null);
+
+  diagnostics.github = {
+    run: unwrapSnapshotSection(runSection),
+    jobs: unwrapSnapshotSection(jobsSection),
+    artifacts: unwrapSnapshotSection(artifactsSection),
+  };
+  diagnostics.analysis = {
+    normalized_github_status: normalizedGithubStatus,
+    db_status: job.status,
+    status_mismatch: Boolean(normalizedGithubStatus && normalizedGithubStatus !== job.status),
+    blank_error_failure: job.status === "failed" && (!job.error_message || String(job.error_message).trim() === ""),
+    likely_old_swallowed_workflow_failure: job.status === "failed" && githubConclusion === "success" && (!job.error_message || String(job.error_message).trim() === ""),
+    recommendation: job.status === "failed" && githubConclusion === "success" && (!job.error_message || String(job.error_message).trim() === "")
+      ? "This looks like an old runner/workflow mismatch. New fixes preserve runner exit codes and store error details; call /api/jobs/:id/status from the UI to reconcile this historical job or retry the automation."
+      : "Use run/jobs/artifacts above to inspect the failure source. Future failures should include error_message and failure-report output.",
+  };
+
+  return diagnostics;
 }
 
 async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): Promise<Record<string, unknown>> {
@@ -447,7 +598,10 @@ async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): P
             html_url: repo.html_url || null,
           };
         } else {
-          snapshot.github = { ...(snapshot.github as Record<string, unknown>), ...unwrapSnapshotSection(repoSection) };
+          snapshot.github = {
+            ...(snapshot.github as Record<string, unknown>),
+            ...(unwrapSnapshotSection(repoSection) as Record<string, unknown>),
+          };
         }
 
         if (getBooleanQueryFlag(url, "include_tree")) {
@@ -661,6 +815,32 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
     }, section.ok ? 200 : 206);
   }
 
+
+  if (path === "/api/ai/jobs/recent" && method === "GET") {
+    const denied = requireAiScope(auth, "automation.read");
+    if (denied) return denied;
+    const limit = Number.parseInt(url.searchParams.get("limit") || "25", 10) || 25;
+    const section = await collectSnapshotSection("recent_jobs", () => getRecentJobs(env, auth.userId, limit));
+    return jsonResponse({
+      success: section.ok,
+      partial: !section.ok,
+      data: unwrapSnapshotSection(section),
+    }, section.ok ? 200 : 206);
+  }
+
+  if (path.startsWith("/api/ai/jobs/") && path.endsWith("/diagnostics") && method === "GET") {
+    const denied = requireAiScope(auth, "automation.read");
+    if (denied) return denied;
+    const segments = path.split("/").filter(Boolean);
+    const jobId = Number.parseInt(segments[3] || "", 10);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return jsonResponse({ success: false, error: "Valid job id is required" }, 400);
+    }
+    const section = await collectSnapshotSection("job_diagnostics", () => getJobDiagnostics(request, env, auth, jobId), SNAPSHOT_TIMEOUT_MS + SNAPSHOT_GITHUB_TIMEOUT_MS + 1000);
+    const data = unwrapSnapshotSection(section);
+    const status = section.ok && (data as Record<string, unknown>).found === false ? 404 : (section.ok ? 200 : 206);
+    return jsonResponse({ success: section.ok && (data as Record<string, unknown>).found !== false, partial: !section.ok, data }, status);
+  }
   if (path === "/api/ai/snapshot" && method === "GET") {
     const denied = requireAiScope(auth, "project.read");
     if (denied) return denied;

@@ -87,14 +87,20 @@ jobs:
           echo "Total URLs: $TOTAL_URLS"
           echo "=============================================="
           
-          node main.js || { 
-            echo "main.js exited with code $?"; 
-            cat output/error.log 2>/dev/null || true; 
-          }
+          set +e
+          node main.js
+          MAIN_EXIT=$?
+          set -e
+          if [ "$MAIN_EXIT" -ne 0 ]; then
+            echo "main.js exited with code $MAIN_EXIT"
+            cat output/error.log 2>/dev/null || true
+            cat output/failure-report.json 2>/dev/null || true
+          fi
           
           echo "=============================================="
           ls -la output/ 2>/dev/null || echo "No output"
           echo "=============================================="
+          exit "$MAIN_EXIT"
 
       - name: Update Status on Failure
         if: failure()

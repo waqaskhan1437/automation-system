@@ -189,9 +189,14 @@ export async function handleJobsRoutes(
         runConclusion = runData.conclusion;
         runUrl = runData.html_url;
 
-        if (runData.status === "completed" && job.status !== "success" && job.status !== "failed") {
-          const dbStatus = runData.conclusion === "success" ? "success" : "failed";
-          await env.DB.prepare("UPDATE jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?").bind(dbStatus, id, userId).run();
+        if (runData.status === "completed") {
+          const dbStatus = runData.conclusion === "success" ? "success" : (runData.conclusion === "cancelled" ? "cancelled" : "failed");
+          const canCorrectBlankFailure = job.status === "failed" && dbStatus === "success" && (!job.error_message || !job.error_message.trim());
+          if (job.status !== dbStatus && (job.status !== "failed" || canCorrectBlankFailure)) {
+            await env.DB.prepare("UPDATE jobs SET status = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
+              .bind(dbStatus, dbStatus === "success" ? null : "GitHub Actions concluded " + (runData.conclusion || "failure"), id, userId)
+              .run();
+          }
         } else if (runData.status === "in_progress" && job.status === "queued") {
           await env.DB.prepare("UPDATE jobs SET status = 'running' WHERE id = ? AND user_id = ?").bind(id, userId).run();
         }
@@ -259,10 +264,10 @@ export async function handleJobsRoutes(
         // Update job status in DB based on GitHub run status
         let dbStatus = job.status;
         if (runData.status === "completed") {
-          dbStatus = runData.conclusion === "success" ? "success" : "failed";
+          dbStatus = runData.conclusion === "success" ? "success" : (runData.conclusion === "cancelled" ? "cancelled" : "failed");
           await env.DB.prepare(
-            "UPDATE jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
-          ).bind(dbStatus, id, userId).run();
+            "UPDATE jobs SET status = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+          ).bind(dbStatus, dbStatus === "success" ? null : "GitHub Actions concluded " + (runData.conclusion || "failure"), id, userId).run();
         } else if (runData.status === "in_progress") {
           dbStatus = "running";
           await env.DB.prepare("UPDATE jobs SET status = 'running' WHERE id = ? AND user_id = ?").bind(id, userId).run();
