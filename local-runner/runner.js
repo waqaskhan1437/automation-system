@@ -669,6 +669,42 @@ function buildRunnerScriptsEnv(job) {
   };
 }
 
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function removeFileWithRetries(filePath, options = {}) {
+  const retries = Number.isFinite(options.retries) ? options.retries : 12;
+  const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 250;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      fs.rmSync(filePath, { force: true });
+      return;
+    } catch (error) {
+      if (!error || error.code === 'ENOENT') {
+        return;
+      }
+
+      lastError = error;
+      if (!['EBUSY', 'EPERM', 'EACCES'].includes(error.code) || attempt === retries) {
+        break;
+      }
+
+      sleepSync(delayMs);
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+}
+
 function clearRunnerScriptsWorkspace() {
   // Instead of deleting the whole folder, just delete the temp processing files
   if (fs.existsSync(RUNNER_SCRIPTS_OUTPUT_DIR)) {
@@ -680,7 +716,7 @@ function clearRunnerScriptsWorkspace() {
         || file.endsWith('.download')
         || file === 'failure-report.json'
       ) {
-        fs.rmSync(path.join(RUNNER_SCRIPTS_OUTPUT_DIR, file), { force: true });
+        removeFileWithRetries(path.join(RUNNER_SCRIPTS_OUTPUT_DIR, file));
       }
     }
   }
@@ -787,6 +823,20 @@ function readProcessedCountFromRunnerScripts() {
   }
 }
 
+function readProcessedVideosFromRunnerScripts() {
+  const processedVideosPath = path.join(RUNNER_SCRIPTS_OUTPUT_DIR, 'processed-videos.json');
+  try {
+    if (!fs.existsSync(processedVideosPath)) {
+      return [];
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(processedVideosPath, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === 'object') : [];
+  } catch {
+    return [];
+  }
+}
+
 function readFailureReportFromRunnerScripts() {
   try {
     if (!fs.existsSync(RUNNER_SCRIPTS_FAILURE_REPORT_PATH)) {
@@ -821,7 +871,7 @@ function findLatestMediaFileInDirectory(directoryPath) {
     }
 
     const candidates = fs.readdirSync(directoryPath)
-      .filter((name) => /^final-.*\.(mp4|mov|m4v|webm|avi|mkv|png|jpg|jpeg|webp)$/i.test(name))
+      .filter((name) => /^final-.*\.(mp4|mov|m4v|webm|avi|mkv|png|jpg|jpeg|webp)$/i.test(name) || /^processed-video\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(name))
       .map((name) => {
         const filePath = path.join(directoryPath, name);
         const stats = fs.statSync(filePath);
@@ -874,6 +924,8 @@ async function runRunnerScriptsJob(job, sourceUrls) {
     throw new Error('Job cancelled by user');
   }
 
+  await ensureRunnerScriptsDependency('playwright-core');
+
   const mergedConfig = {
     ...(job?.config || {}),
     ...(job?.input_data || {}),
@@ -906,7 +958,13 @@ async function runRunnerScriptsJob(job, sourceUrls) {
   }
 
   const processedCount = readProcessedCountFromRunnerScripts();
-  return processedCount > 0 ? processedCount : 1;
+  const processedVideos = readProcessedVideosFromRunnerScripts();
+  const primaryVideoUrl = processedVideos.find((item) => typeof item.video_url === 'string' && item.video_url.trim())?.video_url || null;
+  return {
+    processedCount: processedCount > 0 ? processedCount : 1,
+    processedVideos,
+    primaryVideoUrl,
+  };
 }
 
 async function runImageRunnerScriptsJob(job) {
@@ -1371,7 +1429,8 @@ async function mainLoop() {
               throw new Error('Job does not contain a usable video source');
             }
 
-            const processedCount = await runRunnerScriptsJob(job, sourceUrls);
+            const runResult = await runRunnerScriptsJob(job, sourceUrls);
+            const processedCount = runResult.processedCount;
             const localOutputMedia = findLatestLocalOutputMedia(job);
             processedVideos += processedCount;
 
@@ -1380,11 +1439,12 @@ async function mainLoop() {
               success: true,
               result: {
                 processed_count: processedCount,
+                processed_videos: Array.isArray(runResult.processedVideos) ? runResult.processedVideos : [],
                 source_urls: sourceUrls,
                 local_output_media: localOutputMedia,
                 skip_upload: job?.config?.skip_upload === true || job?.input_data?.skip_upload === true,
               },
-              video_url: localOutputMedia,
+              video_url: runResult.primaryVideoUrl || localOutputMedia,
               source_video_url: sourceUrls[0] || null,
               aspect_ratio: job?.config?.aspect_ratio || job?.input_data?.aspect_ratio || null,
             });

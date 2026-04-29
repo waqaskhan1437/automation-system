@@ -214,6 +214,58 @@ function isRemoteUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
 }
 
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function removeFileWithRetries(filePath, options = {}) {
+  const retries = Number.isFinite(options.retries) ? options.retries : 12;
+  const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 250;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      fs.unlinkSync(filePath);
+      return;
+    } catch (error) {
+      if (!error || error.code === 'ENOENT') {
+        return;
+      }
+
+      lastError = error;
+      if (!['EBUSY', 'EPERM', 'EACCES'].includes(error.code) || attempt === retries) {
+        break;
+      }
+
+      sleepSync(delayMs);
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+}
+
+function resolveExistingLocalPath(sourcePath) {
+  const absolutePath = path.resolve(String(sourcePath || "").trim());
+  if (fs.existsSync(absolutePath)) {
+    return absolutePath;
+  }
+
+  // Some saved local-file configs accidentally keep whitespace before the
+  // extension, e.g. "video .mp4". Try the de-spaced variant before failing.
+  const normalizedWhitespacePath = absolutePath.replace(/\s+\.(mp4|mov|m4v|webm|avi|mkv)$/i, '.$1');
+  if (normalizedWhitespacePath !== absolutePath && fs.existsSync(normalizedWhitespacePath)) {
+    return normalizedWhitespacePath;
+  }
+
+  return absolutePath;
+}
+
 function isLikelyYtDlpSource(value) {
   return /youtube\.com|youtu\.be|photos\.google\.com|photos\.app\.goo\.gl/i.test(String(value || ""));
 }
@@ -783,7 +835,7 @@ module.exports = async function download(videoUrl) {
   const outFile = path.join(OUTPUT_DIR, 'input-video.mp4');
 
   if (fs.existsSync(outFile)) {
-    fs.unlinkSync(outFile);
+    removeFileWithRetries(outFile);
   }
 
   const normalizedSource = String(videoUrl || "").trim();
@@ -792,7 +844,7 @@ module.exports = async function download(videoUrl) {
   }
 
   if (!isRemoteUrl(normalizedSource)) {
-    const localPath = path.resolve(normalizedSource);
+    const localPath = resolveExistingLocalPath(normalizedSource);
     if (!fs.existsSync(localPath)) {
       throw new Error(`Local source not found: ${localPath}`);
     }
