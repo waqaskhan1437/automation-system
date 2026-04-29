@@ -91,6 +91,15 @@ const DEFAULT_VIDEO_CONFIG = {
   prompt_source_type: "youtube",
   prompt_video_url: "",
   prompt_local_file_path: "",
+  auto_publish: false,
+  publish_mode: "delay",
+  delay_minutes: "60",
+  schedule_date: "",
+  schedule_time: "",
+  postforme_account_ids: [],
+  postforme_schedule_timezone: "",
+  post_stagger_minutes: "15",
+  postforme_account_stagger_enabled: false,
 };
 
 function extractPromptSocialContent(plan: PromptPlanPayload | null | undefined): {

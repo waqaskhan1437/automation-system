@@ -20,6 +20,15 @@ export const DEFAULT_IMAGE_AUTOMATION_CONFIG: Record<string, unknown> = {
   schedule_run_time: "13:00",
   schedule_timezone: "UTC",
   schedule_weekdays: ["sunday"],
+  auto_publish: false,
+  publish_mode: "delay",
+  delay_minutes: "60",
+  schedule_date: "",
+  schedule_time: "",
+  postforme_account_ids: [],
+  postforme_schedule_timezone: "UTC",
+  post_stagger_minutes: "15",
+  postforme_account_stagger_enabled: false,
 };
 
 export function normalizeImageAutomationConfig(config: Record<string, unknown> | null | undefined): Record<string, unknown> {

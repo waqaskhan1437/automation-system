@@ -25,6 +25,42 @@ export default function PublishTab({ data, onChange }: TabProps) {
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const autoPublish = data.auto_publish === true;
   const selectedAccounts = Array.isArray(data.postforme_account_ids) ? data.postforme_account_ids : [];
+  const publishMode = typeof data.publish_mode === "string" && data.publish_mode ? data.publish_mode : "delay";
+  const scheduleTimezone = typeof data.schedule_timezone === "string" && data.schedule_timezone ? data.schedule_timezone : "";
+  const publishTimezone = typeof data.postforme_schedule_timezone === "string" && data.postforme_schedule_timezone
+    ? data.postforme_schedule_timezone
+    : scheduleTimezone || "UTC";
+
+  useEffect(() => {
+    if (!autoPublish) {
+      return;
+    }
+
+    if (typeof data.publish_mode !== "string" || !data.publish_mode) {
+      onChange("publish_mode", "delay");
+    }
+    if (typeof data.delay_minutes !== "string" || !data.delay_minutes) {
+      onChange("delay_minutes", "60");
+    }
+    if (typeof data.post_stagger_minutes !== "string" || !data.post_stagger_minutes) {
+      onChange("post_stagger_minutes", "15");
+    }
+    if (typeof data.postforme_schedule_timezone !== "string" || !data.postforme_schedule_timezone) {
+      try {
+        onChange("postforme_schedule_timezone", scheduleTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+      } catch {
+        onChange("postforme_schedule_timezone", scheduleTimezone || "UTC");
+      }
+    }
+  }, [
+    autoPublish,
+    data.delay_minutes,
+    data.post_stagger_minutes,
+    data.postforme_schedule_timezone,
+    data.publish_mode,
+    onChange,
+    scheduleTimezone,
+  ]);
 
   const fetchAccounts = useCallback(async () => {
     if (!autoPublish) {
@@ -163,14 +199,14 @@ export default function PublishTab({ data, onChange }: TabProps) {
       {autoPublish && (
         <div className="glass-card p-5">
           <p className="text-sm font-medium mb-3">Post Scheduling</p>
-          <select className="glass-select" value={data.publish_mode as string || "immediate"} onChange={(event) => onChange("publish_mode", event.target.value)}>
+          <select className="glass-select" value={publishMode} onChange={(event) => onChange("publish_mode", event.target.value)}>
             <option value="immediate">Post Immediately</option>
             <option value="delay">Delay After Processing</option>
             <option value="scheduled">Schedule Specific Time</option>
             <option value="stagger">Stagger Multiple Posts</option>
           </select>
 
-          {data.publish_mode === "delay" && (
+          {publishMode === "delay" && (
             <div className="mt-3 space-y-2">
               <label className="block text-xs text-[#a1a1aa] mb-1">Delay After Processing</label>
               <select className="glass-select text-sm" value={data.delay_minutes as string || "60"} onChange={(event) => onChange("delay_minutes", event.target.value)}>
@@ -203,8 +239,8 @@ export default function PublishTab({ data, onChange }: TabProps) {
             </div>
           )}
 
-          {data.publish_mode === "scheduled" && (
-            <div className="grid grid-cols-2 gap-4 mt-3">
+          {publishMode === "scheduled" && (
+            <div className="grid gap-4 mt-3 md:grid-cols-3">
               <div>
                 <label className="block text-xs text-[#a1a1aa] mb-1">Date</label>
                 <input className="glass-input text-sm" type="date" value={data.schedule_date as string || ""} onChange={(event) => onChange("schedule_date", event.target.value)} />
@@ -213,10 +249,19 @@ export default function PublishTab({ data, onChange }: TabProps) {
                 <label className="block text-xs text-[#a1a1aa] mb-1">Time</label>
                 <input className="glass-input text-sm" type="time" value={data.schedule_time as string || ""} onChange={(event) => onChange("schedule_time", event.target.value)} />
               </div>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">Timezone</label>
+                <input
+                  className="glass-input text-sm"
+                  value={publishTimezone}
+                  onChange={(event) => onChange("postforme_schedule_timezone", event.target.value)}
+                  placeholder="Asia/Karachi"
+                />
+              </div>
             </div>
           )}
 
-          {data.publish_mode === "stagger" && selectedAccounts.length > 1 && (
+          {publishMode === "stagger" && selectedAccounts.length > 1 && (
             <div className="mt-3 space-y-3">
               <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
                 <p className="text-xs text-blue-300">
@@ -242,10 +287,16 @@ export default function PublishTab({ data, onChange }: TabProps) {
             </div>
           )}
 
-          {data.publish_mode === "stagger" && selectedAccounts.length <= 1 && (
+          {publishMode === "stagger" && selectedAccounts.length <= 1 && (
             <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
               <p className="text-xs text-yellow-300">Stagger mode requires at least 2 accounts. Currently {selectedAccounts.length} selected.</p>
             </div>
+          )}
+
+          {publishMode !== "immediate" && (
+            <p className="text-xs text-[#71717a] mt-3">
+              Scheduled publish timezone: {publishTimezone}
+            </p>
           )}
         </div>
       )}
