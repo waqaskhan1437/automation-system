@@ -1327,7 +1327,7 @@ const server = http.createServer((req, res) => {
         }
 
         saveConfig(nextConfig);
-        redirect(res, "/launcher");
+        redirect(res, "/open");
       }).catch((error) => {
         serveLauncher(
           res,
@@ -1344,7 +1344,7 @@ const server = http.createServer((req, res) => {
   if ((req.method === "GET" || req.method === "HEAD") && pathname === "/open") {
     const token = config.ACCESS_TOKEN || "";
     if (token && config.RUNNER_TOKEN) {
-      redirect(res, `/?token=${encodeURIComponent(token)}`);
+      redirect(res, "/");
     } else {
       redirect(res, "/launcher");
     }
