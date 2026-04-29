@@ -47,7 +47,7 @@ const RESOLUTION_PRESETS: Record<ImageLayout, string> = {
 
 const DEFAULT_AI_MODELS: Record<SupportedAIProvider, string> = {
   openai: "gpt-5-mini",
-  gemini: "gemini-2.5-flash",
+  gemini: "gemini-3-flash-preview",
   grok: "grok-4-fast-reasoning",
   cohere: "command-r-plus",
   openrouter: "google/gemini-2.5-flash",

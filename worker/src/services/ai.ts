@@ -71,9 +71,19 @@ const PROVIDER_ORDER: SupportedAIProvider[] = [
   "groq",
 ];
 
+const GEMINI_DEFAULT_TEXT_MODELS = [
+  "gemini-3-flash-preview",
+  "gemini-2.5-flash",
+  "gemini-3.1-flash-lite-preview",
+  "gemini-2.5-flash-lite",
+  "gemini-3.1-pro-preview",
+  "gemini-3.1-pro-preview-customtools",
+  "gemini-2.5-pro",
+];
+
 const PROVIDER_DEFAULT_MODELS: Record<SupportedAIProvider, string[]> = {
   openai: ["gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"],
-  gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
+  gemini: GEMINI_DEFAULT_TEXT_MODELS,
   grok: ["grok-4-fast-reasoning", "grok-4", "grok-3"],
   cohere: ["command-a-03-2025", "command-r-plus", "command-r7b-12-2024"],
   openrouter: [
@@ -87,6 +97,25 @@ const PROVIDER_DEFAULT_MODELS: Record<SupportedAIProvider, string[]> = {
     "meta-llama/llama-4-scout-17b-16e-instruct",
   ],
 };
+
+const GEMINI_DEPRECATED_MODEL_IDS = new Set([
+  "gemini-3-pro-preview",
+  "gemini-2.5-flash-preview-09-2025",
+  "gemini-2.5-flash-lite-preview-09-2025",
+]);
+
+const GEMINI_EXCLUDED_MODEL_KEYWORDS = [
+  "image",
+  "tts",
+  "live",
+  "native-audio",
+  "embedding",
+  "deep-research",
+  "computer-use",
+  "robotics",
+  "veo",
+  "lyria",
+];
 
 function uniqueModels(models: AIModelOption[]): AIModelOption[] {
   const seen = new Set<string>();
@@ -190,6 +219,42 @@ function isGroqTextModel(id: string): boolean {
 function isGrokTextModel(id: string): boolean {
   const lower = id.toLowerCase();
   return !(lower.includes("image") || lower.includes("tts") || lower.includes("vision"));
+}
+
+function isGeminiTextModel(id: string): boolean {
+  const lower = id.toLowerCase();
+  if (!lower.startsWith("gemini-")) {
+    return false;
+  }
+
+  if (GEMINI_DEPRECATED_MODEL_IDS.has(lower)) {
+    return false;
+  }
+
+  return !GEMINI_EXCLUDED_MODEL_KEYWORDS.some((keyword) => lower.includes(keyword));
+}
+
+function getGeminiModelPriority(id: string): number {
+  const exactIndex = GEMINI_DEFAULT_TEXT_MODELS.indexOf(id);
+  if (exactIndex >= 0) {
+    return exactIndex;
+  }
+
+  const lower = id.toLowerCase();
+  if (lower.startsWith("gemini-3")) return 100;
+  if (lower.startsWith("gemini-2.5")) return 200;
+  if (lower.startsWith("gemini-2.0")) return 300;
+  if (lower.startsWith("gemini-1.5")) return 400;
+  return 500;
+}
+
+function compareGeminiModels(a: AIModelOption, b: AIModelOption): number {
+  const priorityDelta = getGeminiModelPriority(a.id) - getGeminiModelPriority(b.id);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  return compareModels(a, b);
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -610,14 +675,18 @@ async function fetchGeminiModels(apiKey: string): Promise<AIModelOption[]> {
   return uniqueModels(
     (payload.models || [])
       .filter((model) => (model.supportedGenerationMethods || []).includes("generateContent"))
-      .map((model) => ({
-        id: model.name.replace(/^models\//, ""),
-        label: model.displayName || model.name.replace(/^models\//, ""),
-        description: model.description,
-        contextWindow: parseContextWindow(model.inputTokenLimit),
-        tier: "paid" as const,
-      }))
-      .sort(compareModels)
+      .map((model) => {
+        const id = model.name.replace(/^models\//, "");
+        return {
+          id,
+          label: model.displayName || id,
+          description: model.description,
+          contextWindow: parseContextWindow(model.inputTokenLimit),
+          tier: "paid" as const,
+        };
+      })
+      .filter((model) => isGeminiTextModel(model.id))
+      .sort(compareGeminiModels)
   );
 }
 
