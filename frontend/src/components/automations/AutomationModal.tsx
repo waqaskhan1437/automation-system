@@ -4,7 +4,7 @@ import { Automation } from "./types";
 import type { AIModelCatalogResponse } from "@/lib/types";
 import { getAvailableProviders, normalizeAiCatalog, resolveModelSelection, resolveProviderSelection } from "@/lib/ai";
 import { useSessionUser } from "@/components/layout/ClientWrapper";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import BasicTab from "./BasicTab";
 import VideoTab from "./tabs/VideoTab";
 import TaglinesTab from "./tabs/TaglinesTab";
@@ -34,6 +34,14 @@ type PromptPlanPayload = {
 
 function getPromptPlanSegmentCount(plan: PromptPlanPayload | null | undefined): number {
   return Array.isArray(plan?.segments) ? plan.segments.length : 0;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError
+    ? error.message
+    : error instanceof Error && error.message
+    ? error.message
+    : fallback;
 }
 
 const tabs = [
@@ -387,8 +395,8 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
       } else {
         setTaglineGenResult(result.error || "Tagline generation failed");
       }
-    } catch {
-      setTaglineGenResult("Tagline generation failed");
+    } catch (error) {
+      setTaglineGenResult(getErrorMessage(error, "Tagline generation failed"));
     }
 
     setTaglineGenerating(false);
@@ -440,8 +448,8 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
       } else {
         setSocialGenResult(result.error || "Social content generation failed");
       }
-    } catch {
-      setSocialGenResult("Social content generation failed");
+    } catch (error) {
+      setSocialGenResult(getErrorMessage(error, "Social content generation failed"));
     }
 
     setSocialGenerating(false);
@@ -504,8 +512,8 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
       } else {
         setPromptPlanResult(result.error || "Prompt plan generation failed");
       }
-    } catch {
-      setPromptPlanResult("Prompt plan generation failed");
+    } catch (error) {
+      setPromptPlanResult(getErrorMessage(error, "Prompt plan generation failed"));
     }
 
     setPromptPlanGenerating(false);

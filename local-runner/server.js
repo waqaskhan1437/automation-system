@@ -34,6 +34,31 @@ const DEFAULTS = {
   RUNNER_TOKEN: "",
   ACCESS_TOKEN: "",
 };
+const AI_PROVIDER_LABELS = {
+  openai: "OpenAI",
+  gemini: "Google Gemini",
+  grok: "xAI Grok",
+  cohere: "Cohere",
+  openrouter: "OpenRouter",
+  groq: "Groq",
+};
+const AI_PROVIDER_ORDER = ["openai", "gemini", "grok", "cohere", "openrouter", "groq"];
+const AI_PROVIDER_DEFAULT_MODELS = {
+  openai: ["gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"],
+  gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
+  grok: ["grok-4-fast-reasoning", "grok-4", "grok-3"],
+  cohere: ["command-a-03-2025", "command-r-plus", "command-r7b-12-2024"],
+  openrouter: [
+    "google/gemini-2.5-flash",
+    "openai/gpt-4o-mini",
+    "meta-llama/llama-3.3-70b-instruct:free",
+  ],
+  groq: [
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+  ],
+};
 
 function loadConfig() {
   const config = { ...DEFAULTS };
@@ -695,6 +720,1046 @@ function requestJson(targetUrl, options = {}) {
 
     req.end();
   });
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
+async function readJsonRequestBody(req) {
+  const body = await readRequestBody(req);
+  if (!body.trim()) {
+    return null;
+  }
+
+  return JSON.parse(body);
+}
+
+function buildApiHeaders(accessToken, extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return headers;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callRemoteApiJson(config, accessToken, pathname, options = {}) {
+  return requestJson(
+    new URL(pathname, config.SERVER_URL || DEFAULTS.SERVER_URL).toString(),
+    {
+      method: options.method || "GET",
+      headers: buildApiHeaders(accessToken, options.headers || {}),
+      body: options.body || "",
+    }
+  );
+}
+
+async function loadAiSettings(config, accessToken) {
+  const response = await callRemoteApiJson(config, accessToken, "/api/settings/ai");
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+
+  return response.data && typeof response.data === "object" ? response.data : null;
+}
+
+function uniqueModels(models) {
+  const seen = new Set();
+  return models.filter((model) => {
+    if (!model.id || seen.has(model.id)) {
+      return false;
+    }
+    seen.add(model.id);
+    return true;
+  });
+}
+
+function compareModels(a, b) {
+  if (a.tier === "free" && b.tier !== "free") return -1;
+  if (b.tier === "free" && a.tier !== "free") return 1;
+  return String(a.label || "").localeCompare(String(b.label || ""));
+}
+
+function parseContextWindow(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function getModelTierFromPricing(pricing, id) {
+  if (String(id || "").includes(":free")) return "free";
+  if (!pricing || typeof pricing !== "object") return "unknown";
+  const values = Object.values(pricing)
+    .map((value) => Number.parseFloat(String(value)))
+    .filter((value) => Number.isFinite(value));
+  if (values.length === 0) return "unknown";
+  return values.every((value) => value === 0) ? "free" : "paid";
+}
+
+function isOpenAITextModel(id) {
+  const lower = String(id || "").toLowerCase();
+  if (
+    lower.includes("embedding") ||
+    lower.includes("realtime") ||
+    lower.includes("audio") ||
+    lower.includes("transcribe") ||
+    lower.includes("tts") ||
+    lower.includes("moderation") ||
+    lower.includes("image") ||
+    lower.includes("whisper") ||
+    lower.includes("sora") ||
+    lower.includes("search-preview") ||
+    lower.includes("deep-research")
+  ) {
+    return false;
+  }
+
+  if (
+    lower.includes("clipboard") ||
+    lower.includes("vision") ||
+    lower.includes("embed")
+  ) {
+    return false;
+  }
+
+  return (
+    lower.startsWith("gpt-") ||
+    lower.startsWith("o1") ||
+    lower.startsWith("o3") ||
+    lower.startsWith("o4") ||
+    lower.startsWith("chatgpt-") ||
+    lower.startsWith("gpt-oss") ||
+    lower.startsWith("codex") ||
+    lower.startsWith("gemini-") ||
+    lower.startsWith("claude-") ||
+    lower.startsWith("llama") ||
+    lower.startsWith("mistral") ||
+    lower.startsWith("command")
+  );
+}
+
+function isGroqTextModel(id) {
+  const lower = String(id || "").toLowerCase();
+  return !(
+    lower.includes("whisper") ||
+    lower.includes("tts") ||
+    lower.includes("guard") ||
+    lower.includes("vision-preview")
+  );
+}
+
+function isGrokTextModel(id) {
+  const lower = String(id || "").toLowerCase();
+  return !(lower.includes("image") || lower.includes("tts") || lower.includes("vision"));
+}
+
+async function readProviderError(prefix, response) {
+  const errorText = String(await response.text()).trim();
+  throw new Error(errorText ? `${prefix}: ${response.status} ${errorText}` : `${prefix}: ${response.status}`);
+}
+
+async function fetchOpenAIModels(apiKey) {
+  const response = await fetch("https://api.openai.com/v1/models", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) await readProviderError("OpenAI models failed", response);
+  const payload = await response.json();
+  return uniqueModels(
+    (Array.isArray(payload.data) ? payload.data : [])
+      .filter((model) => model && model.id && isOpenAITextModel(model.id))
+      .map((model) => ({ id: model.id, label: model.id, tier: "paid" }))
+      .sort(compareModels)
+  );
+}
+
+async function fetchGeminiModels(apiKey) {
+  const params = new URLSearchParams({ key: String(apiKey || "").trim() });
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`);
+  if (!response.ok) await readProviderError("Gemini models failed", response);
+  const payload = await response.json();
+  return uniqueModels(
+    (Array.isArray(payload.models) ? payload.models : [])
+      .filter((model) => Array.isArray(model.supportedGenerationMethods) && model.supportedGenerationMethods.includes("generateContent"))
+      .map((model) => ({
+        id: String(model.name || "").replace(/^models\//, ""),
+        label: model.displayName || String(model.name || "").replace(/^models\//, ""),
+        description: model.description,
+        contextWindow: parseContextWindow(model.inputTokenLimit),
+        tier: "paid",
+      }))
+      .sort(compareModels)
+  );
+}
+
+async function fetchGrokModels(apiKey) {
+  const response = await fetch("https://api.x.ai/v1/models", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) await readProviderError("xAI models failed", response);
+  const payload = await response.json();
+  return uniqueModels(
+    (Array.isArray(payload.data) ? payload.data : [])
+      .filter((model) => model && model.id && isGrokTextModel(model.id))
+      .map((model) => ({ id: model.id, label: model.id, tier: "paid" }))
+      .sort(compareModels)
+  );
+}
+
+async function fetchCohereModels(apiKey) {
+  const response = await fetch("https://api.cohere.com/v1/models?endpoint=chat&page_size=1000", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) await readProviderError("Cohere models failed", response);
+  const payload = await response.json();
+  return uniqueModels(
+    (Array.isArray(payload.models) ? payload.models : [])
+      .filter((model) => !model.is_deprecated)
+      .filter((model) => {
+        const endpoints = Array.isArray(model.endpoints) ? model.endpoints : [];
+        const features = Array.isArray(model.features) ? model.features : [];
+        return endpoints.includes("chat") || features.includes("chat-completions");
+      })
+      .map((model) => ({
+        id: model.name,
+        label: model.name,
+        contextWindow: parseContextWindow(model.context_length),
+        tier: "paid",
+      }))
+      .sort(compareModels)
+  );
+}
+
+async function fetchOpenRouterModels(apiKey) {
+  const response = await fetch("https://openrouter.ai/api/v1/models", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) await readProviderError("OpenRouter models failed", response);
+  const payload = await response.json();
+  return uniqueModels(
+    (Array.isArray(payload.data) ? payload.data : [])
+      .filter((model) => {
+        const outputModalities = Array.isArray(model.architecture?.output_modalities) ? model.architecture.output_modalities : [];
+        return outputModalities.includes("text");
+      })
+      .map((model) => {
+        const tier = getModelTierFromPricing(model.pricing, model.id);
+        const labelSuffix = tier === "free" ? " (Free)" : "";
+        return {
+          id: model.id,
+          label: `${model.name || model.id}${labelSuffix}`,
+          description: model.description,
+          tier,
+          contextWindow: parseContextWindow(
+            model.top_provider?.context_length != null ? model.top_provider.context_length : model.context_length
+          ),
+        };
+      })
+      .sort(compareModels)
+  );
+}
+
+async function fetchGroqModels(apiKey) {
+  const response = await fetch("https://api.groq.com/openai/v1/models", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) await readProviderError("Groq models failed", response);
+  const payload = await response.json();
+  return uniqueModels(
+    (Array.isArray(payload.data) ? payload.data : [])
+      .filter((model) => model && model.id && isGroqTextModel(model.id))
+      .map((model) => ({ id: model.id, label: model.id, tier: "paid" }))
+      .sort(compareModels)
+  );
+}
+
+async function fetchProviderModels(provider, apiKey) {
+  switch (provider) {
+    case "openai":
+      return fetchOpenAIModels(apiKey);
+    case "gemini":
+      return fetchGeminiModels(apiKey);
+    case "grok":
+      return fetchGrokModels(apiKey);
+    case "cohere":
+      return fetchCohereModels(apiKey);
+    case "openrouter":
+      return fetchOpenRouterModels(apiKey);
+    case "groq":
+      return fetchGroqModels(apiKey);
+    default:
+      return [];
+  }
+}
+
+function fallbackModels(provider) {
+  return AI_PROVIDER_DEFAULT_MODELS[provider].map((id) => ({
+    id,
+    label: id,
+    tier: id.includes(":free") ? "free" : "unknown",
+  }));
+}
+
+function getProviderApiKey(settings, provider) {
+  switch (provider) {
+    case "openai":
+      return settings.openai_key || "";
+    case "gemini":
+      return settings.gemini_key || "";
+    case "grok":
+      return settings.grok_key || "";
+    case "cohere":
+      return settings.cohere_key || "";
+    case "openrouter":
+      return settings.openrouter_key || "";
+    case "groq":
+      return settings.groq_key || "";
+    default:
+      return "";
+  }
+}
+
+function getConfiguredProviderIds(settings) {
+  return AI_PROVIDER_ORDER.filter((provider) => Boolean(getProviderApiKey(settings, provider)));
+}
+
+async function buildAiCatalog(settings) {
+  const configuredProviders = getConfiguredProviderIds(settings);
+  const providers = await Promise.all(
+    configuredProviders.map(async (provider) => {
+      const apiKey = getProviderApiKey(settings, provider);
+      try {
+        const models = await fetchProviderModels(provider, apiKey);
+        return {
+          id: provider,
+          label: AI_PROVIDER_LABELS[provider],
+          models: models.length > 0 ? models : fallbackModels(provider),
+        };
+      } catch (error) {
+        return {
+          id: provider,
+          label: AI_PROVIDER_LABELS[provider],
+          models: fallbackModels(provider),
+          error: error instanceof Error ? error.message : "Failed to fetch models",
+        };
+      }
+    })
+  );
+
+  const defaultProvider = configuredProviders.includes(settings.default_provider)
+    ? settings.default_provider
+    : (configuredProviders[0] || null);
+
+  return { default_provider: defaultProvider, providers };
+}
+
+function resolveModelForProvider(provider, preferredModel, catalog) {
+  const providerModels = ((catalog || []).find((item) => item.id === provider) || {}).models || [];
+  if (preferredModel && providerModels.some((model) => model.id === preferredModel)) {
+    return preferredModel;
+  }
+
+  const configuredDefault = AI_PROVIDER_DEFAULT_MODELS[provider].find((id) =>
+    providerModels.some((model) => model.id === id)
+  );
+  if (configuredDefault) return configuredDefault;
+  return providerModels[0]?.id || AI_PROVIDER_DEFAULT_MODELS[provider][0];
+}
+
+function parseJsonObject(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {}
+
+  const match = String(text || "").match(/\{[\s\S]*\}/);
+  if (!match) {
+    throw new Error("Could not parse JSON object from provider response");
+  }
+
+  const parsed = JSON.parse(match[0]);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Provider JSON response was not an object");
+  }
+
+  return parsed;
+}
+
+function cleanTextBlock(value, fallback = "") {
+  if (typeof value !== "string") return fallback;
+  return value.replace(/\r\n?/g, "\n").trim();
+}
+
+function cleanStringList(value, limit, hashtagMode = false) {
+  if (!Array.isArray(value)) return [];
+
+  function normalize(str) {
+    return String(str || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  function isDuplicate(newItem, existing) {
+    const normalizedNew = normalize(newItem);
+    return existing.some((item) => normalize(item) === normalizedNew);
+  }
+
+  const seen = [];
+  value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .map((item) => (hashtagMode ? (item.startsWith("#") ? item : `#${item.replace(/^#+/, "")}`) : item))
+    .filter((item) => !isDuplicate(item, seen))
+    .slice(0, limit)
+    .forEach((item) => seen.push(item));
+
+  return seen;
+}
+
+function parseTimestampSeconds(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+
+  const raw = cleanTextBlock(value);
+  if (!raw) return null;
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  const timeMatch = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!timeMatch) return null;
+  const first = Number.parseInt(timeMatch[1], 10);
+  const second = Number.parseInt(timeMatch[2], 10);
+  const third = timeMatch[3] ? Number.parseInt(timeMatch[3], 10) : null;
+  if (!Number.isFinite(first) || !Number.isFinite(second) || (third !== null && !Number.isFinite(third))) {
+    return null;
+  }
+
+  if (third !== null) {
+    return first * 3600 + second * 60 + third;
+  }
+
+  return first * 60 + second;
+}
+
+function getTaglinesMessages(topic, count) {
+  return {
+    system: "You create short-form video overlay copy. Return valid JSON only. No markdown, no prose, no code fences. IMPORTANT: Never generate duplicate taglines - even if they differ slightly in wording, they must be meaningfully different.",
+    user: [
+      `Generate exactly ${count} TOP taglines and exactly ${count} BOTTOM taglines for short videos.`,
+      `Topic: ${topic}`,
+      "",
+      "TOP TAGLINES (hooks that create curiosity and explain content):",
+      "- Describe WHAT is happening in the video",
+      "- Create curiosity or surprise",
+      "- Short phrases that make viewers want to watch",
+      "- Examples: 'What he did next will shock you', 'This is not what it looks like', 'She never expected this'",
+      "- DO NOT repeat similar phrases even with different words",
+      "",
+      "BOTTOM TAGLINES (call-to-action for the website):",
+      "- Website link CTA format: 'Order on [WEBSITE].com'",
+      "- Examples: 'Order on prankwish.com', 'Get yours at prankwish.com', 'Shop now at prankwish.com'",
+      "- Include the full website domain without 'https://'",
+      "- Keep it short and punchy",
+      "- DO NOT use generic CTAs like 'Follow for more' or 'Like and subscribe'",
+      "",
+      "IMPORTANT RULES:",
+      "- NEVER generate duplicate taglines - each must be unique in meaning and words",
+      "- Top and bottom taglines should complement each other, not overlap",
+      "- Avoid emojis entirely",
+      "- Each tagline should work alone but pair well with the other section",
+      'Return JSON with this exact shape: {"top":["..."],"bottom":["..."]}',
+    ].join("\n"),
+  };
+}
+
+function getSocialMessages(topic, platform, count) {
+  const hashtagCount = Math.min(Math.max(count * 3, 10), 40);
+  return {
+    system: "You create social media metadata. Return valid JSON only. No markdown, no prose, no code fences.",
+    user: [
+      `Generate social content for ${platform}.`,
+      `Topic: ${topic}`,
+      `Create exactly ${count} titles.`,
+      `Create exactly ${count} descriptions.`,
+      `Create exactly ${hashtagCount} hashtags.`,
+      "Rules:",
+      "- titles should be catchy and platform-native",
+      "- descriptions should be short and usable as captions",
+      "- hashtags must be unique and relevant",
+      '- return JSON with this exact shape: {"titles":["..."],"descriptions":["..."],"hashtags":["#..."]}',
+    ].join("\n"),
+  };
+}
+
+function getShortPromptPlanMessages(prompt) {
+  return {
+    system: "You convert pasted short-video planning text into structured JSON. Return valid JSON only. No markdown, no prose, no code fences.",
+    user: [
+      "Analyze the pasted prompt and extract a reusable short-video plan.",
+      "The prompt may include hooks, captions, hashtags, titles, timestamps, durations, short ideas, and merge hints.",
+      "Rules:",
+      "- If timestamps appear, convert them to numeric seconds.",
+      "- Preserve the user's hook/caption/title wording as much as possible, but clean obvious formatting noise.",
+      "- If a segment has a start and end time, duration_seconds must equal end_seconds - start_seconds.",
+      "- If a segment is missing a title, create a short usable title from the same segment idea.",
+      "- If a segment is missing hashtags, infer a few relevant ones from the same segment only.",
+      "- If the prompt clearly suggests multiple shorts, return multiple segments in the same order.",
+      "- recommended_merge should be true only when the prompt clearly asks to merge generated shorts.",
+      '- Return JSON with this exact shape: {"overview":"...","recommended_merge":false,"segments":[{"hook":"...","title":"...","caption":"...","hashtags":["#..."],"start_seconds":16,"end_seconds":35,"duration_seconds":19}],"titles":["..."],"descriptions":["..."],"hashtags":["#..."]}',
+      "",
+      "Prompt text:",
+      prompt,
+    ].join("\n"),
+  };
+}
+
+async function parseTextResponse(response) {
+  const payload = await response.json();
+
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text;
+  }
+
+  if (Array.isArray(payload.output)) {
+    const text = payload.output
+      .flatMap((item) => {
+        const content = item.content;
+        if (!Array.isArray(content)) return [];
+        return content
+          .map((part) => (typeof part?.text === "string" ? part.text : ""))
+          .filter(Boolean);
+      })
+      .join("\n");
+
+    if (text.trim()) return text;
+  }
+
+  if (Array.isArray(payload.choices)) {
+    const text = payload.choices
+      .map((choice) => {
+        const message = choice.message;
+        return typeof message?.content === "string" ? message.content : "";
+      })
+      .join("\n");
+
+    if (text.trim()) return text;
+  }
+
+  throw new Error("Provider returned no usable text");
+}
+
+async function generateWithOpenAI(apiKey, model, messages) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        { role: "system", content: messages.system },
+        { role: "user", content: messages.user },
+      ],
+    }),
+  });
+
+  if (response.ok) {
+    return parseTextResponse(response);
+  }
+
+  const fallback = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: messages.system },
+        { role: "user", content: messages.user },
+      ],
+      temperature: 0.7,
+    }),
+  });
+
+  if (!fallback.ok) {
+    const errorText = await fallback.text();
+    throw new Error(`OpenAI request failed: ${fallback.status} ${errorText}`);
+  }
+
+  return parseTextResponse(fallback);
+}
+
+async function generateWithOpenAICompatible(baseUrl, apiKey, model, messages, extraHeaders = {}) {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      ...extraHeaders,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: messages.system },
+        { role: "user", content: messages.user },
+      ],
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Provider request failed: ${response.status} ${errorText}`);
+  }
+
+  return parseTextResponse(response);
+}
+
+async function generateWithGemini(apiKey, model, messages) {
+  const params = new URLSearchParams({ key: String(apiKey || "").trim() });
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?${params.toString()}`;
+  const body = JSON.stringify({
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `${messages.system}\n\n${messages.user}` }],
+      },
+    ],
+    generationConfig: {
+      temperature: 0.7,
+      responseMimeType: "application/json",
+    },
+  });
+
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+
+    if (response.ok) {
+      const payload = await response.json();
+      const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("Gemini returned no usable text");
+      return text;
+    }
+
+    const errorText = await response.text();
+    const isRetryable = response.status === 429 || response.status === 503;
+    lastError = new Error(`Gemini request failed: ${response.status} ${errorText}`);
+    if (!isRetryable || attempt === 2) {
+      throw lastError;
+    }
+
+    await sleep(1200 * (attempt + 1));
+  }
+
+  throw lastError || new Error("Gemini request failed");
+}
+
+async function generateWithCohere(apiKey, model, messages) {
+  const response = await fetch("https://api.cohere.com/v2/chat", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: messages.system },
+        { role: "user", content: messages.user },
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!response.ok) {
+    const fallback = await fetch("https://api.cohere.com/v2/chat", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: messages.system },
+          { role: "user", content: messages.user },
+        ],
+      }),
+    });
+
+    if (!fallback.ok) {
+      const errorText = await fallback.text();
+      throw new Error(`Cohere request failed: ${fallback.status} ${errorText}`);
+    }
+
+    const payload = await fallback.json();
+    const text = payload.message?.content?.find((item) => typeof item.text === "string")?.text;
+    if (!text) throw new Error("Cohere returned no usable text");
+    return text;
+  }
+
+  const payload = await response.json();
+  const text = payload.message?.content?.find((item) => typeof item.text === "string")?.text;
+  if (!text) throw new Error("Cohere returned no usable text");
+  return text;
+}
+
+async function generateAiJson(settings, provider, model, messages, config) {
+  const apiKey = getProviderApiKey(settings, provider);
+  if (!apiKey) {
+    throw new Error(`No API key saved for ${AI_PROVIDER_LABELS[provider]}`);
+  }
+
+  let rawText = "";
+  switch (provider) {
+    case "openai":
+      rawText = await generateWithOpenAI(apiKey, model, messages);
+      break;
+    case "gemini":
+      rawText = await generateWithGemini(apiKey, model, messages);
+      break;
+    case "grok":
+      rawText = await generateWithOpenAICompatible("https://api.x.ai/v1", apiKey, model, messages);
+      break;
+    case "cohere":
+      rawText = await generateWithCohere(apiKey, model, messages);
+      break;
+    case "openrouter":
+      rawText = await generateWithOpenAICompatible(
+        "https://openrouter.ai/api/v1",
+        apiKey,
+        model,
+        messages,
+        {
+          "HTTP-Referer": config.FRONTEND_URL || DEFAULTS.FRONTEND_URL,
+          "X-Title": "Automation Frontend",
+        }
+      );
+      break;
+    case "groq":
+      rawText = await generateWithOpenAICompatible("https://api.groq.com/openai/v1", apiKey, model, messages);
+      break;
+    default:
+      throw new Error("Unsupported AI provider");
+  }
+
+  return parseJsonObject(rawText);
+}
+
+function normalizeTaglinesResult(payload, count) {
+  const top = cleanStringList(payload.top, count);
+  const bottom = cleanStringList(payload.bottom, count);
+  if (top.length === 0 || bottom.length === 0) {
+    throw new Error("Provider response did not include valid top/bottom taglines");
+  }
+  return { top, bottom };
+}
+
+function normalizeSocialResult(payload, count) {
+  const titles = cleanStringList(payload.titles, count);
+  const descriptions = cleanStringList(payload.descriptions, count);
+  const hashtags = cleanStringList(payload.hashtags, Math.min(Math.max(count * 3, 10), 40), true);
+  if (titles.length === 0 || descriptions.length === 0 || hashtags.length === 0) {
+    throw new Error("Provider response did not include valid titles, descriptions, and hashtags");
+  }
+  return { titles, descriptions, hashtags };
+}
+
+function normalizeShortPromptPlanResult(payload) {
+  const rawSegments = Array.isArray(payload.segments) ? payload.segments : [];
+  const segments = rawSegments
+    .map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const record = item;
+      const hook = cleanTextBlock(record.hook);
+      const title = cleanTextBlock(record.title || record.headline || record.name);
+      const caption = cleanTextBlock(record.caption || record.description);
+      const hashtags = cleanStringList(record.hashtags, 12, true);
+      const start = parseTimestampSeconds(record.start_seconds ?? record.start ?? record.timestamp_start);
+      const end = parseTimestampSeconds(record.end_seconds ?? record.end ?? record.timestamp_end);
+      const durationValue = parseTimestampSeconds(record.duration_seconds ?? record.duration);
+      const resolvedStart = start ?? 0;
+      const resolvedEnd = end ?? (durationValue !== null ? resolvedStart + durationValue : null);
+      const resolvedDuration = resolvedEnd !== null
+        ? Math.max(1, resolvedEnd - resolvedStart)
+        : (durationValue !== null ? Math.max(1, durationValue) : null);
+
+      if ((!hook && !title && !caption) || resolvedEnd === null || resolvedEnd <= resolvedStart) {
+        return null;
+      }
+
+      return {
+        hook: hook || title || caption || `Segment ${index + 1}`,
+        title: title || hook || `Short ${index + 1}`,
+        caption: caption || title || hook || "",
+        hashtags,
+        start_seconds: resolvedStart,
+        end_seconds: resolvedEnd,
+        duration_seconds: resolvedDuration || Math.max(1, resolvedEnd - resolvedStart),
+      };
+    })
+    .filter(Boolean);
+
+  if (segments.length === 0) {
+    throw new Error("Provider response did not include valid timestamp segments");
+  }
+
+  const socialSetCount = Math.max(segments.length, 1);
+  const titles = cleanStringList(payload.titles, socialSetCount);
+  const descriptions = cleanStringList(payload.descriptions, socialSetCount);
+  const hashtags = cleanStringList(payload.hashtags, Math.min(Math.max(socialSetCount * 3, 3), 40), true);
+
+  return {
+    overview: cleanTextBlock(payload.overview, `Prompt-based short plan with ${segments.length} segment(s).`),
+    recommended_merge: payload.recommended_merge === true,
+    segments,
+    titles: titles.length > 0 ? titles : segments.map((segment) => segment.title),
+    descriptions: descriptions.length > 0 ? descriptions : segments.map((segment) => segment.caption),
+    hashtags: hashtags.length > 0
+      ? hashtags
+      : Array.from(new Set(segments.flatMap((segment) => segment.hashtags))).slice(0, 40),
+  };
+}
+
+async function testAiProvider(provider, apiKey) {
+  switch (provider) {
+    case "openai": {
+      const response = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      return response.ok
+        ? { success: true, message: "OpenAI connected successfully" }
+        : { success: false, message: await readProviderTestMessage("OpenAI", response) };
+    }
+    case "gemini": {
+      const params = new URLSearchParams({ key: String(apiKey || "").trim() });
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`);
+      return response.ok
+        ? { success: true, message: "Gemini connected successfully" }
+        : { success: false, message: await readProviderTestMessage("Gemini", response) };
+    }
+    case "grok": {
+      const response = await fetch("https://api.x.ai/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      return response.ok
+        ? { success: true, message: "Grok connected successfully" }
+        : { success: false, message: await readProviderTestMessage("Grok", response) };
+    }
+    case "cohere": {
+      const response = await fetch("https://api.cohere.ai/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      return response.ok
+        ? { success: true, message: "Cohere connected successfully" }
+        : { success: false, message: await readProviderTestMessage("Cohere", response) };
+    }
+    case "openrouter": {
+      const response = await fetch("https://openrouter.ai/api/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      return response.ok
+        ? { success: true, message: "OpenRouter connected successfully" }
+        : { success: false, message: await readProviderTestMessage("OpenRouter", response) };
+    }
+    case "groq": {
+      const response = await fetch("https://api.groq.com/openai/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      return response.ok
+        ? { success: true, message: "Groq connected successfully" }
+        : { success: false, message: await readProviderTestMessage("Groq", response) };
+    }
+    default:
+      throw new Error("Unknown provider");
+  }
+}
+
+async function readProviderTestMessage(providerLabel, response) {
+  if (response.ok) {
+    return `${providerLabel} connected successfully`;
+  }
+  const errorText = String(await response.text()).trim();
+  return errorText ? `${providerLabel} error: ${response.status} ${errorText}` : `${providerLabel} error: ${response.status}`;
+}
+
+async function handleLocalAiTest(req, res, config) {
+  try {
+    const body = await readJsonRequestBody(req);
+    if (!body || !body.provider || !body.api_key) {
+      sendJson(res, 400, { success: false, error: "provider and api_key required" });
+      return;
+    }
+
+    const result = await testAiProvider(String(body.provider), String(body.api_key).trim());
+    sendJson(res, 200, result);
+  } catch (error) {
+    sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : "Connection failed" });
+  }
+}
+
+async function handleLocalAiModels(req, res, config) {
+  try {
+    const accessToken = extractBearerToken(req) || config.ACCESS_TOKEN || "";
+    if (!accessToken) {
+      sendJson(res, 401, { success: false, error: "Access token required" });
+      return;
+    }
+
+    const settings = await loadAiSettings(config, accessToken);
+    if (!settings) {
+      sendJson(res, 200, { success: true, data: { default_provider: null, providers: [] } });
+      return;
+    }
+
+    const catalog = await buildAiCatalog(settings);
+    sendJson(res, 200, { success: true, data: catalog });
+  } catch (error) {
+    sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : "Failed to load AI models" });
+  }
+}
+
+async function handleLocalAiGenerate(req, res, config) {
+  try {
+    const accessToken = extractBearerToken(req) || config.ACCESS_TOKEN || "";
+    if (!accessToken) {
+      sendJson(res, 401, { success: false, error: "Access token required" });
+      return;
+    }
+
+    const body = await readJsonRequestBody(req);
+    if (!body || !body.task) {
+      sendJson(res, 400, { success: false, error: "task is required" });
+      return;
+    }
+
+    if (body.task === "image_banner") {
+      const forwarded = await callRemoteApiJson(config, accessToken, "/api/settings/ai/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      sendJson(res, 200, forwarded);
+      return;
+    }
+
+    const settings = await loadAiSettings(config, accessToken);
+    if (!settings) {
+      sendJson(res, 400, { success: false, error: "No AI settings configured" });
+      return;
+    }
+
+    const configuredProviders = getConfiguredProviderIds(settings);
+    if (configuredProviders.length === 0) {
+      sendJson(res, 400, { success: false, error: "No AI provider API keys saved in Settings" });
+      return;
+    }
+
+    const catalog = await buildAiCatalog(settings);
+    const requestedProvider = typeof body.provider === "string" ? body.provider : "";
+    const provider = requestedProvider && configuredProviders.includes(requestedProvider)
+      ? requestedProvider
+      : catalog.default_provider;
+
+    if (!provider) {
+      sendJson(res, 400, { success: false, error: "No configured AI provider available" });
+      return;
+    }
+
+    const resolvedModel = resolveModelForProvider(provider, typeof body.model === "string" ? body.model : "", catalog.providers);
+
+    if (body.task === "taglines") {
+      const topic = String(body.prompt || body.topic || "").trim();
+      const count = Math.min(Math.max(Number(body.count || 5), 1), 10);
+      if (!topic) {
+        sendJson(res, 400, { success: false, error: "prompt is required for tagline generation" });
+        return;
+      }
+
+      const parsed = await generateAiJson(settings, provider, resolvedModel, getTaglinesMessages(topic, count), config);
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          ...normalizeTaglinesResult(parsed, count),
+          provider,
+          model: resolvedModel,
+        },
+      });
+      return;
+    }
+
+    if (body.task === "social") {
+      const topic = String(body.topic || body.prompt || "").trim();
+      const platform = String(body.platform || "instagram").trim();
+      const count = Math.min(Math.max(Number(body.count || 10), 1), 50);
+      if (!topic) {
+        sendJson(res, 400, { success: false, error: "topic is required for social generation" });
+        return;
+      }
+
+      const parsed = await generateAiJson(settings, provider, resolvedModel, getSocialMessages(topic, platform, count), config);
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          ...normalizeSocialResult(parsed, count),
+          provider,
+          model: resolvedModel,
+        },
+      });
+      return;
+    }
+
+    if (body.task === "short_prompt_plan") {
+      const prompt = String(body.prompt || body.topic || "").trim();
+      if (!prompt) {
+        sendJson(res, 400, { success: false, error: "prompt is required for short prompt planning" });
+        return;
+      }
+
+      const parsed = await generateAiJson(settings, provider, resolvedModel, getShortPromptPlanMessages(prompt), config);
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          plan: normalizeShortPromptPlanResult(parsed),
+          provider,
+          model: resolvedModel,
+        },
+      });
+      return;
+    }
+
+    sendJson(res, 400, { success: false, error: "Unknown AI generation task" });
+  } catch (error) {
+    sendJson(res, 500, { success: false, error: error instanceof Error ? error.message : "AI generation failed" });
+  }
 }
 
 async function fetchAccessTokenUser(config, accessToken) {
@@ -1403,6 +2468,21 @@ const server = http.createServer((req, res) => {
   const hasLocalRunnerToken = Boolean(config.RUNNER_TOKEN);
   if (!hasLocalAccessToken || !hasLocalRunnerToken) {
     redirect(res, "/launcher");
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/settings/ai/test") {
+    void handleLocalAiTest(req, res, config);
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/settings/ai/models") {
+    void handleLocalAiModels(req, res, config);
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/settings/ai/generate") {
+    void handleLocalAiGenerate(req, res, config);
     return;
   }
 
