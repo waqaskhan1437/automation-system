@@ -71,6 +71,63 @@ const SETTINGS_TABLE_BY_SECTION: Record<string, string> = {
   "video-sources": "settings_video_sources",
 };
 
+const SNAPSHOT_TIMEOUT_MS = 2500;
+const SNAPSHOT_GITHUB_TIMEOUT_MS = 3000;
+
+type SnapshotSection<T = unknown> = {
+  ok: true;
+  duration_ms: number;
+  data: T;
+} | {
+  ok: false;
+  duration_ms: number;
+  error: string;
+  timed_out: boolean;
+};
+
+function timeoutFallback(ms: number): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+  });
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([promise, timeoutFallback(ms)]);
+}
+
+async function collectSnapshotSection<T>(name: string, factory: () => Promise<T>, timeoutMs = SNAPSHOT_TIMEOUT_MS): Promise<SnapshotSection<T>> {
+  const startedAt = Date.now();
+  try {
+    const data = await withTimeout(factory(), timeoutMs);
+    return { ok: true, duration_ms: Date.now() - startedAt, data };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      duration_ms: Date.now() - startedAt,
+      error: `${name}: ${message}`,
+      timed_out: /timed out/i.test(message),
+    };
+  }
+}
+
+function unwrapSnapshotSection<T>(section: SnapshotSection<T>): T | Record<string, unknown> {
+  if (section.ok) {
+    return section.data as T;
+  }
+  return {
+    unavailable: true,
+    error: section.error,
+    timed_out: section.timed_out,
+    duration_ms: section.duration_ms,
+  };
+}
+
+function getBooleanQueryFlag(url: URL, name: string): boolean {
+  const value = url.searchParams.get(name);
+  return value === "1" || value === "true" || value === "yes";
+}
+
 function notConfiguredGithubResponse(): Response {
   return jsonResponse({
     success: false,
@@ -306,8 +363,17 @@ async function getRecentAiLogs(env: Env, userId: number): Promise<Record<string,
 
 async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): Promise<Record<string, unknown>> {
   const url = new URL(request.url);
+  const includeGithub = getBooleanQueryFlag(url, "include_github") || getBooleanQueryFlag(url, "include_tree");
+  const diagnostics: Record<string, unknown> = {
+    mode: "fail-safe",
+    timeout_ms: SNAPSHOT_TIMEOUT_MS,
+    github_timeout_ms: SNAPSHOT_GITHUB_TIMEOUT_MS,
+    note: "Snapshot always returns partial data. Slow DB/GitHub sections are isolated and reported as unavailable instead of hanging the whole endpoint.",
+  };
+
   const snapshot: Record<string, unknown> = {
     success: true,
+    partial: false,
     generated_at: new Date().toISOString(),
     access_mode: url.searchParams.has("ai_token") || url.searchParams.has("access_token") || url.searchParams.has("token") ? "query-token-get" : "header-auth",
     token_preview: maskUrlToken(auth.token || ""),
@@ -323,49 +389,78 @@ async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): P
       can_read_settings: canUseAiScope(auth, "settings.read"),
       can_read_logs: canUseAiScope(auth, "logs.read"),
     },
+    diagnostics,
   };
 
   if (canUseAiScope(auth, "project.read")) {
     snapshot.project_map = buildProjectMap();
   }
 
+  const sections: Record<string, SnapshotSection> = {};
+
   if (canUseAiScope(auth, "automation.read")) {
-    snapshot.monitor = await getAutomationMonitor(env, auth.userId);
+    sections.monitor = await collectSnapshotSection("monitor", () => getAutomationMonitor(env, auth.userId));
+    snapshot.monitor = unwrapSnapshotSection(sections.monitor);
   } else {
     snapshot.monitor = { skipped: true, reason: "Missing automation.read scope" };
   }
 
   if (canUseAiScope(auth, "settings.read")) {
-    snapshot.settings = await loadMaskedSettings(env, auth.userId);
+    sections.settings = await collectSnapshotSection("settings", () => loadMaskedSettings(env, auth.userId));
+    snapshot.settings = unwrapSnapshotSection(sections.settings);
   } else {
     snapshot.settings = { skipped: true, reason: "Missing settings.read scope" };
   }
 
   if (canUseAiScope(auth, "logs.read")) {
-    snapshot.recent_logs = await getRecentAiLogs(env, auth.userId);
+    sections.recent_logs = await collectSnapshotSection("recent_logs", () => getRecentAiLogs(env, auth.userId));
+    snapshot.recent_logs = unwrapSnapshotSection(sections.recent_logs);
   } else {
     snapshot.recent_logs = { skipped: true, reason: "Missing logs.read scope" };
   }
 
   if (canUseAiScope(auth, "files.read")) {
-    const githubSettings = await getGithubSettingsForUser(env, auth.userId);
-    if (githubSettings) {
-      try {
-        const repo = await getRepositoryInfo(githubSettings);
-        snapshot.github = {
-          owner: githubSettings.repo_owner,
-          repo: githubSettings.repo_name,
-          full_name: repo.full_name || `${githubSettings.repo_owner}/${githubSettings.repo_name}`,
-          default_branch: repo.default_branch || "master",
-          html_url: repo.html_url || null,
-        };
-        if (url.searchParams.get("include_tree") === "1") {
-          const tree = await listRepositoryFiles(githubSettings, url.searchParams.get("ref") || undefined);
-          const files = Array.isArray((tree as any).files) ? (tree as any).files : [];
-          snapshot.file_tree = { ...(tree as any), files: files.slice(0, 500), note: files.length > 500 ? "Showing first 500 files. Use /api/ai/files/tree for full tree." : undefined };
+    const githubSettingsSection = await collectSnapshotSection("github_settings", () => getGithubSettingsForUser(env, auth.userId), SNAPSHOT_TIMEOUT_MS);
+    sections.github_settings = githubSettingsSection as SnapshotSection;
+    const githubSettings = githubSettingsSection.ok ? githubSettingsSection.data : null;
+
+    if (!githubSettingsSection.ok) {
+      snapshot.github = unwrapSnapshotSection(githubSettingsSection);
+    } else if (githubSettings) {
+      snapshot.github = {
+        configured: true,
+        owner: githubSettings.repo_owner,
+        repo: githubSettings.repo_name,
+        remote_fetch: includeGithub ? "enabled" : "skipped",
+        note: includeGithub ? "Remote GitHub metadata requested." : "Remote GitHub fetch skipped for fast browser snapshots. Add include_github=1 or include_tree=1 when needed.",
+      };
+
+      if (includeGithub) {
+        const repoSection = await collectSnapshotSection("github_repo", () => getRepositoryInfo(githubSettings), SNAPSHOT_GITHUB_TIMEOUT_MS);
+        sections.github_repo = repoSection as SnapshotSection;
+        if (repoSection.ok) {
+          const repo = repoSection.data;
+          snapshot.github = {
+            ...(snapshot.github as Record<string, unknown>),
+            full_name: repo.full_name || `${githubSettings.repo_owner}/${githubSettings.repo_name}`,
+            default_branch: repo.default_branch || "master",
+            html_url: repo.html_url || null,
+          };
+        } else {
+          snapshot.github = { ...(snapshot.github as Record<string, unknown>), ...unwrapSnapshotSection(repoSection) };
         }
-      } catch (error) {
-        snapshot.github = { error: error instanceof Error ? error.message : String(error) };
+
+        if (getBooleanQueryFlag(url, "include_tree")) {
+          const treeSection = await collectSnapshotSection("github_file_tree", () => listRepositoryFiles(githubSettings, url.searchParams.get("ref") || undefined), SNAPSHOT_GITHUB_TIMEOUT_MS);
+          sections.file_tree = treeSection as SnapshotSection;
+          if (treeSection.ok) {
+            const tree = treeSection.data as any;
+            const files = Array.isArray(tree.files) ? tree.files : [];
+            snapshot.file_tree = { ...tree, files: files.slice(0, 500), note: files.length > 500 ? "Showing first 500 files. Use /api/ai/files/tree for full tree." : undefined };
+          } else {
+            snapshot.file_tree = unwrapSnapshotSection(treeSection);
+          }
+        }
       }
     } else {
       snapshot.github = { configured: false, message: "GitHub settings are not configured" };
@@ -373,6 +468,14 @@ async function buildAiSnapshot(request: Request, env: Env, auth: AuthContext): P
   } else {
     snapshot.github = { skipped: true, reason: "Missing files.read scope" };
   }
+
+  snapshot.section_status = Object.fromEntries(Object.entries(sections).map(([key, value]) => [key, {
+    ok: value.ok,
+    duration_ms: value.duration_ms,
+    timed_out: value.ok ? false : value.timed_out,
+    error: value.ok ? undefined : value.error,
+  }]));
+  snapshot.partial = Object.values(sections).some((section) => !section.ok);
 
   return snapshot;
 }
@@ -513,7 +616,7 @@ async function handleAutomationsAiRoutes(request: Request, env: Env, path: strin
 }
 
 export async function handleAiAccessRoutes(request: Request, env: Env, path: string, auth: AuthContext): Promise<Response> {
-  await runApiKeyMigration(env).catch(() => undefined);
+  await withTimeout(runApiKeyMigration(env), 1500).catch(() => undefined);
   const method = request.method;
   const url = new URL(request.url);
 
@@ -550,8 +653,12 @@ export async function handleAiAccessRoutes(request: Request, env: Env, path: str
   if (path === "/api/ai/monitor" && method === "GET") {
     const denied = requireAiScope(auth, "automation.read");
     if (denied) return denied;
-    const data = await getAutomationMonitor(env, auth.userId);
-    return jsonResponse({ success: true, data });
+    const section = await collectSnapshotSection("monitor", () => getAutomationMonitor(env, auth.userId));
+    return jsonResponse({
+      success: section.ok,
+      partial: !section.ok,
+      data: unwrapSnapshotSection(section),
+    }, section.ok ? 200 : 206);
   }
 
   if (path === "/api/ai/snapshot" && method === "GET") {

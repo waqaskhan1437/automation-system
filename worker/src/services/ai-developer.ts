@@ -100,6 +100,7 @@ type GitHubWorkflowRun = {
 const SECRET_KEY_PATTERN = /(token|secret|password|api_key|apikey|private|cookie|pat|key)$/i;
 const TEXT_DECODER = new TextDecoder();
 const TEXT_ENCODER = new TextEncoder();
+const GITHUB_API_TIMEOUT_MS = 15000;
 
 export function parseScopeList(value: unknown): string[] {
   if (!value) {
@@ -237,17 +238,38 @@ function buildGitHubUrl(settings: GithubSettings, path: string): string {
 }
 
 async function githubJson<T>(settings: GithubSettings, path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(buildGitHubUrl(settings, path), {
-    ...init,
-    headers: {
-      ...githubHeaders(settings.pat_token),
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GITHUB_API_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(buildGitHubUrl(settings, path), {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        ...githubHeaders(settings.pat_token),
+        "Content-Type": "application/json",
+        ...(init.headers || {}),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/abort/i.test(message)) {
+      throw new Error(`GitHub API timed out after ${GITHUB_API_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const responseText = await response.text();
-  const parsed = responseText ? JSON.parse(responseText) as T : ({} as T);
+  let parsed: T;
+  try {
+    parsed = responseText ? JSON.parse(responseText) as T : ({} as T);
+  } catch {
+    parsed = ({ message: responseText } as unknown) as T;
+  }
+
   if (!response.ok) {
     const errorPayload = parsed as { message?: string; documentation_url?: string };
     throw new Error(`GitHub API ${response.status}: ${errorPayload.message || responseText || "Request failed"}`);
