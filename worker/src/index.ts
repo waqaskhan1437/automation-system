@@ -28,6 +28,7 @@ import { handleJobsRoutes } from "./routes/jobs";
 import { handleUploadsRoutes } from "./routes/uploads";
 import { handleRunnerRoutes } from "./routes/runner";
 import { handleApiKeysRoutes } from "./routes/api-keys";
+import { handleAiAccessRoutes } from "./routes/ai-access";
 import { handleWebhookRoutes } from "./routes/webhooks";
 import { formatDatabaseDate, markAutomationRunCompleted, processDueAutomations, processPendingUploads, syncStaleRunningJobs } from "./services/automation-scheduler";
 import { getAdminEmail, getAdminPassword, getAuthContext, issueAdminAccessToken, requireAuth, logApiRequest } from "./services/auth";
@@ -361,7 +362,7 @@ export default {
         status: 204,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Key, X-Access-Token",
         },
       });
@@ -730,6 +731,40 @@ export default {
        return handleRouteWithAuditLog(
          env,
          () => handleAutomationsRoutes(request, env, path, authContext),
+         authContext,
+         path,
+         method,
+         startTime,
+         ipAddress,
+         userAgent,
+         requestSize
+       );
+     }
+
+     if (path.startsWith("/api/ai")) {
+       const authContext = await requireAuth(request, env);
+       if (authContext instanceof Response) {
+         const durationMs = Date.now() - startTime;
+         await logApiRequest(
+           env,
+           null,
+           null,
+           path,
+           method,
+           401,
+           ipAddress,
+           userAgent,
+           requestSize,
+           0,
+           durationMs,
+           "Unauthorized"
+         );
+         return authContext;
+       }
+
+       return handleRouteWithAuditLog(
+         env,
+         () => handleAiAccessRoutes(request, env, path, authContext),
          authContext,
          path,
          method,

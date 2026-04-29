@@ -1,0 +1,615 @@
+import { AuthContext, Env, Automation, GithubSettings } from "../types";
+import { jsonResponse, safeRequestJson } from "../utils";
+import { getScopedSettings, upsertScopedSettings } from "../services/user-settings";
+import { runApiKeyMigration } from "../services/auth";
+import type { GitHubFileUpdate } from "../services/ai-developer";
+import {
+  AI_DEVELOPER_SCOPES,
+  commitRepositoryFiles,
+  createBranchIfMissing,
+  createRepositoryPullRequest,
+  dispatchRepositoryWorkflow,
+  getDefaultBranch,
+  getGithubSettingsForUser,
+  getRepositoryInfo,
+  listRepositoryFiles,
+  logAiChange,
+  maskObjectSecrets,
+  readRepositoryFile,
+  requireAiScope,
+  textByteLength,
+} from "../services/ai-developer";
+
+type FilePatchBody = {
+  branch?: string;
+  base_branch?: string;
+  message?: string;
+  path?: string;
+  content?: string;
+  files?: GitHubFileUpdate[];
+  create_pull_request?: boolean;
+  pull_request_title?: string;
+  pull_request_body?: string;
+};
+
+type BranchBody = {
+  branch?: string;
+  base_branch?: string;
+};
+
+type PullRequestBody = {
+  title?: string;
+  head?: string;
+  base?: string;
+  body?: string;
+};
+
+type WorkflowBody = {
+  workflow?: string;
+  ref?: string;
+  inputs?: Record<string, string>;
+};
+
+type SettingsPatchBody = {
+  section?: "github" | "postforme" | "ai" | "video-sources";
+  values?: Record<string, unknown>;
+};
+
+const PROJECT_NAME = "Automation System";
+const SAFE_SETTINGS_FIELDS: Record<string, Set<string>> = {
+  github: new Set(["pat_token", "repo_owner", "repo_name", "runner_labels", "workflow_dispatch_url"]),
+  postforme: new Set(["api_key", "platforms", "saved_accounts", "default_schedule"]),
+  ai: new Set(["gemini_key", "grok_key", "cohere_key", "openrouter_key", "openai_key", "groq_key", "default_provider"]),
+  "video-sources": new Set(["bunny_api_key", "bunny_library_id", "youtube_cookies", "google_photos_cookies"]),
+};
+
+const SETTINGS_TABLE_BY_SECTION: Record<string, string> = {
+  github: "settings_github",
+  postforme: "settings_postforme",
+  ai: "settings_ai",
+  "video-sources": "settings_video_sources",
+};
+
+function notConfiguredGithubResponse(): Response {
+  return jsonResponse({
+    success: false,
+    error: "GitHub settings are not configured. Add repo owner, repo name, and PAT token in Settings > GitHub Runner first.",
+  }, 400);
+}
+
+function getApiBaseUrl(request: Request): string {
+  const url = new URL(request.url);
+  return url.origin;
+}
+
+function buildAiManifest(request: Request, auth: AuthContext): Record<string, unknown> {
+  const baseUrl = getApiBaseUrl(request);
+  return {
+    name: PROJECT_NAME,
+    version: "1.1.0-ai-access",
+    purpose: "Developer API for AI-assisted project analysis, automation management, code changes through GitHub, settings updates, and audit review.",
+    auth: {
+      type: "bearer",
+      header: "Authorization: Bearer <api_key>",
+      current_user_id: auth.userId,
+      api_key_id: auth.apiKeyId || null,
+      api_key_permissions: auth.apiKeyPermissions || null,
+      api_key_scopes: auth.apiKeyScopes || [],
+    },
+    recommended_flow: [
+      "GET /api/ai/manifest",
+      "GET /api/ai/project-map",
+      "GET /api/ai/files/tree",
+      "GET /api/ai/files/read?path=<path>",
+      "POST /api/ai/files/patch with full replacement file content on a new branch",
+      "POST /api/ai/tests/run",
+      "POST /api/ai/git/pr",
+    ],
+    endpoints: {
+      manifest: `${baseUrl}/api/ai/manifest`,
+      instructions: `${baseUrl}/api/ai/instructions`,
+      openapi: `${baseUrl}/api/ai/openapi.json`,
+      project_map: `${baseUrl}/api/ai/project-map`,
+      file_tree: `${baseUrl}/api/ai/files/tree`,
+      file_read: `${baseUrl}/api/ai/files/read?path=worker/src/index.ts`,
+      file_patch: `${baseUrl}/api/ai/files/patch`,
+      automations: `${baseUrl}/api/ai/automations`,
+      settings: `${baseUrl}/api/ai/settings`,
+      git_branch: `${baseUrl}/api/ai/git/branch`,
+      git_pr: `${baseUrl}/api/ai/git/pr`,
+      tests_run: `${baseUrl}/api/ai/tests/run`,
+      audit: `${baseUrl}/api/ai/audit`,
+      logs: `${baseUrl}/api/ai/logs`,
+    },
+    scopes: AI_DEVELOPER_SCOPES,
+    safety: {
+      secrets_are_masked_on_read: true,
+      recommended_code_flow: "branch -> commit -> test -> pull request -> deploy",
+      direct_production_changes_should_use_admin_full: true,
+    },
+  };
+}
+
+function buildInstructions(): string {
+  return [
+    "Automation System AI Developer API instructions:",
+    "1. Authenticate with Authorization: Bearer <API_KEY>.",
+    "2. Start with /api/ai/manifest and /api/ai/project-map before editing anything.",
+    "3. Use /api/ai/files/tree to discover files and /api/ai/files/read?path=... to inspect relevant files.",
+    "4. Use /api/ai/files/patch with complete replacement file content. The endpoint creates or updates files through GitHub commits.",
+    "5. Prefer creating a new branch such as ai/fix-short-title instead of editing master/main directly.",
+    "6. Run /api/ai/tests/run after code changes when GitHub settings are configured.",
+    "7. Create a PR with /api/ai/git/pr after successful checks.",
+    "8. Secrets are masked on read. Secret updates are allowed only through settings write endpoints and are logged.",
+    "9. Automation and settings changes should be small and auditable.",
+    "10. Use /api/ai/audit and /api/ai/logs to review recent actions and errors.",
+  ].join("\n");
+}
+
+function buildOpenApiSpec(request: Request): Record<string, unknown> {
+  const baseUrl = getApiBaseUrl(request);
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "Automation System AI Developer API",
+      version: "1.1.0",
+      description: "AI-readable API for project inspection, GitHub-backed file changes, automation control, settings updates, and audit logs.",
+    },
+    servers: [{ url: baseUrl }],
+    security: [{ bearerAuth: [] }],
+    components: {
+      securitySchemes: {
+        bearerAuth: { type: "http", scheme: "bearer" },
+      },
+    },
+    paths: {
+      "/api/ai/manifest": { get: { summary: "Project manifest and AI workflow" } },
+      "/api/ai/instructions": { get: { summary: "Plain text instructions for AI tools" } },
+      "/api/ai/project-map": { get: { summary: "Project modules, important files, and capabilities" } },
+      "/api/ai/files/tree": { get: { summary: "Repository file tree from GitHub" } },
+      "/api/ai/files/read": { get: { summary: "Read a file from GitHub by path" } },
+      "/api/ai/files/patch": { post: { summary: "Commit one or more full file replacements to GitHub" } },
+      "/api/ai/automations": { get: { summary: "List automations" }, post: { summary: "Create automation" } },
+      "/api/ai/automations/{id}": { get: { summary: "Read automation" }, put: { summary: "Update automation" }, delete: { summary: "Delete automation" } },
+      "/api/ai/settings": { get: { summary: "Read masked settings" }, patch: { summary: "Update selected settings" } },
+      "/api/ai/git/branch": { post: { summary: "Create branch if missing" } },
+      "/api/ai/git/pr": { post: { summary: "Create GitHub pull request" } },
+      "/api/ai/tests/run": { post: { summary: "Dispatch validation workflow" } },
+      "/api/ai/audit": { get: { summary: "AI change audit" } },
+      "/api/ai/logs": { get: { summary: "Recent API logs" } },
+    },
+  };
+}
+
+
+function hasDangerousAdminAccess(auth: AuthContext): boolean {
+  return Boolean(
+    (auth.isAdmin && !auth.apiKeyId) ||
+    auth.apiKeyPermissions === "admin" ||
+    auth.apiKeyPermissions === "full" ||
+    auth.apiKeyScopes?.includes("admin.full")
+  );
+}
+
+function buildProjectMap(): Record<string, unknown> {
+  return {
+    project: PROJECT_NAME,
+    runtime: {
+      backend: "Cloudflare Worker + D1",
+      frontend: "Next.js on Vercel",
+      automations: "GitHub Actions + local runner scripts",
+    },
+    key_directories: {
+      worker: "Cloudflare Worker backend API, routes, services, D1 schema, migrations",
+      frontend: "Next.js UI, settings pages, automation editor pages",
+      "runner-scripts": "Video/image processing scripts run by GitHub Actions or runners",
+      "local-runner": "Local PC runner and supervisor",
+      ".github/workflows": "Deployments and automation workflows",
+    },
+    important_files: [
+      "worker/src/index.ts",
+      "worker/src/routes/ai-access.ts",
+      "worker/src/routes/api-keys.ts",
+      "worker/src/routes/automations.ts",
+      "worker/src/routes/settings.ts",
+      "worker/src/services/auth.ts",
+      "worker/src/services/ai-developer.ts",
+      "worker/src/db/schema.sql",
+      "frontend/src/app/ai-access/page.tsx",
+      "frontend/src/components/layout/Sidebar.tsx",
+      "frontend/src/lib/api.ts",
+      ".github/workflows/deploy-production.yml",
+    ],
+    safe_change_policy: {
+      preferred: "Commit to a new branch through /api/ai/files/patch, run tests, then create a PR.",
+      avoid: "Direct main/master file replacement unless you intentionally enabled broad admin.full access.",
+      secret_policy: "Read endpoints mask secrets. Write endpoints can update secrets but every action is logged.",
+    },
+  };
+}
+
+function jsonTextResponse(text: string): Response {
+  return new Response(text, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
+
+async function loadMaskedSettings(env: Env, userId: number): Promise<Record<string, unknown>> {
+  const [github, postforme, ai, videoSources] = await Promise.all([
+    getScopedSettings<GithubSettings>(env.DB, "github", userId),
+    getScopedSettings<any>(env.DB, "postforme", userId),
+    getScopedSettings<any>(env.DB, "ai", userId),
+    getScopedSettings<any>(env.DB, "video-sources", userId),
+  ]);
+
+  return {
+    github: maskObjectSecrets(github || {}),
+    postforme: maskObjectSecrets(postforme || {}),
+    ai: maskObjectSecrets(ai || {}),
+    video_sources: maskObjectSecrets(videoSources || {}),
+  };
+}
+
+function sanitizeSettingsPatch(section: string, values: Record<string, unknown>): Record<string, unknown> {
+  const allowed = SAFE_SETTINGS_FIELDS[section];
+  if (!allowed) {
+    throw new Error(`Unsupported settings section: ${section}`);
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (allowed.has(key)) {
+      sanitized[key] = typeof value === "object" && value !== null ? JSON.stringify(value) : value;
+    }
+  }
+
+  if (Object.keys(sanitized).length === 0) {
+    throw new Error("No supported settings fields were provided");
+  }
+
+  return sanitized;
+}
+
+async function handleAutomationsAiRoutes(request: Request, env: Env, path: string, auth: AuthContext): Promise<Response> {
+  const method = request.method;
+  const segments = path.split("/").filter(Boolean);
+  const id = segments[3] ? parseInt(segments[3], 10) : null;
+
+  if (path === "/api/ai/automations" && method === "GET") {
+    const denied = requireAiScope(auth, "automation.read");
+    if (denied) return denied;
+
+    const rows = await env.DB.prepare("SELECT * FROM automations WHERE user_id = ? ORDER BY created_at DESC").bind(auth.userId).all<Automation>();
+    return jsonResponse({ success: true, data: rows.results || [] });
+  }
+
+  if (path === "/api/ai/automations" && method === "POST") {
+    const denied = requireAiScope(auth, "automation.write");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<Partial<Automation>>(request);
+    if (!body || !body.name || !body.type) {
+      return jsonResponse({ success: false, error: "name and type are required" }, 400);
+    }
+    if (!["video", "image"].includes(body.type)) {
+      return jsonResponse({ success: false, error: "type must be video or image" }, 400);
+    }
+
+    const config = typeof body.config === "string" ? body.config : JSON.stringify(body.config || {});
+    const result = await env.DB.prepare(
+      "INSERT INTO automations (user_id, name, type, status, config, schedule, next_run) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).bind(auth.userId, body.name, body.type, body.status || "active", config, body.schedule || null, body.next_run || null).run();
+
+    const payload = { id: result.meta.last_row_id, name: body.name, type: body.type };
+    await logAiChange(env, auth, "automation.create", String(result.meta.last_row_id), "success", body, payload);
+    return jsonResponse({ success: true, data: payload, message: "Automation created" }, 201);
+  }
+
+  if (id && method === "GET") {
+    const denied = requireAiScope(auth, "automation.read");
+    if (denied) return denied;
+
+    const automation = await env.DB.prepare("SELECT * FROM automations WHERE id = ? AND user_id = ? LIMIT 1").bind(id, auth.userId).first<Automation>();
+    if (!automation) {
+      return jsonResponse({ success: false, error: "Automation not found" }, 404);
+    }
+    return jsonResponse({ success: true, data: automation });
+  }
+
+  if (id && method === "PUT") {
+    const denied = requireAiScope(auth, "automation.write");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<Partial<Automation>>(request);
+    if (!body) {
+      return jsonResponse({ success: false, error: "Invalid JSON body" }, 400);
+    }
+
+    const existing = await env.DB.prepare("SELECT * FROM automations WHERE id = ? AND user_id = ? LIMIT 1").bind(id, auth.userId).first<Automation>();
+    if (!existing) {
+      return jsonResponse({ success: false, error: "Automation not found" }, 404);
+    }
+
+    const nextName = body.name || existing.name;
+    const nextType = body.type || existing.type;
+    const nextStatus = body.status || existing.status;
+    const nextConfig = body.config !== undefined ? (typeof body.config === "string" ? body.config : JSON.stringify(body.config || {})) : existing.config;
+    const nextSchedule = body.schedule !== undefined ? body.schedule : existing.schedule;
+    const nextRun = body.next_run !== undefined ? body.next_run : existing.next_run;
+
+    await env.DB.prepare(
+      "UPDATE automations SET name = ?, type = ?, status = ?, config = ?, schedule = ?, next_run = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+    ).bind(nextName, nextType, nextStatus, nextConfig, nextSchedule, nextRun, id, auth.userId).run();
+
+    await logAiChange(env, auth, "automation.update", String(id), "success", body, { id });
+    return jsonResponse({ success: true, data: { id }, message: "Automation updated" });
+  }
+
+  if (id && method === "DELETE") {
+    const denied = requireAiScope(auth, "automation.write");
+    if (denied) return denied;
+
+    await env.DB.prepare("DELETE FROM video_uploads WHERE job_id IN (SELECT id FROM jobs WHERE automation_id = ? AND user_id = ?) AND user_id = ?").bind(id, auth.userId, auth.userId).run();
+    await env.DB.prepare("DELETE FROM jobs WHERE automation_id = ? AND user_id = ?").bind(id, auth.userId).run();
+    await env.DB.prepare("DELETE FROM processed_videos WHERE automation_id = ? AND user_id = ?").bind(id, auth.userId).run().catch(() => undefined);
+    const result = await env.DB.prepare("DELETE FROM automations WHERE id = ? AND user_id = ?").bind(id, auth.userId).run();
+    await logAiChange(env, auth, "automation.delete", String(id), result.meta.changes > 0 ? "success" : "not_found", { id }, { deleted: result.meta.changes });
+    return jsonResponse({ success: true, data: { deleted: result.meta.changes }, message: "Automation deleted" });
+  }
+
+  return jsonResponse({ success: false, error: "AI automation route not found" }, 404);
+}
+
+export async function handleAiAccessRoutes(request: Request, env: Env, path: string, auth: AuthContext): Promise<Response> {
+  await runApiKeyMigration(env).catch(() => undefined);
+  const method = request.method;
+  const url = new URL(request.url);
+
+  if (path === "/api/ai/manifest" && method === "GET") {
+    const denied = requireAiScope(auth, "project.read");
+    if (denied) return denied;
+    return jsonResponse({ success: true, data: buildAiManifest(request, auth) });
+  }
+
+  if (path === "/api/ai/instructions" && method === "GET") {
+    const denied = requireAiScope(auth, "project.read");
+    if (denied) return denied;
+    return jsonTextResponse(buildInstructions());
+  }
+
+  if (path === "/api/ai/openapi.json" && method === "GET") {
+    const denied = requireAiScope(auth, "project.read");
+    if (denied) return denied;
+    return new Response(JSON.stringify(buildOpenApiSpec(request), null, 2), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }
+
+  if (path === "/api/ai/project-map" && method === "GET") {
+    const denied = requireAiScope(auth, "project.read");
+    if (denied) return denied;
+
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    let github: Record<string, unknown> | null = null;
+    if (settings) {
+      try {
+        const repo = await getRepositoryInfo(settings);
+        github = {
+          owner: settings.repo_owner,
+          repo: settings.repo_name,
+          default_branch: repo.default_branch || "master",
+          html_url: repo.html_url || null,
+          full_name: repo.full_name || `${settings.repo_owner}/${settings.repo_name}`,
+        };
+      } catch (error) {
+        github = { error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+
+    return jsonResponse({ success: true, data: { ...buildProjectMap(), github } });
+  }
+
+  if (path === "/api/ai/files/tree" && method === "GET") {
+    const denied = requireAiScope(auth, "files.read");
+    if (denied) return denied;
+
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    if (!settings) return notConfiguredGithubResponse();
+    const ref = url.searchParams.get("ref") || undefined;
+    const tree = await listRepositoryFiles(settings, ref);
+    return jsonResponse({ success: true, data: tree });
+  }
+
+  if (path === "/api/ai/files/read" && method === "GET") {
+    const denied = requireAiScope(auth, "files.read");
+    if (denied) return denied;
+
+    const filePath = url.searchParams.get("path") || "";
+    if (!filePath) {
+      return jsonResponse({ success: false, error: "path query parameter is required" }, 400);
+    }
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    if (!settings) return notConfiguredGithubResponse();
+    const ref = url.searchParams.get("ref") || undefined;
+    const file = await readRepositoryFile(settings, filePath, ref);
+    return jsonResponse({ success: true, data: { ...file, bytes: textByteLength(file.content) } });
+  }
+
+  if (path === "/api/ai/files/patch" && method === "POST") {
+    const denied = requireAiScope(auth, "files.write");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<FilePatchBody>(request);
+    if (!body) {
+      return jsonResponse({ success: false, error: "Invalid JSON body" }, 400);
+    }
+
+    const files = Array.isArray(body.files)
+      ? body.files
+      : (body.path && body.content !== undefined ? [{ path: body.path, content: body.content }] : []);
+
+    if (!files.length) {
+      return jsonResponse({ success: false, error: "Provide files[] or path + content. Content must be full replacement file content." }, 400);
+    }
+
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    if (!settings) return notConfiguredGithubResponse();
+
+    const defaultBranch = await getDefaultBranch(settings);
+    const branch = body.branch || `ai/changes-${Date.now()}`;
+    if (branch === defaultBranch && !auth.apiKeyAllowDirectFileWrite && !hasDangerousAdminAccess(auth)) {
+      return jsonResponse({ success: false, error: "Direct default-branch file writes are disabled for this API key. Use a new branch or enable the direct file write flag." }, 403);
+    }
+
+    const message = body.message || `AI update ${new Date().toISOString()}`;
+    const result = await commitRepositoryFiles(settings, files, { branch, baseBranch: body.base_branch || defaultBranch, message });
+
+    let pullRequest: Record<string, unknown> | null = null;
+    if (body.create_pull_request) {
+      pullRequest = await createRepositoryPullRequest(settings, {
+        title: body.pull_request_title || message,
+        head: branch,
+        base: body.base_branch || defaultBranch,
+        body: body.pull_request_body || "Created by Automation System AI Developer API.",
+      });
+    }
+
+    const payload = { ...result, pull_request: pullRequest };
+    await logAiChange(env, auth, "files.patch", branch, "success", { ...body, files: files.map((file) => ({ path: file.path, bytes: textByteLength(file.content || "") })) }, payload);
+    return jsonResponse({ success: true, data: payload, message: "Files committed" });
+  }
+
+  if (path.startsWith("/api/ai/automations")) {
+    return handleAutomationsAiRoutes(request, env, path, auth);
+  }
+
+  if (path === "/api/ai/settings" && method === "GET") {
+    const denied = requireAiScope(auth, "settings.read");
+    if (denied) return denied;
+    const settings = await loadMaskedSettings(env, auth.userId);
+    return jsonResponse({ success: true, data: settings });
+  }
+
+  if (path === "/api/ai/settings" && method === "PATCH") {
+    const denied = requireAiScope(auth, "settings.write");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<SettingsPatchBody>(request);
+    if (!body?.section || !body.values) {
+      return jsonResponse({ success: false, error: "section and values are required" }, 400);
+    }
+
+    const section = body.section;
+    const table = SETTINGS_TABLE_BY_SECTION[section];
+    if (!table) {
+      return jsonResponse({ success: false, error: "Unsupported settings section" }, 400);
+    }
+
+    const sanitized = sanitizeSettingsPatch(section, body.values);
+    await upsertScopedSettings(env.DB, table, auth.userId, sanitized);
+    await logAiChange(env, auth, "settings.update", section, "success", { section, values: sanitized }, { updated_fields: Object.keys(sanitized) });
+    return jsonResponse({ success: true, data: { section, updated_fields: Object.keys(sanitized) }, message: "Settings updated" });
+  }
+
+  if (path === "/api/ai/git/branch" && method === "POST") {
+    const denied = requireAiScope(auth, "git.branch.create");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<BranchBody>(request);
+    const branch = body?.branch?.trim();
+    if (!branch) {
+      return jsonResponse({ success: false, error: "branch is required" }, 400);
+    }
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    if (!settings) return notConfiguredGithubResponse();
+
+    const result = await createBranchIfMissing(settings, branch, body?.base_branch);
+    await logAiChange(env, auth, "git.branch", branch, "success", body, result);
+    return jsonResponse({ success: true, data: result });
+  }
+
+  if (path === "/api/ai/git/pr" && method === "POST") {
+    const denied = requireAiScope(auth, "git.pull_request.create");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<PullRequestBody>(request);
+    if (!body?.title || !body.head) {
+      return jsonResponse({ success: false, error: "title and head branch are required" }, 400);
+    }
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    if (!settings) return notConfiguredGithubResponse();
+
+    const result = await createRepositoryPullRequest(settings, {
+      title: body.title,
+      head: body.head,
+      base: body.base,
+      body: body.body,
+    });
+    await logAiChange(env, auth, "git.pr", body.head, "success", body, result);
+    return jsonResponse({ success: true, data: result });
+  }
+
+  if (path === "/api/ai/tests/run" && method === "POST") {
+    const denied = requireAiScope(auth, "deploy.trigger");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<WorkflowBody>(request) || {};
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    if (!settings) return notConfiguredGithubResponse();
+
+    const workflow = body.workflow || "validate-deployments.yml";
+    const result = await dispatchRepositoryWorkflow(settings, workflow, body.ref, body.inputs);
+    await logAiChange(env, auth, "tests.run", workflow, "success", body, result);
+    return jsonResponse({ success: true, data: result, message: "Workflow dispatched" });
+  }
+
+  if (path === "/api/ai/deploy" && method === "POST") {
+    const denied = requireAiScope(auth, "deploy.trigger");
+    if (denied) return denied;
+
+    const body = await safeRequestJson<WorkflowBody>(request) || {};
+    const settings = await getGithubSettingsForUser(env, auth.userId);
+    if (!settings) return notConfiguredGithubResponse();
+
+    if (!auth.apiKeyAllowProductionDeploy && !hasDangerousAdminAccess(auth)) {
+      return jsonResponse({ success: false, error: "Production deploy trigger is disabled for this API key." }, 403);
+    }
+
+    const workflow = body.workflow || "deploy-production.yml";
+    const result = await dispatchRepositoryWorkflow(settings, workflow, body.ref, body.inputs);
+    await logAiChange(env, auth, "deploy.trigger", workflow, "success", body, result);
+    return jsonResponse({ success: true, data: result, message: "Deploy workflow dispatched" });
+  }
+
+  if (path === "/api/ai/audit" && method === "GET") {
+    const denied = requireAiScope(auth, "logs.read");
+    if (denied) return denied;
+
+    const limit = Math.min(Number.parseInt(url.searchParams.get("limit") || "50", 10) || 50, 200);
+    const rows = await env.DB.prepare(
+      "SELECT * FROM ai_change_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
+    ).bind(auth.userId, limit).all<Record<string, unknown>>();
+    return jsonResponse({ success: true, data: rows.results || [] });
+  }
+
+  if (path === "/api/ai/logs" && method === "GET") {
+    const denied = requireAiScope(auth, "logs.read");
+    if (denied) return denied;
+
+    const limit = Math.min(Number.parseInt(url.searchParams.get("limit") || "100", 10) || 100, 300);
+    const rows = await env.DB.prepare(
+      "SELECT id, user_id, api_key_id, endpoint, method, status_code, ip_address, user_agent, duration_ms, error_message, created_at FROM api_audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
+    ).bind(auth.userId, limit).all<Record<string, unknown>>();
+    return jsonResponse({ success: true, data: rows.results || [] });
+  }
+
+  return jsonResponse({ success: false, error: "AI Developer API route not found" }, 404);
+}

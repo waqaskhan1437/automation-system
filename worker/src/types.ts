@@ -40,6 +40,30 @@ export interface AuthContext {
   apiKeyId?: number;
   apiKeyType?: 'access' | 'runner' | 'webhook' | 'external';
   apiKeyPermissions?: string;
+  apiKeyName?: string;
+  apiKeyScopes?: string[];
+  apiKeyScopesRaw?: string | null;
+  apiKeyAllowProductionDeploy?: boolean;
+  apiKeyAllowDirectFileWrite?: boolean;
+}
+
+export interface ApiKeyRecord {
+  id: number;
+  user_id: number;
+  name: string;
+  key_prefix: string;
+  key_type: 'access' | 'runner' | 'webhook' | 'external';
+  permissions: 'read' | 'write' | 'admin' | 'full';
+  description?: string | null;
+  scopes?: string | null;
+  allowed_origins?: string | null;
+  allow_production_deploy?: number | boolean | null;
+  allow_direct_file_write?: number | boolean | null;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface PostformeSettings {

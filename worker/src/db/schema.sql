@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
   key_hash TEXT NOT NULL UNIQUE,
   key_type TEXT NOT NULL CHECK(key_type IN ('access','runner','webhook','external')),
   permissions TEXT DEFAULT 'read' CHECK(permissions IN ('read','write','admin','full')),
+  description TEXT,
+  scopes TEXT DEFAULT '[]',
+  allowed_origins TEXT DEFAULT '[]',
+  allow_production_deploy INTEGER DEFAULT 0,
+  allow_direct_file_write INTEGER DEFAULT 0,
   last_used_at DATETIME,
   expires_at DATETIME,
   revoked_at DATETIME,
@@ -65,6 +70,24 @@ CREATE INDEX IF NOT EXISTS idx_api_audit_logs_user_id ON api_audit_logs(user_id)
 CREATE INDEX IF NOT EXISTS idx_api_audit_logs_api_key_id ON api_audit_logs(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_api_audit_logs_created_at ON api_audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_api_audit_logs_endpoint ON api_audit_logs(endpoint);
+
+CREATE TABLE IF NOT EXISTS ai_change_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  api_key_id INTEGER,
+  action TEXT NOT NULL,
+  target TEXT,
+  status TEXT NOT NULL DEFAULT 'success',
+  request_payload TEXT,
+  result_payload TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_change_requests_user ON ai_change_requests(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_change_requests_api_key ON ai_change_requests(api_key_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_change_requests_action ON ai_change_requests(action, created_at);
 
 CREATE TABLE IF NOT EXISTS settings_postforme (
   id INTEGER PRIMARY KEY,

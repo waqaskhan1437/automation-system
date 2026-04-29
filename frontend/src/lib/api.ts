@@ -82,6 +82,15 @@ export const api = {
     return handleResponse<T>(response);
   },
 
+  async patch<T>(url: string, body?: unknown, options?: FetchOptions): Promise<ApiResponse<T>> {
+    const response = await fetchWithTimeout(url, {
+      ...options,
+      method: "PATCH",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return handleResponse<T>(response);
+  },
+
   async delete<T>(url: string, options?: FetchOptions): Promise<ApiResponse<T>> {
     const response = await fetchWithTimeout(url, { ...options, method: "DELETE" });
     return handleResponse<T>(response);
