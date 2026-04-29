@@ -334,31 +334,86 @@ function buildBrowserAccessLinks(request: Request, auth: AuthContext): Record<st
   };
 }
 
+function parseStoredJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function getJobFailureStage(row: Record<string, unknown>): string | null {
+  const input = parseStoredJsonRecord(row.input_data);
+  if (typeof input.failure_stage === "string" && input.failure_stage) {
+    return input.failure_stage;
+  }
+  const logsRaw = row.logs;
+  if (typeof logsRaw === "string" && logsRaw.trim()) {
+    try {
+      const logs = JSON.parse(logsRaw);
+      const first = Array.isArray(logs) ? logs[0] : null;
+      if (first && typeof first === "object" && typeof (first as { stage?: unknown }).stage === "string") {
+        return (first as { stage: string }).stage;
+      }
+    } catch {}
+  }
+  if (row.status === "failed" && !row.github_run_id) {
+    return "pre_dispatch_or_dispatch";
+  }
+  return null;
+}
+
+function normalizeJobForMonitor(row: Record<string, unknown>): Record<string, unknown> {
+  const failureStage = getJobFailureStage(row);
+  return {
+    ...row,
+    failure_stage: failureStage,
+    reached_github_actions: Boolean(row.github_run_id || row.github_run_url),
+    dispatch_state: row.github_run_id
+      ? "github_run_attached"
+      : (row.github_run_url && row.status === "running" ? "dispatched_run_id_pending" : (row.status === "failed" ? "not_dispatched_or_preflight_failed" : "no_github_run_yet")),
+  };
+}
+
 async function getAutomationMonitor(env: Env, userId: number): Promise<Record<string, unknown>> {
   const [automationCounts, recentAutomations, jobCounts, recentJobs, recentFailedJobs, runningJobs, failedWithoutError] = await Promise.all([
     env.DB.prepare("SELECT status, type, COUNT(*) AS count FROM automations WHERE user_id = ? GROUP BY status, type ORDER BY status, type").bind(userId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT id, name, type, status, schedule, next_run, last_run, updated_at FROM automations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 25").bind(userId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT status, COUNT(*) AS count FROM jobs WHERE user_id = ? GROUP BY status ORDER BY status").bind(userId).all<Record<string, unknown>>(),
-    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.video_url, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 25").bind(userId).all<Record<string, unknown>>(),
-    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status = 'failed' ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
-    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.github_run_id, j.github_run_url, j.started_at, j.created_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status IN ('queued','pending','running') ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.video_url, j.input_data, j.logs, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 25").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.input_data, j.logs, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status = 'failed' ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.github_run_id, j.github_run_url, j.logs, j.started_at, j.created_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? AND j.status IN ('queued','pending','running') ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT id, automation_id, status, github_run_id, github_run_url, created_at, updated_at FROM jobs WHERE user_id = ? AND status = 'failed' AND (error_message IS NULL OR TRIM(error_message) = '') ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 20").bind(userId).all<Record<string, unknown>>(),
   ]);
 
   const failedWithoutDetails = failedWithoutError.results || [];
+  const normalizedRecentJobs = (recentJobs.results || []).map(normalizeJobForMonitor);
+  const normalizedFailedJobs = (recentFailedJobs.results || []).map(normalizeJobForMonitor);
+  const normalizedRunningJobs = (runningJobs.results || []).map(normalizeJobForMonitor);
+  const notDispatchedFailures = normalizedFailedJobs.filter((job) => !job.github_run_id && !job.github_run_url);
 
   return {
     generated_at: new Date().toISOString(),
     automation_counts: automationCounts.results || [],
     recent_automations: recentAutomations.results || [],
     job_counts: jobCounts.results || [],
-    recent_jobs: recentJobs.results || [],
-    recent_failed_jobs: recentFailedJobs.results || [],
-    running_or_queued_jobs: runningJobs.results || [],
+    recent_jobs: normalizedRecentJobs,
+    recent_failed_jobs: normalizedFailedJobs,
+    running_or_queued_jobs: normalizedRunningJobs,
+    not_dispatched_failures: notDispatchedFailures,
     failed_without_error_message: failedWithoutDetails,
-    warnings: failedWithoutDetails.length > 0
-      ? ["Some failed jobs have no error_message. New runner/webhook fixes prevent this for future jobs; open job diagnostics for GitHub run details."]
-      : [],
+    warnings: [
+      ...(failedWithoutDetails.length > 0
+        ? ["Some failed jobs have no error_message. Open job diagnostics; new fixes save preflight/dispatch errors for future jobs."]
+        : []),
+      ...(notDispatchedFailures.length > 0
+        ? ["Some failed jobs never reached GitHub Actions. Check failure_stage/error_message; these are preflight or GitHub dispatch failures, not runner failures."]
+        : []),
+    ],
   };
 }
 
@@ -415,12 +470,12 @@ function parseStoredJobOutput(value: string | null): unknown {
 async function getRecentJobs(env: Env, userId: number, limit: number): Promise<Record<string, unknown>> {
   const safeLimit = Math.min(Math.max(limit || 25, 1), 100);
   const rows = await env.DB.prepare(
-    "SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.video_url, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT ?"
+    "SELECT j.id, j.automation_id, a.name AS automation_name, j.status, j.error_message, j.github_run_id, j.github_run_url, j.video_url, j.input_data, j.logs, j.created_at, j.started_at, j.completed_at, j.updated_at FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ? ORDER BY COALESCE(j.updated_at, j.created_at) DESC LIMIT ?"
   ).bind(userId, safeLimit).all<Record<string, unknown>>();
   return {
     generated_at: new Date().toISOString(),
     count: rows.results?.length || 0,
-    jobs: rows.results || [],
+    jobs: (rows.results || []).map(normalizeJobForMonitor),
   };
 }
 
@@ -436,6 +491,9 @@ async function getJobDiagnostics(request: Request, env: Env, auth: AuthContext, 
   }
 
   const outputData = parseStoredJobOutput(typeof job.output_data === "string" ? job.output_data : null);
+  const inputData = parseStoredJobOutput(typeof job.input_data === "string" ? job.input_data : null);
+  const logsData = parseStoredJobOutput(typeof job.logs === "string" ? job.logs : null);
+  const failureStage = getJobFailureStage(job);
   const diagnostics: Record<string, unknown> = {
     found: true,
     generated_at: new Date().toISOString(),
@@ -454,16 +512,31 @@ async function getJobDiagnostics(request: Request, env: Env, auth: AuthContext, 
       created_at: job.created_at,
       updated_at: job.updated_at,
     },
+    input_data: inputData,
     output_data: outputData,
+    logs: logsData,
     signals: {
       failed_without_error_message: job.status === "failed" && (!job.error_message || String(job.error_message).trim() === ""),
       has_github_run: Boolean(job.github_run_id),
       has_video_url: Boolean(job.video_url),
+      failure_stage: failureStage,
+      reached_github_actions: Boolean(job.github_run_id || job.github_run_url),
+      dispatch_state: job.github_run_id
+        ? "github_run_attached"
+        : (job.github_run_url && job.status === "running" ? "dispatched_run_id_pending" : (job.status === "failed" ? "not_dispatched_or_preflight_failed" : "no_github_run_yet")),
     },
   };
 
   if (!includeGithub || !job.github_run_id) {
     diagnostics.github = job.github_run_id ? { skipped: true, reason: "include_github=0" } : { skipped: true, reason: "No GitHub run id" };
+    diagnostics.analysis = {
+      db_status: job.status,
+      failure_stage: failureStage,
+      not_reaching_action_runner: job.status === "failed" && !job.github_run_id && !job.github_run_url,
+      recommendation: job.status === "failed" && !job.github_run_id && !job.github_run_url
+        ? "This failed before GitHub Actions runner started. Check error_message and failure_stage; it is usually prompt/source validation, missing GitHub settings, payload size, PAT permission, or workflow dispatch API failure."
+        : "No GitHub run id is attached yet. If github_run_url points to the workflow page and status is running, dispatch succeeded but run-id lookup is still pending.",
+    };
     return diagnostics;
   }
 

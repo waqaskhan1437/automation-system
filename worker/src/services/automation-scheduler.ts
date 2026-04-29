@@ -892,6 +892,81 @@ function buildWorkflowDispatch(
   };
 }
 
+function buildJobLogs(stage: string, message: string, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify([
+    {
+      at: new Date().toISOString(),
+      stage,
+      level: "error",
+      message,
+      ...extra,
+    },
+  ]);
+}
+
+async function createFailedAutomationJob(
+  env: Env,
+  automation: Automation,
+  userId: number,
+  config: Record<string, unknown>,
+  errorMessage: string,
+  stage: string,
+  extra: Record<string, unknown> = {}
+): Promise<number | null> {
+  if (!automation.id) {
+    return null;
+  }
+
+  const failedAt = formatDatabaseDate(new Date());
+  const inputData = JSON.stringify({
+    ...config,
+    failure_stage: stage,
+    failure_context: extra,
+  });
+
+  const result = await env.DB.prepare(
+    `INSERT INTO jobs (
+       user_id,
+       automation_id,
+       status,
+       input_data,
+       logs,
+       error_message,
+       started_at,
+       completed_at,
+       updated_at
+     ) VALUES (?, ?, 'failed', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+  ).bind(
+    userId,
+    automation.id,
+    inputData,
+    buildJobLogs(stage, errorMessage, extra),
+    errorMessage,
+    failedAt,
+    failedAt
+  ).run();
+
+  return Number(result.meta.last_row_id);
+}
+
+async function failExistingAutomationJob(
+  env: Env,
+  jobId: number,
+  errorMessage: string,
+  stage: string,
+  extra: Record<string, unknown> = {}
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE jobs
+     SET status = 'failed',
+         error_message = ?,
+         logs = ?,
+         completed_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).bind(errorMessage, buildJobLogs(stage, errorMessage, extra), jobId).run();
+}
+
 async function completeDirectImageAutomationRun(
   env: Env,
   automation: Automation,
@@ -1049,10 +1124,9 @@ export async function triggerAutomationRun(
 
     const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
     if (!githubSettings) {
-      await env.DB.prepare(
-        "DELETE FROM jobs WHERE id = ? AND user_id = ?"
-      ).bind(jobId, userId).run();
-      return { success: false, error: "GitHub settings not configured. Go to Settings -> GitHub Runner" };
+      const error = "GitHub settings not configured. Go to Settings -> GitHub Runner";
+      await failExistingAutomationJob(env, jobId, error, "dispatch.github_settings", { execution_mode: executionMode });
+      return { success: false, jobId, executionMode, error };
     }
 
     const postformeSettings = await getScopedSettings<PostformeSettings>(env.DB, "postforme", userId);
@@ -1061,16 +1135,24 @@ export async function triggerAutomationRun(
     const dispatchResult = await dispatchWorkflow(githubSettings, workflow.inputs, workflow.workflowName);
 
     if (!dispatchResult.success) {
-      await env.DB.prepare(
-        "UPDATE jobs SET status = 'failed', error_message = ? WHERE id = ?"
-      ).bind(dispatchResult.error || "Workflow dispatch failed", jobId).run();
+      const error = dispatchResult.error || "Workflow dispatch failed";
+      await failExistingAutomationJob(env, jobId, error, "dispatch.github_api", {
+        workflow: workflow.workflowName,
+        dispatch_status: dispatchResult.dispatchStatus,
+        payload_bytes: dispatchResult.payloadBytes,
+      });
 
-      return { success: false, error: dispatchResult.error || "Workflow dispatch failed" };
+      return { success: false, jobId, executionMode, error };
     }
 
     await env.DB.prepare(
-      "UPDATE jobs SET status = 'running', github_run_id = ?, github_run_url = ? WHERE id = ?"
-    ).bind(dispatchResult.runId, dispatchResult.runUrl, jobId).run();
+      "UPDATE jobs SET status = 'running', github_run_id = ?, github_run_url = ?, logs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(
+      dispatchResult.runId,
+      dispatchResult.runUrl,
+      dispatchResult.warning ? JSON.stringify([{ at: new Date().toISOString(), stage: "dispatch.run_lookup", level: "warning", message: dispatchResult.warning }]) : null,
+      jobId
+    ).run();
 
     const rule = getScheduleRule(config);
     if (rule && automation.status === "active") {
@@ -1090,7 +1172,12 @@ export async function triggerAutomationRun(
 
   const promptSource = resolvePromptModeSource(config, executionMode);
   if (promptSource.error) {
-    return { success: false, error: promptSource.error };
+    const jobId = await createFailedAutomationJob(env, automation, userId, config, promptSource.error, "preflight.prompt_source", {
+      short_generation_mode: readString(config.short_generation_mode, "normal"),
+      prompt_source_type: readString(config.prompt_source_type),
+      execution_mode: executionMode,
+    });
+    return { success: false, jobId: jobId || undefined, executionMode, error: promptSource.error };
   }
 
   const videoSource = promptSource.videoSource || readString(config.video_source);
@@ -1102,11 +1189,15 @@ export async function triggerAutomationRun(
   let fetchStats = { total: 0, unprocessed: 0, to_process: 0, processed_already: 0 };
 
   if (videoSource === "local_folder" && executionMode === "github") {
-    return { success: false, error: "Local folder source is only available for local runner users." };
+    const error = "Local folder source is only available for local runner users.";
+    const jobId = await createFailedAutomationJob(env, automation, userId, config, error, "preflight.video_source", { video_source: videoSource, execution_mode: executionMode });
+    return { success: false, jobId: jobId || undefined, executionMode, error };
   }
 
   if (videoSource === "local_folder" && !localFolderPath) {
-    return { success: false, error: "Local folder path is required." };
+    const error = "Local folder path is required.";
+    const jobId = await createFailedAutomationJob(env, automation, userId, config, error, "preflight.video_source", { video_source: videoSource });
+    return { success: false, jobId: jobId || undefined, executionMode, error };
   }
 
   const videoSourceSettings = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
@@ -1293,19 +1384,24 @@ export async function triggerAutomationRun(
 
   // Validate: If no videos found, return error
   if (videoSource !== "local_folder" && videoUrls.length === 0) {
-    if (fetchStats.processed_already > 0 && fetchStats.total > 0) {
-      return { success: false, error: `All ${fetchStats.total} videos already processed` };
-    }
-    const errorMessages: Record<string, string> = {
-      "manual_links": "No valid video URLs found in manual_links",
-      "direct": "No valid video URLs found in direct URLs",
-      "youtube": "No valid YouTube URLs found",
-      "youtube_channel": "No videos found for YouTube channel",
-      "google_photos": "No valid Google Photos source URLs found",
-      "prompt_local_file": "No valid local file selected for Short with Prompt",
-    };
-    const errorMsg = errorMessages[videoSource || ""] || "No video URL provided";
-    return { success: false, error: errorMsg };
+    const errorMsg = fetchStats.processed_already > 0 && fetchStats.total > 0
+      ? `All ${fetchStats.total} videos already processed`
+      : ({
+          "manual_links": "No valid video URLs found in manual_links",
+          "direct": "No valid video URLs found in direct URLs",
+          "youtube": "No valid YouTube URLs found",
+          "youtube_channel": "No videos found for YouTube channel",
+          "google_photos": "No valid Google Photos source URLs found",
+          "prompt_local_file": "No valid local file selected for Short with Prompt",
+        } as Record<string, string>)[videoSource || ""] || "No video URL provided";
+
+    const jobId = await createFailedAutomationJob(env, automation, userId, jobConfig, errorMsg, "preflight.no_source_videos", {
+      video_source: videoSource,
+      fetch_stats: fetchStats,
+      short_generation_mode: readString(config.short_generation_mode, "normal"),
+      prompt_source_type: readString(config.prompt_source_type),
+    });
+    return { success: false, jobId: jobId || undefined, executionMode, error: errorMsg };
   }
 
   // ── GitHub trigger ───────────────────────────────────────────────────
@@ -1333,10 +1429,9 @@ export async function triggerAutomationRun(
 
   const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
   if (!githubSettings) {
-    await env.DB.prepare(
-      "DELETE FROM jobs WHERE id = ? AND user_id = ?"
-    ).bind(jobId, userId).run();
-    return { success: false, error: "GitHub settings not configured. Go to Settings -> GitHub Runner" };
+    const error = "GitHub settings not configured. Go to Settings -> GitHub Runner";
+    await failExistingAutomationJob(env, jobId, error, "dispatch.github_settings", { execution_mode: executionMode });
+    return { success: false, jobId, executionMode, error };
   }
 
   const postformeSettings = await getScopedSettings<PostformeSettings>(env.DB, "postforme", userId);
@@ -1364,16 +1459,24 @@ export async function triggerAutomationRun(
   console.log("[triggerAutomationRun] Dispatch result:", JSON.stringify(dispatchResult));
 
   if (!dispatchResult.success) {
-    await env.DB.prepare(
-      "UPDATE jobs SET status = 'failed', error_message = ? WHERE id = ?"
-    ).bind(dispatchResult.error || "Workflow dispatch failed", jobId).run();
+    const error = dispatchResult.error || "Workflow dispatch failed";
+    await failExistingAutomationJob(env, jobId, error, "dispatch.github_api", {
+      workflow: workflow.workflowName,
+      dispatch_status: dispatchResult.dispatchStatus,
+      payload_bytes: dispatchResult.payloadBytes,
+    });
 
-    return { success: false, error: dispatchResult.error || "Workflow dispatch failed" };
+    return { success: false, jobId, executionMode, error };
   }
 
   await env.DB.prepare(
-    "UPDATE jobs SET status = 'running', github_run_id = ?, github_run_url = ? WHERE id = ?"
-  ).bind(dispatchResult.runId, dispatchResult.runUrl, jobId).run();
+    "UPDATE jobs SET status = 'running', github_run_id = ?, github_run_url = ?, logs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).bind(
+    dispatchResult.runId,
+    dispatchResult.runUrl,
+    dispatchResult.warning ? JSON.stringify([{ at: new Date().toISOString(), stage: "dispatch.run_lookup", level: "warning", message: dispatchResult.warning }]) : null,
+    jobId
+  ).run();
 
   const rule = getScheduleRule(config);
   if (rule && automation.status === "active") {

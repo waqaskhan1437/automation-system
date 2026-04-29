@@ -1,6 +1,7 @@
-import { AuthContext, Env, Job, GithubSettings } from "../types";
+import { AuthContext, Env, Job, GithubSettings, Automation } from "../types";
 import { jsonResponse, githubHeaders, safeRequestJson } from "../utils";
 import { getScopedSettings } from "../services/user-settings";
+import { triggerAutomationRun } from "../services/automation-scheduler";
 
 export async function handleJobsRoutes(
   request: Request,
@@ -59,11 +60,46 @@ export async function handleJobsRoutes(
       return jsonResponse({ success: false, error: "Job not found" }, 404);
     }
 
-    await env.DB.prepare(
-      "UPDATE jobs SET status = 'queued', error_message = NULL, completed_at = NULL WHERE id = ? AND user_id = ?"
-    ).bind(id, userId).run();
+    if (!job.automation_id) {
+      return jsonResponse({ success: false, error: "This job has no automation attached, so it cannot be retried." }, 400);
+    }
 
-    return jsonResponse({ success: true, message: "Job queued for retry" });
+    const automation = await env.DB.prepare("SELECT * FROM automations WHERE id = ? AND user_id = ? LIMIT 1")
+      .bind(job.automation_id, userId)
+      .first<Automation>();
+
+    if (!automation) {
+      return jsonResponse({ success: false, error: "Automation not found for this job." }, 404);
+    }
+
+    const runResult = await triggerAutomationRun(env, automation, userId, { replaceExistingLocalRun: true });
+
+    if (!runResult.success) {
+      return jsonResponse({
+        success: false,
+        error: runResult.error || "Retry failed before dispatch",
+        data: {
+          original_job_id: id,
+          retry_job_id: runResult.jobId || null,
+          execution_mode: runResult.executionMode || null,
+        },
+      }, runResult.inProgress ? 409 : 400);
+    }
+
+    await env.DB.prepare(
+      "UPDATE jobs SET logs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+    ).bind(JSON.stringify([{ at: new Date().toISOString(), stage: "retry", level: "info", message: `Retried as job ${runResult.jobId}` }]), id, userId).run();
+
+    return jsonResponse({
+      success: true,
+      message: runResult.executionMode === "github" ? "Retry dispatched to GitHub Actions" : "Retry queued for local runner",
+      data: {
+        original_job_id: id,
+        retry_job_id: runResult.jobId,
+        github_run_id: runResult.githubRunId ?? null,
+        execution_mode: runResult.executionMode || null,
+      },
+    });
   }
 
   // GET /api/jobs/:id/artifacts - Get GitHub Actions artifacts
@@ -132,9 +168,10 @@ export async function handleJobsRoutes(
           ];
         }
         if (job.status === "failed") {
+          const errorText = job.error_message || "Failed before a GitHub/local runner could attach. Check job diagnostics for failure_stage.";
           return [
-            { name: "Queued on local runner", status: "completed", conclusion: "success", number: 1 },
-            { name: "Processing local video", status: "completed", conclusion: "failure", number: 2 },
+            { name: "Job created", status: "completed", conclusion: "success", number: 1 },
+            { name: errorText, status: "completed", conclusion: "failure", number: 2 },
           ];
         }
         if (job.status === "cancelled") {

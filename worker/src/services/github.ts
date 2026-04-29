@@ -2,6 +2,7 @@ import { GithubSettings, WorkflowInputs } from "../types";
 import { githubHeaders, sleep } from "../utils";
 
 const WORKFLOW_NAME = "video-automation.yml";
+const GITHUB_FETCH_TIMEOUT_MS = 15000;
 const WORKER_WEBHOOK_URL = "https://automation-api.waqaskhan1437.workers.dev/api/webhook/github";
 const RUNTIME_CONFIG_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 const DISPATCH_CONFIG_DROP_KEYS = new Set([
@@ -56,6 +57,27 @@ export interface DispatchResult {
   runId: number | null;
   runUrl: string | null;
   error?: string;
+  warning?: string;
+  dispatched?: boolean;
+  pendingRunLookup?: boolean;
+  payloadBytes?: number;
+  dispatchStatus?: number;
+}
+
+
+
+async function fetchGithubWithTimeout(url: string, init: RequestInit, timeoutMs: number = GITHUB_FETCH_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function getWorkflowRunsUrl(githubSettings: GithubSettings, workflowFile: string): string {
+  return `https://github.com/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${workflowFile}`;
 }
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -152,7 +174,7 @@ export async function dispatchWorkflow(
     const payloadBytes = new TextEncoder().encode(requestBody).length;
     console.log("[dispatchWorkflow] Payload bytes:", payloadBytes);
 
-    const response = await fetch(dispatchUrl, {
+    const response = await fetchGithubWithTimeout(dispatchUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${githubSettings.pat_token}`,
@@ -175,52 +197,79 @@ export async function dispatchWorkflow(
           runId: null,
           runUrl: null,
           error: `GitHub workflow dispatch payload is too large (${payloadBytes} bytes) even after trimming automation_config.`,
+          payloadBytes,
+          dispatchStatus: status,
         };
       }
-      return { success: false, runId: null, runUrl: null, error: `GitHub API error: ${status} - ${responseText}` };
+      return {
+        success: false,
+        runId: null,
+        runUrl: null,
+        error: `GitHub API error: ${status} - ${responseText}`,
+        payloadBytes,
+        dispatchStatus: status,
+      };
     }
 
     console.log("[dispatchWorkflow] Workflow dispatched, checking for run ID...");
-    await sleep(3000);
 
     let runId: number | null = null;
     let runUrl: string | null = null;
+    let runLookupWarning = "";
 
-    try {
-      const runsRes = await fetch(
-        `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${workflowFile}/runs?per_page=1`,
-        {
-          headers: {
-            Authorization: `Bearer ${githubSettings.pat_token}`,
-            Accept: "application/vnd.github.v3+json",
-            "User-Agent": "AutomationSystem/1.0",
+    for (const waitMs of [2000, 5000, 9000]) {
+      await sleep(waitMs);
+      try {
+        const runsRes = await fetchGithubWithTimeout(
+          `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/workflows/${workflowFile}/runs?event=workflow_dispatch&branch=master&per_page=5`,
+          {
+            headers: {
+              Authorization: `Bearer ${githubSettings.pat_token}`,
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": "AutomationSystem/1.0",
+            },
           },
-        }
-      );
+          12000
+        );
 
-      if (!runsRes.ok) {
-        console.error("[dispatchWorkflow] Failed to get workflow runs:", runsRes.status, await runsRes.text());
-      } else {
-        const runsData = await runsRes.json() as { workflow_runs?: Array<{ id: number; html_url: string }> };
-        if (runsData.workflow_runs && runsData.workflow_runs.length > 0) {
-          runId = runsData.workflow_runs[0].id;
-          runUrl = runsData.workflow_runs[0].html_url;
-          console.log("[dispatchWorkflow] Got run ID:", runId);
+        if (!runsRes.ok) {
+          const body = await runsRes.text();
+          runLookupWarning = `Workflow dispatched but run lookup failed: GitHub API ${runsRes.status} - ${body.substring(0, 300)}`;
+          console.error("[dispatchWorkflow] Failed to get workflow runs:", runsRes.status, body);
         } else {
-          console.log("[dispatchWorkflow] No workflow runs found");
+          const runsData = await runsRes.json() as { workflow_runs?: Array<{ id: number; html_url: string; event?: string; head_branch?: string }> };
+          const run = (runsData.workflow_runs || []).find((item) => item.event === "workflow_dispatch") || runsData.workflow_runs?.[0];
+          if (run) {
+            runId = run.id;
+            runUrl = run.html_url;
+            console.log("[dispatchWorkflow] Got run ID:", runId);
+            break;
+          }
+          runLookupWarning = "Workflow dispatched but no workflow_dispatch run was visible yet.";
+          console.log("[dispatchWorkflow] No workflow runs found yet");
         }
+      } catch (e) {
+        runLookupWarning = `Workflow dispatched but run lookup errored: ${e instanceof Error ? e.message : String(e)}`;
+        console.error("[dispatchWorkflow] Error getting workflow runs:", e);
       }
-    } catch (e) {
-      console.error("[dispatchWorkflow] Error getting workflow runs:", e);
     }
 
-    // If we got a successful dispatch but no run ID, that's still a problem
     if (!runId) {
-      console.error("[dispatchWorkflow] Dispatch returned success but no run ID found!");
-      return { success: false, runId: null, runUrl: null, error: "Workflow dispatched but run ID not found. Check PAT token permissions." };
+      const fallbackUrl = getWorkflowRunsUrl(githubSettings, workflowFile);
+      console.error("[dispatchWorkflow] Dispatch returned success but no run ID found. Keeping job running with pending lookup.");
+      return {
+        success: true,
+        runId: null,
+        runUrl: fallbackUrl,
+        warning: runLookupWarning || "Workflow dispatched but run ID was not visible yet.",
+        dispatched: true,
+        pendingRunLookup: true,
+        payloadBytes,
+        dispatchStatus: status,
+      };
     }
-    
-    return { success: true, runId, runUrl };
+
+    return { success: true, runId, runUrl, dispatched: true, payloadBytes, dispatchStatus: status };
   } catch (err) {
     console.error("[dispatchWorkflow] Error:", err instanceof Error ? err.message : String(err));
     return {
