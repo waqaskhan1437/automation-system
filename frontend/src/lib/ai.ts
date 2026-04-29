@@ -73,12 +73,13 @@ function normalizeProvider(provider: unknown): AIProviderCatalog | null {
   };
 }
 
-export function normalizeAiCatalog(catalog: AIModelCatalogResponse | null | undefined): AIModelCatalogResponse {
-  const rawProviders = Array.isArray(catalog?.providers) ? catalog.providers : [];
+export function normalizeAiCatalog(catalog: unknown): AIModelCatalogResponse {
+  const record = catalog && typeof catalog === "object" ? catalog as Record<string, unknown> : {};
+  const rawProviders = Array.isArray(record.providers) ? record.providers : [];
   const providers = rawProviders
     .map(normalizeProvider)
     .filter((provider): provider is AIProviderCatalog => Boolean(provider));
-  const defaultProvider = stringFromUnknown(catalog?.default_provider) || null;
+  const defaultProvider = stringFromUnknown(record.default_provider) || null;
 
   return {
     default_provider: defaultProvider,
