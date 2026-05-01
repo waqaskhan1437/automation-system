@@ -121,6 +121,9 @@ async function main() {
           resolve(data);
         });
       });
+      req.setTimeout(30000, () => {
+        req.destroy(new Error("Webhook request timed out after 30000ms"));
+      });
       req.on("error", (err) => {
         console.error("Request error:", err.message);
         reject(err);

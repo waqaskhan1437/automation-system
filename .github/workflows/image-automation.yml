@@ -42,6 +42,7 @@ jobs:
       JOB_ID: ${{ github.event.inputs.job_id }}
       AUTOMATION_ID: ${{ github.event.inputs.automation_id }}
       RUNNER_EXECUTION_MODE: github
+      RUNTIME_CONFIG_TOKEN: ${{ github.event.inputs.runtime_config_token }}
 
     steps:
       - name: Checkout
@@ -53,10 +54,15 @@ jobs:
       - name: Save config
         run: node runner-scripts/fetch-runtime-config.js
 
-      - name: Install Chromium
+      - name: Install Playwright Chromium
+        timeout-minutes: 12
         run: |
+          set -euo pipefail
           cd runner-scripts
-          npx playwright install --with-deps chromium
+          npx --no-install playwright-core install --with-deps chromium
+          BROWSER_PATH="$(node -e 'const { chromium } = require("playwright-core"); console.log(chromium.executablePath())')"
+          test -x "$BROWSER_PATH"
+          echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
 
       - name: Render and upload image
         run: |

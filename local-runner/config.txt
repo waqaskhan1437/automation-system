@@ -1,5 +1,6 @@
 # Lightweight local launcher
+# Copy this file to a private machine-local config file and fill real values there.
 SERVER_URL=https://automation-api.waqaskhan1437.workers.dev
 FRONTEND_URL=https://frontend-nine-jet-27.vercel.app
-RUNNER_TOKEN=rnr_da7b69a3372dcd6068e53c556ba4614446d6de37327729e6
-ACCESS_TOKEN=atk_ebd6165f5b6a317e81a66e94ee724fbcc2588909e765684b
+RUNNER_TOKEN=
+ACCESS_TOKEN=

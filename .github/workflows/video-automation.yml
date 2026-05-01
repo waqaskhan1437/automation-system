@@ -42,6 +42,7 @@ jobs:
       JOB_ID: ${{ github.event.inputs.job_id }}
       AUTOMATION_ID: ${{ github.event.inputs.automation_id }}
       RUNNER_EXECUTION_MODE: github
+      RUNTIME_CONFIG_TOKEN: ${{ github.event.inputs.runtime_config_token }}
 
     steps:
       - name: Checkout
@@ -54,19 +55,51 @@ jobs:
         run: node runner-scripts/fetch-runtime-config.js
 
       - name: Install yt-dlp
+        timeout-minutes: 5
         run: |
-          pip install -q "yt-dlp[default]" --upgrade --break-system-packages
+          set -euo pipefail
+          python3 -m pip install -q "yt-dlp[default]" --upgrade --break-system-packages
           yt-dlp --version
 
-      - name: Install FFmpeg and Fonts
+      - name: Install FFmpeg and fonts
+        timeout-minutes: 8
         run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg fonts-ubuntu fonts-dejavu-core python3
-          sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser
-          BROWSER_PATH=$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable)
-          echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$BROWSER_PATH" >> $GITHUB_ENV
-          fc-cache -f -v
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            ffmpeg \
+            fonts-dejavu-core \
+            fonts-ubuntu \
+            python3
+          fc-cache -f -v >/dev/null 2>&1 || true
           ffmpeg -version | head -1
+
+      - name: Install Playwright Chromium
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          cd runner-scripts
+          npx --no-install playwright-core install --with-deps chromium
+          BROWSER_PATH="$(node -e 'const { chromium } = require("playwright-core"); console.log(chromium.executablePath())')"
+          test -x "$BROWSER_PATH"
+          echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
+          node - <<'NODE'
+          const { chromium } = require('playwright-core');
+          (async () => {
+            const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || chromium.executablePath();
+            const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+            const page = await browser.newPage();
+            await page.setContent('<html><body>ok</body></html>');
+            await browser.close();
+            console.log(`Chromium smoke test OK: ${executablePath}`);
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
 
       - name: Download and Process Videos
         timeout-minutes: 30
@@ -105,6 +138,7 @@ jobs:
 
       - name: Update Status on Failure
         if: failure()
+        timeout-minutes: 2
         run: |
           cd runner-scripts
           if [ -f output/error.log ]; then
