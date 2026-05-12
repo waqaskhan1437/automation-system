@@ -131,6 +131,11 @@ jobs:
           fi
 
           echo "=============================================="
+          echo "=== INTRO DIAGNOSTICS ==="
+          grep -n "\[INTRO\]" output/runner.log 2>/dev/null || echo "No [INTRO] lines found in runner.log"
+          echo "=== intro_metadata.json ==="
+          cat output/intro_metadata.json 2>/dev/null || echo "intro_metadata.json not found"
+          echo "=== output files ==="
           ls -la output/ 2>/dev/null || echo "No output"
           echo "=============================================="
 

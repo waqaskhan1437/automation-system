@@ -167,14 +167,66 @@ async function generateAndUploadThumbnail(config, sourceVideoFile, processedVide
 }
 
 
+function boolish(value) {
+  return value === true || String(value).toLowerCase() === 'true';
+}
+
+function getIntroConfigSummary(config = {}) {
+  const keys = Object.keys(config || {}).filter((key) => key.startsWith('intro_') || key === 'intro_urls').sort();
+  const urlKeys = keys.filter((key) => {
+    if (key === 'intro_urls') return config.intro_urls && typeof config.intro_urls === 'object' && Object.keys(config.intro_urls).length > 0;
+    return typeof config[key] === 'string' && config[key].trim();
+  });
+  return {
+    intro_enabled: config.intro_enabled,
+    intro_disabled: config.intro_disabled,
+    intro_required: config.intro_required,
+    intro_duration_limit: config.intro_duration_limit,
+    intro_keys: keys,
+    intro_url_keys_with_values: urlKeys,
+  };
+}
+
+function copyIntroOutputToStableArtifacts(sourceFile, originalProcessedFile, label = 'video') {
+  if (!sourceFile || !fs.existsSync(sourceFile)) return;
+  try {
+    const stableFinal = path.join(OUTPUT_DIR, 'final-video-with-intro.mp4');
+    fs.copyFileSync(sourceFile, stableFinal);
+    console.log(`[INTRO] Stable final artifact for ${label}: ${stableFinal}`);
+  } catch (error) {
+    console.warn(`[INTRO] Could not write stable final artifact: ${error.message}`);
+  }
+
+  // Important: many dashboards/artifacts preview runner-scripts/output/processed-video.mp4.
+  // Keep that file in sync with the exact final upload file after intro is attached,
+  // so users never see the no-intro intermediate file by mistake.
+  try {
+    if (originalProcessedFile && fs.existsSync(originalProcessedFile) && path.resolve(sourceFile) !== path.resolve(originalProcessedFile)) {
+      fs.copyFileSync(sourceFile, originalProcessedFile);
+      console.log(`[INTRO] Synced ${path.basename(originalProcessedFile)} with intro-applied final video for ${label}`);
+    }
+  } catch (error) {
+    console.warn(`[INTRO] Could not sync processed artifact: ${error.message}`);
+  }
+}
+
 async function attachIntroToProcessedVideo(config, processedFile, label = 'video') {
-  const introResult = await attachIntroSafe(config || {}, processedFile);
+  console.log(`[INTRO] Config summary for ${label}: ${JSON.stringify(getIntroConfigSummary(config || {}))}`);
+  const requestedOutput = path.join(OUTPUT_DIR, `final-with-intro-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`);
+  const introResult = await attachIntroSafe(config || {}, processedFile, requestedOutput);
   if (introResult && introResult.intro_applied && introResult.video_file && fs.existsSync(introResult.video_file)) {
     console.log(`[INTRO] Applied to ${label}: ${introResult.video_file}`);
+    copyIntroOutputToStableArtifacts(introResult.video_file, processedFile, label);
     return introResult.video_file;
   }
   if (introResult && introResult.reason) {
     console.log(`[INTRO] Skipped for ${label}: ${introResult.reason}`);
+  }
+  if (introResult && introResult.error) {
+    console.log(`[INTRO] Failed for ${label}: ${introResult.error}`);
+  }
+  if (boolish(config?.intro_required)) {
+    throw new Error(`Intro was required but not applied: ${introResult?.reason || introResult?.error || 'unknown reason'}`);
   }
   return processedFile;
 }
@@ -476,6 +528,7 @@ async function main() {
   materializeManagedCookieFiles(config);
   writeConfig(config);
   clearFailureReport();
+  console.log('[MAIN] intro_config_summary:', JSON.stringify(getIntroConfigSummary(config)));
 
   console.log('[MAIN] source_shorts_mode:', config.source_shorts_mode);
   console.log('[MAIN] segment_info:', JSON.stringify(config.segment_info));

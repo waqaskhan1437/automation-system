@@ -465,6 +465,10 @@ async function attachIntro(config = {}, processedVideoFile, outputFile = null) {
   concatClips([introNormalized, videoNormalized], finalOutput);
 
   const finalDuration = getDuration(finalOutput);
+  const originalDuration = getDuration(sourceFile);
+  if (originalDuration && finalDuration && finalDuration < originalDuration + Math.max(0.3, usedDurationLimit * 0.5)) {
+    throw new Error(`Intro output duration check failed: final=${finalDuration.toFixed(2)}s original=${originalDuration.toFixed(2)}s expected intro≈${usedDurationLimit.toFixed(2)}s`);
+  }
   const meta = {
     video_file: finalOutput,
     intro_applied: true,
@@ -474,6 +478,7 @@ async function attachIntro(config = {}, processedVideoFile, outputFile = null) {
     selection,
     intro_duration_detected: introDuration,
     intro_duration_limit: usedDurationLimit,
+    original_duration: originalDuration,
     final_duration: finalDuration,
     width: resolution.width,
     height: resolution.height,
@@ -492,7 +497,7 @@ async function attachIntroSafe(config = {}, processedVideoFile, outputFile = nul
     const meta = { video_file: sourceFile, intro_applied: false, status: 'failed', error: error.message };
     writeIntroMetadata(meta);
     console.warn(`[INTRO] Non-blocking failure: ${error.message}`);
-    if (config.intro_required === true) {
+    if (config.intro_required === true || String(config.intro_required).toLowerCase() === 'true') {
       throw error;
     }
     return meta;
