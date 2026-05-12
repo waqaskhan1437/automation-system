@@ -348,10 +348,22 @@ export default function PublishTab({ data, onChange }: TabProps) {
               <label className="block text-xs text-[#a1a1aa] mb-1">Fallback Intro URL</label>
               <input className="glass-input text-sm" placeholder="optional fallback mp4 url" value={data.intro_url as string || ""} onChange={(event) => onChange("intro_url", event.target.value)} />
             </div>
+            <div className="md:col-span-2 flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+              <div>
+                <p className="text-sm font-medium">Require Intro Attach</p>
+                <p className="text-xs text-[#a1a1aa]">ON karne par intro na lage to job fail hogi aur exact reason logs mein milega.</p>
+              </div>
+              <button
+                onClick={() => onChange("intro_required", data.intro_required !== true)}
+                className={`w-11 h-6 rounded-full transition-all ${data.intro_required === true ? "bg-gradient-to-r from-[#ef4444] to-[#f59e0b]" : "bg-[rgba(255,255,255,0.1)]"}`}
+              >
+                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.intro_required === true ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+              </button>
+            </div>
           </div>
         )}
         <p className="text-xs text-[#71717a] mt-3">
-          Recommended: intro files ko R2/Cloudinary public direct MP4 URL par rakhen. Intro fail ho to automation video ko fail nahi karegi, sirf intro skip hoga.
+          Recommended: intro files ko R2/Cloudinary public direct MP4 URL par rakhen. New robust mode multiple URL field aliases check karta hai, curl/fetch fallback use karta hai, aur intro_metadata.json mein applied/skipped/failed reason save karta hai.
         </p>
       </div>
 
