@@ -103,8 +103,120 @@ function isGooglePhotosUrl(value: string): boolean {
   return /photos\.google\.com|photos\.app\.goo\.gl/i.test(value);
 }
 
-function normalizeConfigRecord(config: Record<string, unknown>): Record<string, unknown> {
+function readCleanString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function hasIntroUrl(config: Record<string, unknown>): boolean {
+  const introUrls = config.intro_urls;
+  const flatKeys = [
+    "intro_url",
+    "fallback_intro_url",
+    "intro_url_fallback",
+    "intro_fallback_url",
+    "default_intro_url",
+    "intro_url_vertical",
+    "intro_vertical_url",
+    "vertical_intro_url",
+    "intro_url_landscape",
+    "intro_landscape_url",
+    "landscape_intro_url",
+    "intro_url_square",
+    "intro_square_url",
+    "square_intro_url",
+    "intro_url_4_5",
+    "intro_4_5_url",
+    "intro_url_portrait",
+    "intro_portrait_url",
+  ];
+  if (flatKeys.some((key) => readCleanString(config[key]).startsWith("http"))) return true;
+  if (introUrls && typeof introUrls === "object" && !Array.isArray(introUrls)) {
+    return Object.values(introUrls as Record<string, unknown>).some((value) => readCleanString(value).startsWith("http"));
+  }
+  return false;
+}
+
+function normalizeIntroConfigRecord(config: Record<string, unknown>): Record<string, unknown> {
   const next = { ...config };
+  const enabled = next.intro_enabled === true || String(next.intro_enabled).toLowerCase() === "true" || hasIntroUrl(next);
+
+  if (!enabled || next.intro_disabled === true || String(next.intro_disabled).toLowerCase() === "true") {
+    next.intro_enabled = false;
+    next.intro_disabled = true;
+    next.intro_required = false;
+    return next;
+  }
+
+  next.intro_enabled = true;
+  next.intro_disabled = false;
+
+  const existingMap = next.intro_urls && typeof next.intro_urls === "object" && !Array.isArray(next.intro_urls)
+    ? { ...(next.intro_urls as Record<string, unknown>) }
+    : {};
+
+  const fallback = readCleanString(next.intro_url) || readCleanString(next.fallback_intro_url) || readCleanString(next.intro_fallback_url) || readCleanString(existingMap.fallback) || readCleanString(existingMap.default) || readCleanString(existingMap.intro);
+  const vertical = readCleanString(next.intro_url_vertical) || readCleanString(next.intro_vertical_url) || readCleanString(next.vertical_intro_url) || readCleanString(existingMap.vertical_9_16) || readCleanString(existingMap.vertical) || readCleanString(existingMap.shorts) || fallback;
+  const landscape = readCleanString(next.intro_url_landscape) || readCleanString(next.intro_landscape_url) || readCleanString(next.landscape_intro_url) || readCleanString(existingMap.landscape_16_9) || readCleanString(existingMap.landscape) || readCleanString(existingMap.youtube) || fallback;
+  const square = readCleanString(next.intro_url_square) || readCleanString(next.intro_square_url) || readCleanString(next.square_intro_url) || readCleanString(existingMap.square_1_1) || readCleanString(existingMap.square) || fallback;
+  const portrait = readCleanString(next.intro_url_4_5) || readCleanString(next.intro_4_5_url) || readCleanString(next.intro_url_portrait) || readCleanString(next.intro_portrait_url) || readCleanString(existingMap.portrait_4_5) || readCleanString(existingMap.portrait) || fallback;
+  const any = vertical || landscape || square || portrait || fallback;
+
+  if (vertical) next.intro_url_vertical = vertical;
+  if (landscape) next.intro_url_landscape = landscape;
+  if (square) next.intro_url_square = square;
+  if (portrait) next.intro_url_4_5 = portrait;
+  if (any) next.intro_url = any;
+
+  next.intro_urls = {
+    ...existingMap,
+    ...(vertical ? {
+      "9:16": vertical,
+      "9_16": vertical,
+      vertical_9_16: vertical,
+      vertical,
+      shorts_9_16: vertical,
+      shorts: vertical,
+      reels_9_16: vertical,
+      reels: vertical,
+      tiktok_9_16: vertical,
+      tiktok: vertical,
+    } : {}),
+    ...(landscape ? {
+      "16:9": landscape,
+      "16_9": landscape,
+      landscape_16_9: landscape,
+      landscape,
+      youtube_16_9: landscape,
+      youtube: landscape,
+      facebook_16_9: landscape,
+      facebook: landscape,
+    } : {}),
+    ...(square ? {
+      "1:1": square,
+      "1_1": square,
+      square_1_1: square,
+      square,
+    } : {}),
+    ...(portrait ? {
+      "4:5": portrait,
+      "4_5": portrait,
+      portrait_4_5: portrait,
+      portrait,
+      feed_4_5: portrait,
+    } : {}),
+    ...(any ? {
+      fallback: any,
+      default: any,
+      default_intro: any,
+      intro: any,
+    } : {}),
+  };
+
+  return next;
+}
+
+function normalizeConfigRecord(config: Record<string, unknown>): Record<string, unknown> {
+  let next = normalizeIntroConfigRecord(config);
   if (next.short_generation_mode === "prompt") {
     const promptSourceType = typeof next.prompt_source_type === "string" ? next.prompt_source_type : "youtube";
     if (promptSourceType === "youtube" || promptSourceType === "direct") {

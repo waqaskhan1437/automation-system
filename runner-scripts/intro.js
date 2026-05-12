@@ -132,7 +132,7 @@ function resolveIntroSourceDetailed(config = {}, resolution = { width: DEFAULT_W
   }
 
   // General fallbacks must always be checked last.
-  ['intro_url', 'fallback_intro_url', 'intro_url_fallback', 'intro_fallback_url', 'default_intro_url'].forEach((key) => pushCandidate(candidates, key, config[key]));
+  ['intro_url', 'intro_video_url', 'intro_video', 'video_intro_url', 'fallback_intro_url', 'intro_url_fallback', 'intro_fallback_url', 'default_intro_url'].forEach((key) => pushCandidate(candidates, key, config[key]));
   ['fallback', 'default', 'default_intro', 'intro'].forEach((key) => pushCandidate(candidates, `intro_urls.${key}`, map[key]));
 
   const selected = candidates.find((item) => item.value) || null;
