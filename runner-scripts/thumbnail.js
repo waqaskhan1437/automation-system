@@ -85,6 +85,66 @@ function resolveFrameTime(config, inputFile) {
   return Math.max(0.5, Math.min(2, Math.max(0, duration * 0.15), duration - 0.2));
 }
 
+
+function buildFrameTimeCandidates(preferredTime, duration) {
+  const candidates = [];
+  const add = (value) => {
+    const numeric = Number.parseFloat(String(value));
+    if (!Number.isFinite(numeric) || numeric < 0) return;
+    const clamped = duration ? Math.max(0, Math.min(numeric, Math.max(0, duration - 0.2))) : numeric;
+    if (!candidates.some((existing) => Math.abs(existing - clamped) < 0.05)) {
+      candidates.push(clamped);
+    }
+  };
+
+  add(preferredTime);
+  add(1);
+  add(2);
+  add(0.5);
+  add(0);
+  if (duration) {
+    add(duration * 0.15);
+    add(duration * 0.30);
+    add(duration * 0.50);
+  }
+  return candidates.length ? candidates : [0];
+}
+
+function extractThumbnailFrame(sourceFile, targetFrameFile, preferredFrameTime, config = {}) {
+  const duration = getVideoDuration(sourceFile);
+  const frameCandidates = buildFrameTimeCandidates(preferredFrameTime, duration);
+  const frameSize = Math.max(720, parsePositiveNumber(config.thumbnail_extract_size, 900));
+
+  for (const candidate of frameCandidates) {
+    try {
+      if (fs.existsSync(targetFrameFile)) fs.unlinkSync(targetFrameFile);
+    } catch {}
+
+    const args = [
+      '-y',
+      '-ss', String(candidate),
+      '-i', sourceFile,
+      '-map', '0:v:0',
+      '-frames:v', '1',
+      '-vf', `scale=${frameSize}:${frameSize}:force_original_aspect_ratio=increase,crop=${frameSize}:${frameSize},format=rgb24`,
+      '-q:v', '2',
+      targetFrameFile,
+    ];
+
+    const result = spawnSync('ffmpeg', args, { encoding: 'utf8' });
+    const exists = fs.existsSync(targetFrameFile);
+    const size = exists ? fs.statSync(targetFrameFile).size : 0;
+    if (result.status === 0 && exists && size > 2048) {
+      return { frame_file: targetFrameFile, frame_time: candidate, frame_size_bytes: size };
+    }
+
+    const details = (result.stderr || result.stdout || '').split('\n').slice(-4).join(' | ');
+    console.warn(`[THUMBNAIL] Frame extract retry @ ${candidate.toFixed(2)}s failed or empty (${size} bytes): ${details}`);
+  }
+
+  throw new Error('Could not extract a usable video frame for thumbnail circle');
+}
+
 function getFontFile(style = 'bold') {
   const candidates = process.platform === 'win32'
     ? [
@@ -259,7 +319,10 @@ function generateThumbnail(inputFile, outputFile, config = {}) {
   const circleSize = Math.min(700, Math.max(420, Math.round(shortestSide * 0.60)));
   const borderSize = circleSize + 38;
   const style = resolveStyle(config);
-  const frameTime = resolveFrameTime(config, sourceFile);
+  const preferredFrameTime = resolveFrameTime(config, sourceFile);
+  const extractedFrameFile = path.join(path.dirname(targetFile), `_thumbnail_frame_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`);
+  const extractedFrame = extractThumbnailFrame(sourceFile, extractedFrameFile, preferredFrameTime, config);
+  const frameTime = extractedFrame.frame_time;
   const tagline = pickTagline(config);
   const subtitle = pickSubtitle(config);
   const brandText = cleanString(config.thumbnail_brand_text) || 'Prankwish.com';
@@ -271,15 +334,14 @@ function generateThumbnail(inputFile, outputFile, config = {}) {
 
   const args = [
     '-y',
-    '-ss', String(frameTime),
-    '-i', sourceFile,
+    '-i', extractedFrame.frame_file,
     '-filter_complex', filterComplex,
     '-frames:v', '1',
     '-q:v', '3',
     targetFile,
   ];
 
-  console.log(`[THUMBNAIL] Generating ${width}x${height} ${style} thumbnail from ${path.basename(sourceFile)} @ ${frameTime.toFixed(2)}s`);
+  console.log(`[THUMBNAIL] Generating ${width}x${height} ${style} thumbnail from extracted frame ${path.basename(extractedFrame.frame_file)} @ ${frameTime.toFixed(2)}s`);
   const result = spawnSync('ffmpeg', args, { encoding: 'utf8' });
   if (result.status !== 0) {
     const details = (result.stderr || result.stdout || '').split('\n').slice(-12).join('\n');
@@ -293,6 +355,8 @@ function generateThumbnail(inputFile, outputFile, config = {}) {
   const metadata = {
     thumbnail_file: targetFile,
     source_file: sourceFile,
+    extracted_frame_file: extractedFrame.frame_file,
+    extracted_frame_size_bytes: extractedFrame.frame_size_bytes,
     style,
     frame_time: frameTime,
     tagline,
@@ -312,6 +376,7 @@ module.exports = {
   DEFAULT_SUBTITLE_VARIANTS,
   generateThumbnail,
   getVideoDuration,
+  extractThumbnailFrame,
   isThumbnailEnabled,
   loadConfig,
   resolveFrameTime,

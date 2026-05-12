@@ -32,7 +32,7 @@ interface AutomationActiveJobRow {
 async function runDeleteIfTableExists(
   env: Env,
   query: string,
-  bindings: Array<string | number>
+  bindings: Array<string | number> = []
 ): Promise<void> {
   try {
     await env.DB.prepare(query).bind(...bindings).run();
@@ -44,6 +44,18 @@ async function runDeleteIfTableExists(
     }
     throw error;
   }
+}
+
+async function deleteAutomationChildRows(env: Env, automationId: number, userId: number): Promise<void> {
+  // Delete rows that can block FK deletion before deleting jobs/automation.
+  // Avoid child.user_id filters where possible for compatibility with older D1 schemas.
+  await runDeleteIfTableExists(
+    env,
+    "DELETE FROM video_uploads WHERE job_id IN (SELECT id FROM jobs WHERE automation_id = ? AND user_id = ?)",
+    [automationId, userId]
+  );
+  await runDeleteIfTableExists(env, "DELETE FROM video_queue WHERE automation_id = ?", [automationId]);
+  await runDeleteIfTableExists(env, "DELETE FROM processed_videos WHERE automation_id = ?", [automationId]);
 }
 
 async function ensureRotationResetColumn(env: Env): Promise<void> {
@@ -461,15 +473,7 @@ export async function handleAutomationsRoutes(
     }
 
     if (method === "DELETE") {
-      const jobIdsResult = await env.DB.prepare("SELECT id FROM jobs WHERE automation_id = ? AND user_id = ?").bind(id, userId).all<{ id: number }>();
-      const jobIds = (jobIdsResult.results || []).map((job) => job.id);
-
-      for (const jobId of jobIds) {
-        await env.DB.prepare("DELETE FROM video_uploads WHERE job_id = ? AND user_id = ?").bind(jobId, userId).run();
-        await runDeleteIfTableExists(env, "DELETE FROM video_queue WHERE job_id = ?", [jobId]);
-      }
-
-      await runDeleteIfTableExists(env, "DELETE FROM processed_videos WHERE automation_id = ? AND user_id = ?", [id, userId]);
+      await deleteAutomationChildRows(env, id, userId);
       await env.DB.prepare("DELETE FROM jobs WHERE automation_id = ? AND user_id = ?").bind(id, userId).run();
       await env.DB.prepare("DELETE FROM automations WHERE id = ? AND user_id = ?").bind(id, userId).run();
       return jsonResponse({ success: true, message: "Automation deleted" });

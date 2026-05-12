@@ -14,6 +14,36 @@ type GithubArtifactsData = { artifacts?: Array<{ id?: number; name: string; arch
 const GITHUB_FETCH_TIMEOUT_MS = 12000;
 const MAX_GITHUB_LOG_CHARS = 180000;
 
+async function runDeleteIfTableExists(
+  env: Env,
+  query: string,
+  bindings: Array<string | number> = []
+): Promise<void> {
+  try {
+    await env.DB.prepare(query).bind(...bindings).run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no such table/i.test(message)) {
+      console.warn("[jobs.delete] Skipping delete for missing table:", query, message);
+      return;
+    }
+    throw error;
+  }
+}
+
+async function deleteJobChildRows(env: Env, jobId: number): Promise<void> {
+  await runDeleteIfTableExists(env, "DELETE FROM video_uploads WHERE job_id = ?", [jobId]);
+  await runDeleteIfTableExists(env, "DELETE FROM video_queue WHERE job_id = ?", [jobId]);
+  await runDeleteIfTableExists(env, "DELETE FROM processed_videos WHERE job_id = ?", [jobId]);
+}
+
+async function deleteAllJobChildRowsForUser(env: Env, userId: number): Promise<void> {
+  await runDeleteIfTableExists(env, "DELETE FROM video_uploads WHERE job_id IN (SELECT id FROM jobs WHERE user_id = ?)", [userId]);
+  await runDeleteIfTableExists(env, "DELETE FROM video_queue WHERE job_id IN (SELECT id FROM jobs WHERE user_id = ?)", [userId]);
+  await runDeleteIfTableExists(env, "DELETE FROM processed_videos WHERE job_id IN (SELECT id FROM jobs WHERE user_id = ?)", [userId]);
+}
+
+
 function safeJsonParse<T>(value: string): T | null {
   try {
     return JSON.parse(value) as T;
@@ -565,8 +595,10 @@ export async function handleJobsRoutes(
 
   // DELETE /api/jobs - Delete all jobs
   if (path === "/api/jobs" && method === "DELETE") {
-    // Delete video_uploads first due to foreign key constraint
-    await env.DB.prepare("DELETE FROM video_uploads WHERE user_id = ?").bind(userId).run();
+    // Child tables must be cleared first because processed_videos/video_queue/video_uploads
+    // can hold foreign keys to jobs. Use job_id subqueries so older DBs without child.user_id
+    // columns still delete safely.
+    await deleteAllJobChildRowsForUser(env, userId);
     await env.DB.prepare("DELETE FROM jobs WHERE user_id = ?").bind(userId).run();
     return jsonResponse({ success: true, message: "All jobs deleted" });
   }
@@ -577,8 +609,10 @@ export async function handleJobsRoutes(
     if (!job) {
       return jsonResponse({ success: false, error: "Job not found" }, 404);
     }
-    // Delete video_uploads first due to foreign key constraint
-    await env.DB.prepare("DELETE FROM video_uploads WHERE job_id = ? AND user_id = ?").bind(id, userId).run();
+
+    // Scope is verified by the parent job lookup above, so child rows can be deleted by job_id only.
+    // This also works for older child tables without user_id.
+    await deleteJobChildRows(env, id);
     await env.DB.prepare("DELETE FROM jobs WHERE id = ? AND user_id = ?").bind(id, userId).run();
     return jsonResponse({ success: true, message: "Job deleted" });
   }
