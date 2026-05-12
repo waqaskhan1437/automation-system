@@ -4,6 +4,7 @@ const path = require("path");
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 const FETCH_TIMEOUT_MS = 30000;
 const TITLE_PLATFORMS = new Set(["youtube", "tiktok", "tiktok_business"]);
+const VIDEO_THUMBNAIL_PLATFORMS = new Set(["facebook", "instagram", "tiktok_business", "youtube"]);
 
 async function timedFetch(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -33,6 +34,44 @@ function parsePositiveInteger(value, fallback = null) {
 
 function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeHttpsUrl(value) {
+  const url = cleanString(value);
+  return /^https:\/\//i.test(url) ? url : "";
+}
+
+function getAccountDetailsForIds(selectedAccounts, accountIds) {
+  if (!Array.isArray(selectedAccounts) || !Array.isArray(accountIds) || accountIds.length === 0) {
+    return [];
+  }
+
+  return accountIds
+    .map((accountId) => selectedAccounts.find((account) => account && account.id === accountId) || null)
+    .filter(Boolean);
+}
+
+function canAttachThumbnailForAccounts(selectedAccounts, accountIds, thumbnailUrl) {
+  const normalizedThumbnailUrl = normalizeHttpsUrl(thumbnailUrl);
+  if (!normalizedThumbnailUrl || !Array.isArray(accountIds) || accountIds.length === 0) {
+    return false;
+  }
+
+  const accountDetails = getAccountDetailsForIds(selectedAccounts, accountIds);
+  if (accountDetails.length !== accountIds.length) {
+    return false;
+  }
+
+  return accountDetails.every((account) => VIDEO_THUMBNAIL_PLATFORMS.has(cleanString(account.platform)));
+}
+
+function buildMediaPayload(mediaUrl, thumbnailUrl = null) {
+  const item = { url: mediaUrl };
+  const normalizedThumbnailUrl = normalizeHttpsUrl(thumbnailUrl);
+  if (normalizedThumbnailUrl) {
+    item.thumbnail_url = normalizedThumbnailUrl;
+  }
+  return [item];
 }
 
 function normalizeHashtags(value) {
@@ -361,10 +400,10 @@ async function uploadMediaToPostforme(apiKey, filePath) {
   return mediaUrl;
 }
 
-async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations) {
+async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations, thumbnailUrl = null) {
   const postBody = {
     caption,
-    media: [{ url: mediaUrl }],
+    media: buildMediaPayload(mediaUrl, thumbnailUrl),
     social_accounts: socialAccounts,
     isDraft,
   };
@@ -398,6 +437,7 @@ async function main() {
 
   const apiKeyFromEnv = process.env.POSTFORME_API_KEY;
   const litterboxUrl = process.env.LITTERBOX_URL;
+  const thumbnailUrl = normalizeHttpsUrl(process.env.THUMBNAIL_URL);
 
   let config = {};
   try {
@@ -475,6 +515,9 @@ async function main() {
 
       if (publishingPlan.publishMode === "stagger" && scheduledAccounts.length > 0) {
         for (const scheduledAccount of scheduledAccounts) {
+          const accountThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, [scheduledAccount.id], thumbnailUrl)
+            ? thumbnailUrl
+            : null;
           const livePost = await createPostformePost(
             apiKey,
             mediaUrl,
@@ -482,7 +525,8 @@ async function main() {
             [scheduledAccount.id],
             scheduledAccount.scheduled_at,
             false,
-            platformConfigurations
+            platformConfigurations,
+            accountThumbnailUrl
           );
 
           const createdId = livePost && (livePost.id || (livePost.data && livePost.data.id)) || null;
@@ -491,6 +535,9 @@ async function main() {
 
         livePostId = livePostIds.find(Boolean) || null;
       } else {
+        const liveThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, socialAccounts, thumbnailUrl)
+          ? thumbnailUrl
+          : null;
         const livePost = await createPostformePost(
           apiKey,
           mediaUrl,
@@ -498,7 +545,8 @@ async function main() {
           socialAccounts,
           scheduledAt,
           false,
-          platformConfigurations
+          platformConfigurations,
+          liveThumbnailUrl
         );
         livePostId = livePost && (livePost.id || (livePost.data && livePost.data.id)) || null;
         livePostIds = livePostId ? [livePostId] : [];
@@ -547,6 +595,7 @@ async function main() {
   const outputData = {
     success: true,
     media_url: mediaUrl,
+    thumbnail_url: thumbnailUrl || null,
     live_post_id: livePostId,
     live_post_ids: livePostIds.filter(Boolean),
     draft_post_id: draftPostId,
@@ -561,6 +610,8 @@ async function main() {
       caption,
       top_tagline: topTagline || "",
       bottom_tagline: bottomTagline || "",
+      thumbnail_url: thumbnailUrl || "",
+      thumbnail_platforms_supported: Array.from(VIDEO_THUMBNAIL_PLATFORMS),
       schedule_mode: cleanString(config.publish_mode) || (autoPublish ? "delay" : "immediate"),
       scheduled_accounts: scheduledAccountMetadata,
       platform_configurations: platformConfigurationMetadata,
@@ -582,6 +633,9 @@ module.exports = {
   ensureMinimumScheduledLead,
   normalizeTimezone,
   parseTimeValue,
+  canAttachThumbnailForAccounts,
+  buildMediaPayload,
+  VIDEO_THUMBNAIL_PLATFORMS,
 };
 
 if (require.main === module) {

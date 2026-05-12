@@ -301,6 +301,67 @@ export default function PublishTab({ data, onChange }: TabProps) {
         </div>
       )}
 
+
+      <div className="glass-card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-sm font-medium">Auto Thumbnail</p>
+            <p className="text-xs text-[#a1a1aa]">Original video se round cover + love/smile tagline banayega</p>
+          </div>
+          <button
+            onClick={() => onChange("thumbnail_enabled", data.thumbnail_enabled === false)}
+            className={`w-11 h-6 rounded-full transition-all ${data.thumbnail_enabled !== false ? "bg-gradient-to-r from-[#0ea5e9] to-[#6366f1]" : "bg-[rgba(255,255,255,0.1)]"}`}
+          >
+            <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.thumbnail_enabled !== false ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+          </button>
+        </div>
+
+        {data.thumbnail_enabled !== false && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Style</label>
+              <select className="glass-select text-sm" value={data.thumbnail_style as string || "blue_love"} onChange={(event) => onChange("thumbnail_style", event.target.value)}>
+                <option value="blue_love">Blue Love</option>
+                <option value="pink_love">Pink Love</option>
+                <option value="premium_dark">Premium Dark</option>
+                <option value="clean_white">Clean White</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Frame Source</label>
+              <select className="glass-select text-sm" value={data.thumbnail_source as string || "original"} onChange={(event) => onChange("thumbnail_source", event.target.value)}>
+                <option value="original">Original video frame</option>
+                <option value="processed">Processed video frame</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Frame Time</label>
+              <select className="glass-select text-sm" value={data.thumbnail_frame_time as string || "auto"} onChange={(event) => onChange("thumbnail_frame_time", event.target.value)}>
+                <option value="auto">Auto best frame</option>
+                <option value="1">1 second</option>
+                <option value="2">2 seconds</option>
+                <option value="3">3 seconds</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Brand Text</label>
+              <input className="glass-input text-sm" value={data.thumbnail_brand_text as string || "Prankwish.com"} onChange={(event) => onChange("thumbnail_brand_text", event.target.value)} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs text-[#a1a1aa] mb-1">Main Tagline</label>
+              <input className="glass-input text-sm" value={data.thumbnail_tagline as string || "Make Someone Smile Today"} onChange={(event) => onChange("thumbnail_tagline", event.target.value)} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs text-[#a1a1aa] mb-1">Small Tagline</label>
+              <input className="glass-input text-sm" value={data.thumbnail_subtitle as string || "Auto unique words each thumbnail"} onChange={(event) => onChange("thumbnail_subtitle", event.target.value)} />
+            </div>
+          </div>
+        )}
+        <p className="text-xs text-[#71717a] mt-3">
+          Safe mode: thumbnail fail ho to video automation continue rahegi. Subtitle line auto-unique words use karegi unless aap custom text dein. PostForMe thumbnail sirf Facebook, Instagram, TikTok Business aur YouTube accounts par attach hoga.
+        </p>
+      </div>
+
       <div className="glass-card p-5">
         <p className="text-sm font-medium mb-3">Output Settings</p>
         <div className="grid grid-cols-3 gap-4">

@@ -17,7 +17,7 @@ function readPostformeApiKeyFromConfig() {
   }
 }
 
-module.exports = async function post(litterboxUrl) {
+module.exports = async function post(litterboxUrl, thumbnailUrl = null) {
   const apiKey = process.env.POSTFORME_API_KEY || readPostformeApiKeyFromConfig();
   
   if (!apiKey) {
@@ -32,7 +32,7 @@ module.exports = async function post(litterboxUrl) {
       cwd: ROOT_DIR,
       stdio: 'inherit',
       timeout: 180000,
-      env: { ...process.env, LITTERBOX_URL: litterboxUrl, POSTFORME_API_KEY: apiKey }
+      env: { ...process.env, LITTERBOX_URL: litterboxUrl, THUMBNAIL_URL: thumbnailUrl || '', POSTFORME_API_KEY: apiKey }
     });
     
     console.log('[POST] OK');

@@ -9,6 +9,7 @@ const download = require('./steps/download');
 const processVideo = require('./steps/process');
 const upload = require('./steps/upload');
 const post = require('./steps/post');
+const { generateThumbnail, isThumbnailEnabled } = require('./thumbnail');
 const webhook = require('./steps/webhook');
 const tracker = require('./steps/tracker');
 
@@ -122,6 +123,46 @@ function saveLocalFinalMedia(config, extensionSuffix = '.mp4', sourceFile = path
   fs.copyFileSync(sourceFile, localPath);
   console.log(`[LOCAL] Saved locally: ${localPath}`);
   return localPath;
+}
+
+
+async function generateAndUploadThumbnail(config, sourceVideoFile, processedVideoFile, uploadFn = upload) {
+  if (!isThumbnailEnabled(config || {})) {
+    return null;
+  }
+
+  try {
+    const preferredSource = config?.thumbnail_source === 'processed' ? processedVideoFile : sourceVideoFile;
+    const fallbackSource = preferredSource && fs.existsSync(preferredSource)
+      ? preferredSource
+      : (processedVideoFile && fs.existsSync(processedVideoFile) ? processedVideoFile : sourceVideoFile);
+    if (!fallbackSource || !fs.existsSync(fallbackSource)) {
+      console.warn('[THUMBNAIL] Skipped - source video file missing');
+      return null;
+    }
+
+    const thumbnailFile = path.join(OUTPUT_DIR, `thumbnail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
+    const metadata = generateThumbnail(fallbackSource, thumbnailFile, config || {});
+    if (!metadata || !metadata.thumbnail_file || !fs.existsSync(metadata.thumbnail_file)) {
+      return null;
+    }
+
+    if (config?.skip_upload === true) {
+      const localPath = saveLocalFinalMedia(config, '-thumbnail.jpg', metadata.thumbnail_file);
+      return { ...metadata, thumbnail_url: localPath, upload_mode: 'local' };
+    }
+
+    const thumbnailUrl = await uploadFn(metadata.thumbnail_file);
+    if (!thumbnailUrl) {
+      return { ...metadata, thumbnail_url: null, upload_error: 'Thumbnail upload returned empty URL' };
+    }
+
+    return { ...metadata, thumbnail_url: thumbnailUrl, upload_mode: 'remote' };
+  } catch (error) {
+    console.warn('[THUMBNAIL] Non-blocking failure:', error.message);
+    appendErrorLog(`[THUMBNAIL] Non-blocking failure: ${error.message}`);
+    return null;
+  }
 }
 
 function getVideoDuration(inputFile) {
@@ -286,12 +327,29 @@ function readPostResult() {
   }
 }
 
-function buildProcessedVideoRecord({ videoUrl, originalUrl, aspectRatio, segment = null, postResult = null, merged = false, segmentCount = null }) {
+function buildProcessedVideoRecord({ videoUrl, originalUrl, aspectRatio, segment = null, postResult = null, merged = false, segmentCount = null, thumbnail = null }) {
   const record = {
     video_url: videoUrl,
     original_url: originalUrl,
     aspect_ratio: aspectRatio || '9:16',
   };
+
+  const thumbnailUrl = thumbnail?.thumbnail_url || postResult?.thumbnail_url || null;
+  if (thumbnailUrl) {
+    record.thumbnail_url = thumbnailUrl;
+  }
+  if (thumbnail && typeof thumbnail === 'object') {
+    record.thumbnail_metadata = {
+      style: thumbnail.style || '',
+      frame_time: Number.isFinite(Number(thumbnail.frame_time)) ? Number(thumbnail.frame_time) : null,
+      tagline: thumbnail.tagline || '',
+      subtitle: thumbnail.subtitle || '',
+      brand_text: thumbnail.brand_text || '',
+      width: Number.isFinite(Number(thumbnail.width)) ? Number(thumbnail.width) : null,
+      height: Number.isFinite(Number(thumbnail.height)) ? Number(thumbnail.height) : null,
+      upload_mode: thumbnail.upload_mode || '',
+    };
+  }
 
   if (segment) {
     record.segment_index = Number(segment.index) || 0;
@@ -476,6 +534,11 @@ async function main() {
           fs.copyFileSync(path.join(OUTPUT_DIR, 'processed-video.mp4'), processedSegmentFile);
           segmentOutputFiles.push(processedSegmentFile);
 
+          let thumbnailInfo = null;
+          if (!shouldMergeSegments) {
+            thumbnailInfo = await generateAndUploadThumbnail(segmentConfig, segOutputFile, processedSegmentFile);
+          }
+
           if (shouldMergeSegments) {
             continue;
           }
@@ -489,6 +552,7 @@ async function main() {
               originalUrl: url,
               aspectRatio,
               segment: seg,
+              thumbnail: thumbnailInfo,
             }));
             successCount++;
           } else {
@@ -497,7 +561,7 @@ async function main() {
 
           if (uploadUrl) {
             writeConfig(segmentConfig);
-            await post(uploadUrl);
+            await post(uploadUrl, thumbnailInfo?.thumbnail_url || null);
             const postResult = readPostResult();
             if (postResult) {
               lastPostResult = postResult;
@@ -510,6 +574,7 @@ async function main() {
               aspectRatio,
               segment: seg,
               postResult,
+              thumbnail: thumbnailInfo,
             });
             allProcessedVideos.push(processedVideoRecord);
 
@@ -532,13 +597,14 @@ async function main() {
             throw new Error('Merged video file could not be created');
           }
 
+          const thumbnailInfo = await generateAndUploadThumbnail(config, inputFile, builtMergedFile);
           let mergedUrl = null;
           if (config.skip_upload === true) {
             mergedUrl = saveLocalFinalMedia(config, '-merged.mp4', builtMergedFile);
           } else {
             writeConfig(config);
             mergedUrl = await upload(builtMergedFile);
-            await post(mergedUrl);
+            await post(mergedUrl, thumbnailInfo?.thumbnail_url || null);
             const mergedPostResult = readPostResult();
             if (mergedPostResult) {
               lastPostResult = mergedPostResult;
@@ -552,6 +618,7 @@ async function main() {
               originalUrl: url,
               aspectRatio: config.aspect_ratio || '9:16',
               postResult: lastPostResult,
+              thumbnail: thumbnailInfo,
               merged: true,
               segmentCount: segments.length,
             });
@@ -567,18 +634,23 @@ async function main() {
       } else {
         writeConfig(config);
         await processVideo();
+        const thumbnailInfo = await generateAndUploadThumbnail(
+          config,
+          path.join(OUTPUT_DIR, 'input-video.mp4'),
+          path.join(OUTPUT_DIR, 'processed-video.mp4')
+        );
         
         let uploadUrl = null;
         if (config.skip_upload === true) {
           const localPath = saveLocalFinalMedia(config);
           lastUrl = localPath;
-          allProcessedVideos.push({ video_url: localPath, original_url: url });
+          allProcessedVideos.push({ video_url: localPath, original_url: url, thumbnail_url: thumbnailInfo?.thumbnail_url || null });
         } else {
           uploadUrl = await upload();
         }
 
         if (uploadUrl) {
-          await post(uploadUrl);
+          await post(uploadUrl, thumbnailInfo?.thumbnail_url || null);
           const postResult = readPostResult();
           if (postResult) {
             lastPostResult = postResult;
@@ -590,6 +662,7 @@ async function main() {
             originalUrl: url,
             aspectRatio: config.aspect_ratio || '9:16',
             postResult,
+            thumbnail: thumbnailInfo,
           });
           allProcessedVideos.push(processedVideoRecord);
 

@@ -100,6 +100,13 @@ const DEFAULT_VIDEO_CONFIG = {
   postforme_schedule_timezone: "",
   post_stagger_minutes: "15",
   postforme_account_stagger_enabled: false,
+  thumbnail_enabled: true,
+  thumbnail_style: "blue_love",
+  thumbnail_source: "original",
+  thumbnail_frame_time: "auto",
+  thumbnail_tagline: "Make Someone Smile Today",
+  thumbnail_subtitle: "Love • Laugh • Smile",
+  thumbnail_brand_text: "Prankwish.com",
 };
 
 function extractPromptSocialContent(plan: PromptPlanPayload | null | undefined): {

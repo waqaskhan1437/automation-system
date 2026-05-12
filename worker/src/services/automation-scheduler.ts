@@ -1787,7 +1787,7 @@ export async function processDueAutomations(env: Env): Promise<void> {
 export async function processPendingUploads(env: Env): Promise<void> {
   // Get pending uploads
   const pendingUploads = await env.DB.prepare(
-    `SELECT vu.id as upload_id, vu.job_id, vu.media_url, j.automation_id, j.user_id, a.config, j.input_data AS job_input_data, j.output_data AS job_output_data
+    `SELECT vu.id as upload_id, vu.job_id, vu.media_url, vu.thumbnail_url, j.automation_id, j.user_id, a.config, j.input_data AS job_input_data, j.output_data AS job_output_data
      FROM video_uploads vu
      INNER JOIN jobs j ON j.id = vu.job_id
      INNER JOIN automations a ON a.id = j.automation_id
@@ -1798,6 +1798,7 @@ export async function processPendingUploads(env: Env): Promise<void> {
     upload_id: number;
     job_id: number;
     media_url: string;
+    thumbnail_url: string | null;
     automation_id: number;
     config: string;
     user_id: number;
@@ -1865,6 +1866,7 @@ export async function processPendingUploads(env: Env): Promise<void> {
         continue;
       }
       const mediaUrl = mediaUrls[0];
+      const thumbnailUrl = cleanPostformeText(upload.thumbnail_url);
 
       // Create draft post (always) for review queue
       const draftPost = await createPostformePost(
@@ -1956,7 +1958,8 @@ export async function processPendingUploads(env: Env): Promise<void> {
               [accountId],
               postScheduledAt,
               false,
-              content.platformConfigurations
+              content.platformConfigurations,
+              canAttachPostformeThumbnail([accountId], postformeSettings.saved_accounts, thumbnailUrl) ? thumbnailUrl : ""
             );
             const staggeredPostId = staggeredPost?.id || staggeredPost?.data?.id || null;
             scheduledAccountDetails.push({
@@ -2009,7 +2012,8 @@ export async function processPendingUploads(env: Env): Promise<void> {
             socialAccounts,
             scheduledAt,
             false,
-            content.platformConfigurations
+            content.platformConfigurations,
+            canAttachPostformeThumbnail(socialAccounts, postformeSettings.saved_accounts, thumbnailUrl) ? thumbnailUrl : ""
           );
           const livePostId = livePost?.id || livePost?.data?.id;
           console.log(`Live post created: ${livePostId}, scheduled: ${scheduledAt}, status: ${postStatus}`);
@@ -2061,6 +2065,7 @@ export async function processPendingUploads(env: Env): Promise<void> {
 }
 
 const POSTFORME_TITLE_PLATFORMS = new Set(["tiktok", "tiktok_business", "youtube"]);
+const POSTFORME_VIDEO_THUMBNAIL_PLATFORMS = new Set(["facebook", "instagram", "tiktok_business", "youtube"]);
 
 function cleanPostformeText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -2112,6 +2117,23 @@ function getSelectedPostformePlatforms(accountIds: string[], savedAccountsRaw: s
     .filter(Boolean);
 
   return Array.from(new Set(platforms));
+}
+
+function canAttachPostformeThumbnail(accountIds: string[], savedAccountsRaw: string | null | undefined, thumbnailUrl: string): boolean {
+  if (!thumbnailUrl.startsWith("https://") || !Array.isArray(accountIds) || accountIds.length === 0) {
+    return false;
+  }
+
+  const savedAccounts = parseSavedPostformeAccounts(savedAccountsRaw);
+  const matchedAccounts = accountIds
+    .map((accountId) => savedAccounts.find((account) => account.id === accountId) || null)
+    .filter((account): account is NonNullable<typeof account> => Boolean(account));
+
+  if (matchedAccounts.length !== accountIds.length) {
+    return false;
+  }
+
+  return matchedAccounts.every((account) => POSTFORME_VIDEO_THUMBNAIL_PLATFORMS.has(account.platform));
 }
 
 function buildPostformePlatformConfigurations(
@@ -2215,16 +2237,24 @@ async function createPostformePost(
   socialAccounts: string[],
   scheduledAt: string | null,
   isDraft: boolean,
-  platformConfigurations?: Record<string, { title: string }>
+  platformConfigurations?: Record<string, { title: string }>,
+  thumbnailUrl = ""
 ): Promise<{ id?: string; data?: { id?: string } }> {
   const normalizedMediaUrls = normalizeMediaUrls(mediaUrls);
   if (normalizedMediaUrls.length === 0) {
     throw new Error("At least one public media URL is required");
   }
 
+  const normalizedThumbnailUrl = cleanPostformeText(thumbnailUrl);
   const postBody: Record<string, unknown> = {
     caption,
-    media: normalizedMediaUrls.map((url) => ({ url })),
+    media: normalizedMediaUrls.map((url) => {
+      const media: Record<string, string> = { url };
+      if (normalizedThumbnailUrl.startsWith("https://")) {
+        media.thumbnail_url = normalizedThumbnailUrl;
+      }
+      return media;
+    }),
     social_accounts: socialAccounts,
     isDraft,
   };
