@@ -367,6 +367,86 @@ function getFormatDimensions(format, outputDimensions) {
   return FORMAT_DIMENSIONS[format] || FORMAT_DIMENSIONS["9:16"];
 }
 
+function normalizeAspectRatio(value) {
+  const raw = String(value || "9:16").trim().toLowerCase().replace(/\s+/g, "");
+  const map = {
+    "vertical": "9:16",
+    "short": "9:16",
+    "shorts": "9:16",
+    "reels": "9:16",
+    "tiktok": "9:16",
+    "portrait9:16": "9:16",
+    "9_16": "9:16",
+    "916": "9:16",
+    "vertical-fit": "9:16-fit",
+    "vertical_nocrop": "9:16-fit",
+    "vertical-no-crop": "9:16-fit",
+    "verticalfit": "9:16-fit",
+    "short-fit": "9:16-fit",
+    "short_nocrop": "9:16-fit",
+    "short-no-crop": "9:16-fit",
+    "shorts-fit": "9:16-fit",
+    "shorts_nocrop": "9:16-fit",
+    "shorts-no-crop": "9:16-fit",
+    "reels-fit": "9:16-fit",
+    "reels_nocrop": "9:16-fit",
+    "nocrop-short-vertical": "9:16-fit",
+    "no-crop-short-vertical": "9:16-fit",
+    "9_16-fit": "9:16-fit",
+    "9:16-nocrop": "9:16-fit",
+    "9:16-no-crop": "9:16-fit",
+    "916fit": "9:16-fit",
+    "square": "1:1",
+    "1_1": "1:1",
+    "square-fit": "1:1-fit",
+    "square_nocrop": "1:1-fit",
+    "1_1-fit": "1:1-fit",
+    "1:1-nocrop": "1:1-fit",
+    "landscape": "16:9",
+    "horizontal": "16:9",
+    "wide": "16:9",
+    "16_9": "16:9",
+    "landscape-fit": "16:9-fit",
+    "horizontal-fit": "16:9-fit",
+    "landscape_nocrop": "16:9-fit",
+    "16_9-fit": "16:9-fit",
+    "16:9-nocrop": "16:9-fit",
+    "portrait": "4:5",
+    "4_5": "4:5",
+    "portrait-fit": "4:5-fit",
+    "portrait_nocrop": "4:5-fit",
+    "4_5-fit": "4:5-fit",
+    "4:5-nocrop": "4:5-fit",
+    "original": "original",
+    "keeporiginal": "original"
+  };
+  const normalized = map[raw] || raw;
+  if (normalized === "original" || normalized.endsWith("-fit")) return normalized;
+  if (FORMAT_DIMENSIONS[normalized]) return normalized;
+  return "9:16";
+}
+
+function parseTextList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/\r?\n|\|\||,/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function resolveTaglineList(config, keys) {
+  for (const key of keys) {
+    const list = parseTextList(config[key]);
+    if (list.length > 0) return list;
+  }
+  return [];
+}
+
 function normalizeTaglineText(text) {
   return String(text || "")
     .replace(/\r\n?/g, "\n")
@@ -1026,12 +1106,13 @@ function main() {
   // Duration settings
   const rawDuration = config.short_duration;
   const duration = parseInt(rawDuration || "60") || 60;
-  const aspectRatio = config.aspect_ratio || "9:16";
+  const aspectRatio = normalizeAspectRatio(config.aspect_ratio || config.video_format || config.output_aspect_ratio || config.format || "9:16");
   
   console.log("=== DURATION CONFIG ===");
   console.log("short_duration raw:", rawDuration, "(type:", typeof rawDuration, ")");
   console.log("Final duration:", duration, "seconds");
   console.log("Aspect ratio:", aspectRatio);
+  console.log("Aspect ratio raw:", config.aspect_ratio, "video_format:", config.video_format, "output_aspect_ratio:", config.output_aspect_ratio);
   console.log("========================");
   
   // Legacy support: mute_audio boolean
@@ -1076,7 +1157,9 @@ function main() {
   const isOriginal = aspectRatio === "original";
   const baseRatio = aspectRatio.replace("-fit", "");
 
-  const outputResolution = parseResolution(config.output_resolution);
+  const outputResolutionMode = String(config.output_resolution_mode || "auto_by_aspect").trim();
+  const allowCustomResolution = outputResolutionMode === "custom" || config.lock_output_resolution === true || config.force_output_resolution === true;
+  const outputResolution = allowCustomResolution ? parseResolution(config.output_resolution) : null;
   let width = outputResolution?.width || 1080;
   let height = outputResolution?.height || 1920;
   if (!outputResolution) {
@@ -1085,6 +1168,7 @@ function main() {
     else if (baseRatio === "4:5") { width = 1080; height = 1350; }
     else if (baseRatio === "21:9") { width = 1920; height = 823; }
   }
+  console.log("Output resolution mode:", outputResolutionMode, "custom allowed:", allowCustomResolution, "final:", `${width}x${height}`);
 
   let filters = [];
 
@@ -1100,8 +1184,10 @@ function main() {
     filters.push(`crop=${width}:${height}`);
   }
 
-  const topTaglines = Array.isArray(config.top_taglines) ? config.top_taglines : [];
-  const bottomTaglines = Array.isArray(config.bottom_taglines) ? config.bottom_taglines : [];
+  const topTaglines = resolveTaglineList(config, ["top_taglines", "top_tagline", "tagline_top", "taglines_top", "hook_taglines"]);
+  const bottomTaglines = resolveTaglineList(config, ["bottom_taglines", "bottom_tagline", "tagline_bottom", "taglines_bottom", "cta_taglines"]);
+  console.log("Resolved top taglines:", topTaglines.length);
+  console.log("Resolved bottom taglines:", bottomTaglines.length);
 
   if (topTaglines.length > 0) {
     const tagline = topTaglines[Math.floor(Math.random() * topTaglines.length)];

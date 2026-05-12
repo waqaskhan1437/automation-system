@@ -240,6 +240,121 @@ function getVideoDuration(inputFile) {
   }
 }
 
+function hasAudioTrack(inputFile) {
+  try {
+    const output = execSync(`ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${inputFile}"`, { encoding: 'utf8' });
+    return String(output || '').toLowerCase().includes('audio');
+  } catch {
+    return false;
+  }
+}
+
+function normalizeAspectRatioForRunner(value) {
+  const raw = String(value || '9:16').trim().toLowerCase().replace(/\s+/g, '');
+  const aliases = {
+    vertical: '9:16', short: '9:16', shorts: '9:16', reels: '9:16', tiktok: '9:16', '9_16': '9:16',
+    'vertical-fit': '9:16-fit', vertical_nocrop: '9:16-fit', 'vertical-no-crop': '9:16-fit',
+    'short-fit': '9:16-fit', short_nocrop: '9:16-fit', 'short-no-crop': '9:16-fit',
+    'shorts-fit': '9:16-fit', shorts_nocrop: '9:16-fit', 'shorts-no-crop': '9:16-fit',
+    'nocrop-short-vertical': '9:16-fit', 'no-crop-short-vertical': '9:16-fit', '9:16-nocrop': '9:16-fit', '9_16-fit': '9:16-fit',
+    square: '1:1', '1_1': '1:1', 'square-fit': '1:1-fit', square_nocrop: '1:1-fit', '1_1-fit': '1:1-fit',
+    landscape: '16:9', horizontal: '16:9', wide: '16:9', '16_9': '16:9', 'landscape-fit': '16:9-fit', landscape_nocrop: '16:9-fit', '16_9-fit': '16:9-fit',
+    portrait: '4:5', '4_5': '4:5', 'portrait-fit': '4:5-fit', portrait_nocrop: '4:5-fit', '4_5-fit': '4:5-fit',
+    original: 'original'
+  };
+  return aliases[raw] || raw || '9:16';
+}
+
+function getOutputDimensionsForConfig(config = {}) {
+  const outputResolutionMode = String(config.output_resolution_mode || 'auto_by_aspect').trim();
+  const resolution = String(config.output_resolution || '').trim().match(/^(\d{3,5})x(\d{3,5})$/i);
+  if (resolution && (outputResolutionMode === 'custom' || config.lock_output_resolution === true || config.force_output_resolution === true)) {
+    return { width: parseInt(resolution[1], 10), height: parseInt(resolution[2], 10) };
+  }
+  const aspect = normalizeAspectRatioForRunner(config.aspect_ratio || config.video_format || config.output_aspect_ratio || '9:16').replace('-fit', '');
+  if (aspect === '16:9') return { width: 1920, height: 1080 };
+  if (aspect === '1:1') return { width: 1080, height: 1080 };
+  if (aspect === '4:5') return { width: 1080, height: 1350 };
+  if (aspect === '21:9') return { width: 1920, height: 823 };
+  return { width: 1080, height: 1920 };
+}
+
+function isCoverFrameEnabled(config = {}) {
+  if (config.social_cover_frame_enabled === false || String(config.social_cover_frame_enabled).toLowerCase() === 'false') return false;
+  if (config.thumbnail_as_first_frame === false || String(config.thumbnail_as_first_frame).toLowerCase() === 'false') return false;
+  // Default ON because YouTube Shorts/Facebook Reels commonly use a video frame,
+  // not the external thumbnail_url, for the visible thumbnail.
+  return config.thumbnail_enabled !== false;
+}
+
+function ensureAudioForConcat(inputFile, outputFile) {
+  if (hasAudioTrack(inputFile)) return inputFile;
+  console.log('[COVER] Final video has no audio; adding silent audio for concat');
+  execSync(`ffmpeg -y -i "${inputFile}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -shortest -c:v copy -c:a aac -movflags +faststart "${outputFile}"`, {
+    stdio: 'inherit',
+    timeout: 300000,
+  });
+  return outputFile;
+}
+
+function prependThumbnailCoverFrameSafe(config = {}, videoFile, thumbnailInfo = null, label = 'video') {
+  try {
+    if (!isCoverFrameEnabled(config)) {
+      console.log(`[COVER] Skipped for ${label}: disabled`);
+      return videoFile;
+    }
+    const thumbnailFile = thumbnailInfo?.thumbnail_file;
+    if (!thumbnailFile || !fs.existsSync(thumbnailFile)) {
+      console.log(`[COVER] Skipped for ${label}: thumbnail file missing`);
+      return videoFile;
+    }
+    if (!videoFile || !fs.existsSync(videoFile)) {
+      console.log(`[COVER] Skipped for ${label}: video file missing`);
+      return videoFile;
+    }
+
+    const { width, height } = getOutputDimensionsForConfig(config);
+    const duration = Math.max(0.3, Math.min(2.0, Number(config.social_cover_frame_duration || config.cover_frame_duration || 0.8) || 0.8));
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const coverVideo = path.join(OUTPUT_DIR, `cover-frame-${stamp}.mp4`);
+    const normalizedVideo = path.join(OUTPUT_DIR, `cover-source-${stamp}.mp4`);
+    const outputFile = path.join(OUTPUT_DIR, `final-with-cover-${stamp}.mp4`);
+    const finalForConcat = ensureAudioForConcat(videoFile, normalizedVideo);
+    const coverFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p`;
+
+    console.log(`[COVER] Prepending thumbnail cover frame for ${label}: ${duration}s @ ${width}x${height}`);
+    execSync(`ffmpeg -y -loop 1 -t ${duration} -i "${thumbnailFile}" -f lavfi -t ${duration} -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "${coverFilter}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -shortest -movflags +faststart "${coverVideo}"`, {
+      stdio: 'inherit',
+      timeout: 300000,
+    });
+
+    execSync(`ffmpeg -y -i "${coverVideo}" -i "${finalForConcat}" -filter_complex "[0:v]setsar=1[v0];[1:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p[v1];[0:a]aresample=44100[a0];[1:a]aresample=44100[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]" -map "[v]" -map "[a]" -c:v libx264 -preset veryfast -crf 24 -c:a aac -movflags +faststart "${outputFile}"`, {
+      stdio: 'inherit',
+      timeout: 600000,
+    });
+
+    if (!fs.existsSync(outputFile) || fs.statSync(outputFile).size <= 0) {
+      console.warn(`[COVER] Output not created for ${label}; using original final video`);
+      return videoFile;
+    }
+
+    try {
+      const stable = path.join(OUTPUT_DIR, 'final-video-with-cover.mp4');
+      fs.copyFileSync(outputFile, stable);
+      fs.copyFileSync(outputFile, path.join(OUTPUT_DIR, 'processed-video.mp4'));
+    } catch (copyError) {
+      console.warn(`[COVER] Could not write stable cover artifacts: ${copyError.message}`);
+    }
+
+    console.log(`[COVER] Applied for ${label}: ${outputFile}`);
+    return outputFile;
+  } catch (error) {
+    console.warn(`[COVER] Non-blocking failure for ${label}: ${error.message}`);
+    appendErrorLog(`[COVER] Non-blocking failure for ${label}: ${error.message}`);
+    return videoFile;
+  }
+}
+
 function splitVideoIntoSegments(inputFile, segmentCount, segmentDuration) {
   const segments = [];
   const videoDuration = getVideoDuration(inputFile);
@@ -599,15 +714,17 @@ async function main() {
           processSegmentDirect(segOutputFile, duration, aspectRatio, segmentConfig, seg.index);
           const processedSegmentFile = path.join(OUTPUT_DIR, `processed-segment-${i}-${seg.index}.mp4`);
           fs.copyFileSync(path.join(OUTPUT_DIR, 'processed-video.mp4'), processedSegmentFile);
-          const finalSegmentFile = shouldMergeSegments
-            ? processedSegmentFile
-            : await attachIntroToProcessedVideo(segmentConfig, processedSegmentFile, `segment ${seg.index + 1}`);
-          segmentOutputFiles.push(finalSegmentFile);
-
           let thumbnailInfo = null;
           if (!shouldMergeSegments) {
-            thumbnailInfo = await generateAndUploadThumbnail(segmentConfig, segOutputFile, finalSegmentFile);
+            thumbnailInfo = await generateAndUploadThumbnail(segmentConfig, segOutputFile, processedSegmentFile);
           }
+          const introSegmentFile = shouldMergeSegments
+            ? processedSegmentFile
+            : await attachIntroToProcessedVideo(segmentConfig, processedSegmentFile, `segment ${seg.index + 1}`);
+          const finalSegmentFile = shouldMergeSegments
+            ? introSegmentFile
+            : prependThumbnailCoverFrameSafe(segmentConfig, introSegmentFile, thumbnailInfo, `segment ${seg.index + 1}`);
+          segmentOutputFiles.push(finalSegmentFile);
 
           if (shouldMergeSegments) {
             continue;
@@ -667,8 +784,9 @@ async function main() {
             throw new Error('Merged video file could not be created');
           }
 
-          const finalMergedFile = await attachIntroToProcessedVideo(config, builtMergedFile, 'merged video');
-          const thumbnailInfo = await generateAndUploadThumbnail(config, inputFile, finalMergedFile);
+          const thumbnailInfo = await generateAndUploadThumbnail(config, inputFile, builtMergedFile);
+          const introMergedFile = await attachIntroToProcessedVideo(config, builtMergedFile, 'merged video');
+          const finalMergedFile = prependThumbnailCoverFrameSafe(config, introMergedFile, thumbnailInfo, 'merged video');
           let mergedUrl = null;
           if (config.skip_upload === true) {
             mergedUrl = saveLocalFinalMedia(config, '-merged.mp4', finalMergedFile);
@@ -706,12 +824,13 @@ async function main() {
         writeConfig(config);
         await processVideo();
         const processedFile = path.join(OUTPUT_DIR, 'processed-video.mp4');
-        const finalProcessedFile = await attachIntroToProcessedVideo(config, processedFile, 'video');
         const thumbnailInfo = await generateAndUploadThumbnail(
           config,
           path.join(OUTPUT_DIR, 'input-video.mp4'),
-          finalProcessedFile
+          processedFile
         );
+        const introProcessedFile = await attachIntroToProcessedVideo(config, processedFile, 'video');
+        const finalProcessedFile = prependThumbnailCoverFrameSafe(config, introProcessedFile, thumbnailInfo, 'video');
         
         let uploadUrl = null;
         if (config.skip_upload === true) {

@@ -437,10 +437,34 @@ export default function PublishTab({ data, onChange }: TabProps) {
               <label className="block text-xs text-[#a1a1aa] mb-1">Small Tagline</label>
               <input className="glass-input text-sm" value={data.thumbnail_subtitle as string || "Auto unique words each thumbnail"} onChange={(event) => onChange("thumbnail_subtitle", event.target.value)} />
             </div>
+            <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3 rounded-xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-3">
+              <label className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-white">Thumbnail as first frame</p>
+                  <p className="text-[11px] text-[#71717a]">Facebook Reels / YouTube Shorts blank thumbnail fix.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onChange("social_cover_frame_enabled", data.social_cover_frame_enabled === false)}
+                  className={`w-11 h-6 rounded-full transition-all ${data.social_cover_frame_enabled !== false ? "bg-gradient-to-r from-[#22c55e] to-[#0ea5e9]" : "bg-[rgba(255,255,255,0.1)]"}`}
+                >
+                  <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.social_cover_frame_enabled !== false ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+                </button>
+              </label>
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">First frame duration</label>
+                <select className="glass-select text-sm" value={data.social_cover_frame_duration as string || "0.8"} onChange={(event) => onChange("social_cover_frame_duration", event.target.value)}>
+                  <option value="0.5">0.5 sec</option>
+                  <option value="0.8">0.8 sec recommended</option>
+                  <option value="1.0">1 sec</option>
+                  <option value="1.5">1.5 sec</option>
+                </select>
+              </div>
+            </div>
           </div>
         )}
         <p className="text-xs text-[#71717a] mt-3">
-          Safe mode: thumbnail fail ho to video automation continue rahegi. Subtitle line auto-unique words use karegi unless aap custom text dein. PostForMe thumbnail sirf Facebook, Instagram, TikTok Business aur YouTube accounts par attach hoga.
+          Safe mode: thumbnail fail ho to video automation continue rahegi. Facebook/YouTube short-form par external thumbnail ke bajaye first-frame cover use hoga.
         </p>
       </div>
 
@@ -465,7 +489,7 @@ export default function PublishTab({ data, onChange }: TabProps) {
           </div>
           <div>
             <label className="block text-xs text-[#a1a1aa] mb-1">Resolution</label>
-            <select className="glass-select text-sm" value={data.output_resolution as string || "1080x1920"} onChange={(event) => onChange("output_resolution", event.target.value)}>
+            <select className="glass-select text-sm" value={data.output_resolution as string || "1080x1920"} onChange={(event) => { onChange("output_resolution", event.target.value); onChange("output_resolution_mode", "custom"); }}>
               <option value="1080x1920">1080x1920</option>
               <option value="1920x1080">1920x1080</option>
               <option value="1080x1080">1080x1080</option>

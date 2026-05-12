@@ -5,6 +5,7 @@ const OUTPUT_DIR = path.join(process.cwd(), "output");
 const FETCH_TIMEOUT_MS = 30000;
 const TITLE_PLATFORMS = new Set(["youtube", "tiktok", "tiktok_business"]);
 const VIDEO_THUMBNAIL_PLATFORMS = new Set(["facebook", "instagram", "tiktok_business", "youtube"]);
+const SHORT_FORM_EXTERNAL_THUMBNAIL_UNRELIABLE = new Set(["facebook", "youtube"]);
 
 async function timedFetch(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -51,7 +52,20 @@ function getAccountDetailsForIds(selectedAccounts, accountIds) {
     .filter(Boolean);
 }
 
-function canAttachThumbnailForAccounts(selectedAccounts, accountIds, thumbnailUrl) {
+function isShortFormConfig(config = {}) {
+  const aspect = cleanString(config.aspect_ratio || config.video_format || config.output_aspect_ratio).toLowerCase();
+  const placementText = JSON.stringify(config.platform_configurations || config.postforme_platform_configurations || {}).toLowerCase();
+  const publishKind = cleanString(config.publish_format || config.post_format || config.content_format).toLowerCase();
+  return aspect.includes("9:16")
+    || aspect.includes("short")
+    || aspect.includes("reel")
+    || placementText.includes("reel")
+    || placementText.includes("short")
+    || publishKind.includes("reel")
+    || publishKind.includes("short");
+}
+
+function canAttachThumbnailForAccounts(selectedAccounts, accountIds, thumbnailUrl, config = {}) {
   const normalizedThumbnailUrl = normalizeHttpsUrl(thumbnailUrl);
   if (!normalizedThumbnailUrl || !Array.isArray(accountIds) || accountIds.length === 0) {
     return false;
@@ -62,7 +76,20 @@ function canAttachThumbnailForAccounts(selectedAccounts, accountIds, thumbnailUr
     return false;
   }
 
-  return accountDetails.every((account) => VIDEO_THUMBNAIL_PLATFORMS.has(cleanString(account.platform)));
+  const allowExternalForShorts = config.external_thumbnail_mode === "all_supported"
+    || config.send_external_thumbnail_url === true
+    || String(config.send_external_thumbnail_url).toLowerCase() === "true";
+  const shortForm = isShortFormConfig(config);
+
+  return accountDetails.every((account) => {
+    const platform = cleanString(account.platform);
+    if (!VIDEO_THUMBNAIL_PLATFORMS.has(platform)) return false;
+    if (shortForm && !allowExternalForShorts && SHORT_FORM_EXTERNAL_THUMBNAIL_UNRELIABLE.has(platform)) {
+      console.log(`[THUMBNAIL] Not sending external thumbnail_url to ${platform} short-form post; first video frame cover will be used instead.`);
+      return false;
+    }
+    return true;
+  });
 }
 
 function buildMediaPayload(mediaUrl, thumbnailUrl = null) {
@@ -515,7 +542,7 @@ async function main() {
 
       if (publishingPlan.publishMode === "stagger" && scheduledAccounts.length > 0) {
         for (const scheduledAccount of scheduledAccounts) {
-          const accountThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, [scheduledAccount.id], thumbnailUrl)
+          const accountThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, [scheduledAccount.id], thumbnailUrl, config)
             ? thumbnailUrl
             : null;
           const livePost = await createPostformePost(
@@ -535,7 +562,7 @@ async function main() {
 
         livePostId = livePostIds.find(Boolean) || null;
       } else {
-        const liveThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, socialAccounts, thumbnailUrl)
+        const liveThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, socialAccounts, thumbnailUrl, config)
           ? thumbnailUrl
           : null;
         const livePost = await createPostformePost(
@@ -612,6 +639,7 @@ async function main() {
       bottom_tagline: bottomTagline || "",
       thumbnail_url: thumbnailUrl || "",
       thumbnail_platforms_supported: Array.from(VIDEO_THUMBNAIL_PLATFORMS),
+      external_thumbnail_sent_policy: cleanString(config.external_thumbnail_mode) || "short_form_first_frame_for_facebook_youtube",
       schedule_mode: cleanString(config.publish_mode) || (autoPublish ? "delay" : "immediate"),
       scheduled_accounts: scheduledAccountMetadata,
       platform_configurations: platformConfigurationMetadata,

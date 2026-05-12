@@ -1,0 +1,8 @@
+{
+  "aspect_ratio":"1:1-fit",
+  "short_duration":"2",
+  "output_resolution":"1080x1920",
+  "output_resolution_mode":"auto_by_aspect",
+  "top_taglines":"TOP STRING TAGLINE",
+  "bottom_taglines":"BOTTOM STRING TAGLINE"
+}
