@@ -20,4 +20,10 @@ runs:
       run: |
         set -euo pipefail
         cd runner-scripts
-        npm ci --prefer-offline --no-audit --fund=false
+        npm_install() {
+          timeout 300s npm ci --prefer-offline --no-audit --fund=false --fetch-timeout=60000 --fetch-retries=2
+        }
+        npm_install || {
+          echo "npm ci failed or timed out; retrying once with online cache refresh"
+          timeout 300s npm ci --no-audit --fund=false --fetch-timeout=60000 --fetch-retries=2
+        }

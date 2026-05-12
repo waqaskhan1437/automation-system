@@ -79,62 +79,64 @@ jobs:
           restore-keys: |
             playwright-chromium-${{ runner.os }}-
 
-      - name: Install FFmpeg and fonts fast
-        timeout-minutes: 6
+      - name: Verify FFmpeg without apt install
+        timeout-minutes: 3
         run: |
           set -euo pipefail
-          mkdir -p runner-scripts/output
-          export DEBIAN_FRONTEND=noninteractive
+          mkdir -p runner-scripts/output .github-tools/bin
 
           log() {
-            echo "[SETUP] $*" | tee -a runner-scripts/output/setup-tools.log
+            echo "[TOOLS] $*" | tee -a runner-scripts/output/setup-tools.log
           }
 
-          retry() {
-            local attempts="$1"
-            shift
-            local n=1
-            until "$@"; do
-              local exit_code=$?
-              if [ "$n" -ge "$attempts" ]; then
-                log "Command failed after $n attempts: $*"
-                return "$exit_code"
-              fi
-              log "Attempt $n failed for: $*"
-              n=$((n + 1))
-              sleep $((n * 5))
-            done
-          }
+          export PATH="$PWD/.github-tools/bin:$PATH"
 
-          NEED_APT=0
-          command -v ffmpeg >/dev/null 2>&1 || NEED_APT=1
-          command -v ffprobe >/dev/null 2>&1 || NEED_APT=1
-          command -v curl >/dev/null 2>&1 || NEED_APT=1
-          command -v python3 >/dev/null 2>&1 || NEED_APT=1
-          command -v fc-match >/dev/null 2>&1 || NEED_APT=1
-          [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || NEED_APT=1
-
-          if [ "$NEED_APT" -eq 0 ]; then
-            log "System tools already available; skipping apt install."
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            log "Using preinstalled FFmpeg: $(command -v ffmpeg)"
           else
-            log "Installing missing system tools with apt lock timeout and hard timeout."
-            retry 2 timeout 120s sudo apt-get -o DPkg::Lock::Timeout=60 update -qq
-            retry 2 timeout 240s sudo apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
-              ca-certificates \
-              curl \
-              ffmpeg \
-              fontconfig \
-              fonts-dejavu-core \
-              fonts-liberation \
-              python3
-          fi
+            log "FFmpeg not found; downloading static FFmpeg binary without apt-get."
+            ARCH="$(uname -m)"
+            if [ "$ARCH" != "x86_64" ] && [ "$ARCH" != "amd64" ]; then
+              log "Unsupported architecture for static FFmpeg bootstrap: $ARCH"
+              exit 1
+            fi
 
-          fc-cache -f >/dev/null 2>&1 || true
+            TMP_DIR="$(mktemp -d)"
+            cleanup() { rm -rf "$TMP_DIR"; }
+            trap cleanup EXIT
+
+            if ! timeout 90s curl -fsSL --connect-timeout 15 --retry 1 --retry-delay 3 \
+              "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+              -o "$TMP_DIR/ffmpeg-static.tar.xz"; then
+              log "Static FFmpeg download failed or timed out. Failing fast instead of hanging on apt-get."
+              exit 1
+            fi
+
+            timeout 30s tar -xJf "$TMP_DIR/ffmpeg-static.tar.xz" -C "$TMP_DIR"
+            FFMPEG_DIR="$(find "$TMP_DIR" -maxdepth 1 -type d -name 'ffmpeg-*-amd64-static' | head -n 1)"
+            test -n "$FFMPEG_DIR"
+            cp "$FFMPEG_DIR/ffmpeg" "$FFMPEG_DIR/ffprobe" .github-tools/bin/
+            chmod +x .github-tools/bin/ffmpeg .github-tools/bin/ffprobe
+            echo "$PWD/.github-tools/bin" >> "$GITHUB_PATH"
+            log "Static FFmpeg installed to repo-local tools directory."
+          fi
 
           command -v ffmpeg | tee -a runner-scripts/output/setup-tools.log
           command -v ffprobe | tee -a runner-scripts/output/setup-tools.log
           ffmpeg -version | head -1 | tee runner-scripts/output/ffmpeg-version.txt
-          fc-match DejaVuSans-Bold.ttf | head -1 | tee -a runner-scripts/output/setup-tools.log || true
+
+          node - <<'NODE' | tee -a runner-scripts/output/setup-tools.log
+          const fs = require('fs');
+          const candidates = [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/lato/Lato-Bold.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf'
+          ];
+          const found = candidates.find((file) => fs.existsSync(file));
+          console.log(found ? `Font available: ${found}` : 'No preferred font file found; process-video will use FFmpeg Sans fallback.');
+          NODE
 
       - name: Install Playwright Chromium fast
         timeout-minutes: 8
