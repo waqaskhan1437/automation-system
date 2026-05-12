@@ -593,6 +593,13 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     setSaving(true);
     try {
       const configToSave = normalizeLegacyGooglePhotosConfig({ ...data });
+      if (configToSave.intro_enabled === true) {
+        configToSave.intro_disabled = false;
+      } else {
+        configToSave.intro_enabled = false;
+        configToSave.intro_disabled = true;
+        configToSave.intro_required = false;
+      }
       if (configToSave.short_generation_mode === "prompt") {
         const promptSourceType = typeof configToSave.prompt_source_type === "string" ? configToSave.prompt_source_type : "youtube";
         if (promptSourceType === "youtube" || promptSourceType === "direct") {

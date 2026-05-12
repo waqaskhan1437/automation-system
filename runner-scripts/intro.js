@@ -159,8 +159,9 @@ function hasAnyIntroSource(config = {}) {
 }
 
 function isIntroEnabled(config = {}) {
-  if (config.intro_enabled === false) return false;
-  if (config.intro_enabled === true) return true;
+  if (config.intro_disabled === true || String(config.intro_disabled).toLowerCase() === 'true') return false;
+  if (config.intro_enabled === false || String(config.intro_enabled).toLowerCase() === 'false') return false;
+  if (config.intro_enabled === true || String(config.intro_enabled).toLowerCase() === 'true') return true;
   return hasAnyIntroSource(config);
 }
 

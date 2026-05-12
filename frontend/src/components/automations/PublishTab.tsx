@@ -110,6 +110,14 @@ export default function PublishTab({ data, onChange }: TabProps) {
     onChange("postforme_account_ids", updated);
   };
 
+  const setIntroEnabled = (enabled: boolean) => {
+    onChange("intro_enabled", enabled);
+    onChange("intro_disabled", !enabled);
+    if (!enabled) {
+      onChange("intro_required", false);
+    }
+  };
+
   const platformColors: Record<string, string> = {
     instagram: "#E1306C",
     youtube: "#FF0000",
@@ -309,7 +317,7 @@ export default function PublishTab({ data, onChange }: TabProps) {
             <p className="text-xs text-[#a1a1aa]">Selected format ke hisaab se intro video ko final processed video se pehle attach karega</p>
           </div>
           <button
-            onClick={() => onChange("intro_enabled", data.intro_enabled !== true)}
+            onClick={() => setIntroEnabled(data.intro_enabled !== true)}
             className={`w-11 h-6 rounded-full transition-all ${data.intro_enabled === true ? "bg-gradient-to-r from-[#ec4899] to-[#f59e0b]" : "bg-[rgba(255,255,255,0.1)]"}`}
           >
             <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.intro_enabled === true ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
