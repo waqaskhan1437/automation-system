@@ -10,6 +10,7 @@ const processVideo = require('./steps/process');
 const upload = require('./steps/upload');
 const post = require('./steps/post');
 const { generateThumbnail, isThumbnailEnabled } = require('./thumbnail');
+const { attachIntroSafe } = require('./intro');
 const webhook = require('./steps/webhook');
 const tracker = require('./steps/tracker');
 
@@ -163,6 +164,19 @@ async function generateAndUploadThumbnail(config, sourceVideoFile, processedVide
     appendErrorLog(`[THUMBNAIL] Non-blocking failure: ${error.message}`);
     return null;
   }
+}
+
+
+async function attachIntroToProcessedVideo(config, processedFile, label = 'video') {
+  const introResult = await attachIntroSafe(config || {}, processedFile);
+  if (introResult && introResult.intro_applied && introResult.video_file && fs.existsSync(introResult.video_file)) {
+    console.log(`[INTRO] Applied to ${label}: ${introResult.video_file}`);
+    return introResult.video_file;
+  }
+  if (introResult && introResult.reason) {
+    console.log(`[INTRO] Skipped for ${label}: ${introResult.reason}`);
+  }
+  return processedFile;
 }
 
 function getVideoDuration(inputFile) {
@@ -532,11 +546,14 @@ async function main() {
           processSegmentDirect(segOutputFile, duration, aspectRatio, segmentConfig, seg.index);
           const processedSegmentFile = path.join(OUTPUT_DIR, `processed-segment-${i}-${seg.index}.mp4`);
           fs.copyFileSync(path.join(OUTPUT_DIR, 'processed-video.mp4'), processedSegmentFile);
-          segmentOutputFiles.push(processedSegmentFile);
+          const finalSegmentFile = shouldMergeSegments
+            ? processedSegmentFile
+            : await attachIntroToProcessedVideo(segmentConfig, processedSegmentFile, `segment ${seg.index + 1}`);
+          segmentOutputFiles.push(finalSegmentFile);
 
           let thumbnailInfo = null;
           if (!shouldMergeSegments) {
-            thumbnailInfo = await generateAndUploadThumbnail(segmentConfig, segOutputFile, processedSegmentFile);
+            thumbnailInfo = await generateAndUploadThumbnail(segmentConfig, segOutputFile, finalSegmentFile);
           }
 
           if (shouldMergeSegments) {
@@ -545,7 +562,7 @@ async function main() {
 
           let uploadUrl = null;
           if (config.skip_upload === true) {
-            const localPath = saveLocalFinalMedia(segmentConfig, `-seg${seg.index}.mp4`, processedSegmentFile);
+            const localPath = saveLocalFinalMedia(segmentConfig, `-seg${seg.index}.mp4`, finalSegmentFile);
             lastUrl = localPath;
             allProcessedVideos.push(buildProcessedVideoRecord({
               videoUrl: localPath,
@@ -556,7 +573,7 @@ async function main() {
             }));
             successCount++;
           } else {
-            uploadUrl = await upload(processedSegmentFile);
+            uploadUrl = await upload(finalSegmentFile);
           }
 
           if (uploadUrl) {
@@ -597,13 +614,14 @@ async function main() {
             throw new Error('Merged video file could not be created');
           }
 
-          const thumbnailInfo = await generateAndUploadThumbnail(config, inputFile, builtMergedFile);
+          const finalMergedFile = await attachIntroToProcessedVideo(config, builtMergedFile, 'merged video');
+          const thumbnailInfo = await generateAndUploadThumbnail(config, inputFile, finalMergedFile);
           let mergedUrl = null;
           if (config.skip_upload === true) {
-            mergedUrl = saveLocalFinalMedia(config, '-merged.mp4', builtMergedFile);
+            mergedUrl = saveLocalFinalMedia(config, '-merged.mp4', finalMergedFile);
           } else {
             writeConfig(config);
-            mergedUrl = await upload(builtMergedFile);
+            mergedUrl = await upload(finalMergedFile);
             await post(mergedUrl, thumbnailInfo?.thumbnail_url || null);
             const mergedPostResult = readPostResult();
             if (mergedPostResult) {
@@ -634,19 +652,21 @@ async function main() {
       } else {
         writeConfig(config);
         await processVideo();
+        const processedFile = path.join(OUTPUT_DIR, 'processed-video.mp4');
+        const finalProcessedFile = await attachIntroToProcessedVideo(config, processedFile, 'video');
         const thumbnailInfo = await generateAndUploadThumbnail(
           config,
           path.join(OUTPUT_DIR, 'input-video.mp4'),
-          path.join(OUTPUT_DIR, 'processed-video.mp4')
+          finalProcessedFile
         );
         
         let uploadUrl = null;
         if (config.skip_upload === true) {
-          const localPath = saveLocalFinalMedia(config);
+          const localPath = saveLocalFinalMedia(config, '.mp4', finalProcessedFile);
           lastUrl = localPath;
           allProcessedVideos.push({ video_url: localPath, original_url: url, thumbnail_url: thumbnailInfo?.thumbnail_url || null });
         } else {
-          uploadUrl = await upload();
+          uploadUrl = await upload(finalProcessedFile);
         }
 
         if (uploadUrl) {

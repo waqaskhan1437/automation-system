@@ -305,6 +305,60 @@ export default function PublishTab({ data, onChange }: TabProps) {
       <div className="glass-card p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
+            <p className="text-sm font-medium">Intro Before Video</p>
+            <p className="text-xs text-[#a1a1aa]">Selected format ke hisaab se intro video ko final processed video se pehle attach karega</p>
+          </div>
+          <button
+            onClick={() => onChange("intro_enabled", data.intro_enabled !== true)}
+            className={`w-11 h-6 rounded-full transition-all ${data.intro_enabled === true ? "bg-gradient-to-r from-[#ec4899] to-[#f59e0b]" : "bg-[rgba(255,255,255,0.1)]"}`}
+          >
+            <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.intro_enabled === true ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
+          </button>
+        </div>
+
+        {data.intro_enabled === true && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Vertical Intro URL 9:16 / Shorts / Reels</label>
+              <input className="glass-input text-sm" placeholder="https://.../intro-vertical.mp4" value={data.intro_url_vertical as string || ""} onChange={(event) => onChange("intro_url_vertical", event.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Landscape Intro URL 16:9</label>
+              <input className="glass-input text-sm" placeholder="https://.../intro-landscape.mp4" value={data.intro_url_landscape as string || ""} onChange={(event) => onChange("intro_url_landscape", event.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Square Intro URL 1:1</label>
+              <input className="glass-input text-sm" placeholder="https://.../intro-square.mp4" value={data.intro_url_square as string || ""} onChange={(event) => onChange("intro_url_square", event.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Portrait Intro URL 4:5</label>
+              <input className="glass-input text-sm" placeholder="https://.../intro-4x5.mp4" value={data.intro_url_4_5 as string || ""} onChange={(event) => onChange("intro_url_4_5", event.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Intro Duration Limit</label>
+              <select className="glass-select text-sm" value={data.intro_duration_limit as string || "8"} onChange={(event) => onChange("intro_duration_limit", event.target.value)}>
+                <option value="3">3 seconds</option>
+                <option value="5">5 seconds</option>
+                <option value="8">8 seconds</option>
+                <option value="10">10 seconds</option>
+                <option value="15">15 seconds</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Fallback Intro URL</label>
+              <input className="glass-input text-sm" placeholder="optional fallback mp4 url" value={data.intro_url as string || ""} onChange={(event) => onChange("intro_url", event.target.value)} />
+            </div>
+          </div>
+        )}
+        <p className="text-xs text-[#71717a] mt-3">
+          Recommended: intro files ko R2/Cloudinary public direct MP4 URL par rakhen. Intro fail ho to automation video ko fail nahi karegi, sirf intro skip hoga.
+        </p>
+      </div>
+
+
+      <div className="glass-card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
             <p className="text-sm font-medium">Auto Thumbnail</p>
             <p className="text-xs text-[#a1a1aa]">Original video se round cover + love/smile tagline banayega</p>
           </div>

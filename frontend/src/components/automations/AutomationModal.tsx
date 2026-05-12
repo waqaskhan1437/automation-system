@@ -107,6 +107,12 @@ const DEFAULT_VIDEO_CONFIG = {
   thumbnail_tagline: "Make Someone Smile Today",
   thumbnail_subtitle: "Love • Laugh • Smile",
   thumbnail_brand_text: "Prankwish.com",
+  intro_enabled: false,
+  intro_duration_limit: "8",
+  intro_url_vertical: "",
+  intro_url_landscape: "",
+  intro_url_square: "",
+  intro_url_4_5: "",
 };
 
 function extractPromptSocialContent(plan: PromptPlanPayload | null | undefined): {
