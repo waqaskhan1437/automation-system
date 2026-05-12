@@ -40,6 +40,21 @@ function parseResolution(value, fallback = { width: DEFAULT_WIDTH, height: DEFAU
   return { width, height };
 }
 
+
+function normalizeFitMode(value, fallback = 'contain') {
+  const raw = cleanString(value).toLowerCase().replace(/\s+/g, '_').replace(/-/g, '_');
+  if (['cover', 'crop', 'fill', 'fill_crop', 'screen_fill'].includes(raw)) return 'cover';
+  if (['contain', 'fit', 'no_crop', 'fit_no_crop', 'pad', 'letterbox'].includes(raw)) return 'contain';
+  return fallback;
+}
+
+function resolveIntroFitMode(config = {}) {
+  return normalizeFitMode(
+    config.intro_fit_mode || config.intro_scale_mode || config.intro_resize_mode || config.intro_mode_fit,
+    'contain'
+  );
+}
+
 function normalizeAspect(value) {
   const raw = cleanString(value).toLowerCase().replace(/\s+/g, '').replace('x', ':');
   if (!raw) return '';
@@ -345,12 +360,21 @@ function runFfmpeg(args, label, timeout = 900000) {
   }
 }
 
+function buildResizeFilter(width, height, fitMode = 'cover') {
+  const mode = normalizeFitMode(fitMode, 'cover');
+  if (mode === 'contain') {
+    return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,format=yuv420p`;
+  }
+  return `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,fps=30,format=yuv420p`;
+}
+
 function normalizeClip(inputFile, outputFile, resolution, options = {}) {
   const width = resolution.width;
   const height = resolution.height;
   const durationLimit = parsePositiveNumber(options.durationLimit, null);
+  const fitMode = normalizeFitMode(options.fitMode, 'cover');
   const audio = hasAudioStream(inputFile);
-  const vf = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,fps=30,format=yuv420p`;
+  const vf = buildResizeFilter(width, height, fitMode);
   const args = ['-y', '-i', inputFile];
 
   if (!audio) {
@@ -370,6 +394,7 @@ function normalizeClip(inputFile, outputFile, resolution, options = {}) {
   if (!audio) args.push('-shortest');
   args.push(outputFile);
 
+  console.log(`[INTRO] Normalizing ${path.basename(inputFile)} with fit_mode=${fitMode} target=${width}x${height}`);
   runFfmpeg(args, `Normalize clip ${path.basename(inputFile)}`);
 
   if (!fs.existsSync(outputFile) || fs.statSync(outputFile).size <= 0) {
@@ -449,9 +474,11 @@ async function attachIntro(config = {}, processedVideoFile, outputFile = null) {
   const videoNormalized = path.join(OUTPUT_DIR, `video-normalized-${token}.mp4`);
   const finalOutput = path.resolve(outputFile || path.join(OUTPUT_DIR, `processed-with-intro-${token}.mp4`));
   const durationLimit = Math.min(parsePositiveNumber(config.intro_duration_limit, 8) || 8, 30);
+  const introFitMode = resolveIntroFitMode(config);
 
   console.log(`[INTRO] Selected ${selection.key || 'unknown'} for aspect=${selection.aspect} resolution=${resolution.width}x${resolution.height}`);
   console.log(`[INTRO] Source URL/file: ${selection.source}`);
+  console.log(`[INTRO] Fit mode: ${introFitMode} (${introFitMode === 'contain' ? 'full intro visible, no crop' : 'fill screen and crop'})`);
 
   await downloadIntroSource(selection.source, introRaw);
 
@@ -459,8 +486,8 @@ async function attachIntro(config = {}, processedVideoFile, outputFile = null) {
   if (!introDuration) throw new Error('Downloaded intro has no readable duration');
   const usedDurationLimit = introDuration && introDuration < durationLimit ? introDuration : durationLimit;
   console.log(`[INTRO] Normalizing intro (${usedDurationLimit.toFixed(2)}s max) and processed video...`);
-  normalizeClip(introRaw, introNormalized, resolution, { durationLimit: usedDurationLimit });
-  normalizeClip(sourceFile, videoNormalized, resolution, {});
+  normalizeClip(introRaw, introNormalized, resolution, { durationLimit: usedDurationLimit, fitMode: introFitMode });
+  normalizeClip(sourceFile, videoNormalized, resolution, { fitMode: 'cover' });
 
   concatClips([introNormalized, videoNormalized], finalOutput);
 
@@ -478,6 +505,7 @@ async function attachIntro(config = {}, processedVideoFile, outputFile = null) {
     selection,
     intro_duration_detected: introDuration,
     intro_duration_limit: usedDurationLimit,
+    intro_fit_mode: introFitMode,
     original_duration: originalDuration,
     final_duration: finalDuration,
     width: resolution.width,
@@ -512,5 +540,6 @@ module.exports = {
   isIntroEnabled,
   resolveIntroSource,
   resolveIntroSourceDetailed,
+  resolveIntroFitMode,
   resolveOutputResolution,
 };

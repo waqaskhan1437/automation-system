@@ -262,16 +262,36 @@ function getFontFile(fontFamily, fontStyle) {
     return findExistingFont(WINDOWS_FONT_MAP.ubuntu.bold) || null;
   }
 
-  const family = FONT_MAP[fontFamily] || FONT_MAP.ubuntu;
-  const styleMap = {
-    normal: family.normal,
-    bold: family.bold,
-    italic: family.italic,
-    bold_italic: family.bold_italic,
-    medium: family.medium,
-    medium_italic: family.medium_italic
+  const tryFamily = (familyName) => {
+    const family = FONT_MAP[familyName];
+    if (!family) return null;
+    const styleMap = {
+      normal: family.normal,
+      bold: family.bold,
+      italic: family.italic,
+      bold_italic: family.bold_italic,
+      medium: family.medium,
+      medium_italic: family.medium_italic
+    };
+    const candidate = path.join(FONT_DIR, styleMap[fontStyle] || family.bold);
+    return fs.existsSync(candidate) ? candidate : null;
   };
-  return path.join(FONT_DIR, styleMap[fontStyle] || family.bold);
+
+  // GitHub runners do not always have Ubuntu fonts. Taglines must not disappear
+  // just because the preferred font is missing, so fall back to commonly
+  // available Linux fonts before skipping drawtext.
+  const requested = tryFamily(fontFamily);
+  if (requested) return requested;
+
+  for (const fallbackFamily of ["dejavu", "liberation", "lato", "noto", "nimbus", "ubuntu"]) {
+    const fallback = tryFamily(fallbackFamily);
+    if (fallback) {
+      console.log(`Font fallback: ${fontFamily || "default"}/${fontStyle || "bold"} -> ${fallbackFamily} (${fallback})`);
+      return fallback;
+    }
+  }
+
+  return null;
 }
 
 function getFormatDimensions(format, outputDimensions) {

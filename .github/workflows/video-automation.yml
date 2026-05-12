@@ -112,6 +112,7 @@ jobs:
           command -v curl >/dev/null 2>&1 || NEED_APT=1
           command -v python3 >/dev/null 2>&1 || NEED_APT=1
           command -v fc-match >/dev/null 2>&1 || NEED_APT=1
+          [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || NEED_APT=1
 
           if [ "$NEED_APT" -eq 0 ]; then
             log "System tools already available; skipping apt install."
@@ -124,6 +125,7 @@ jobs:
               ffmpeg \
               fontconfig \
               fonts-dejavu-core \
+              fonts-liberation \
               python3
           fi
 

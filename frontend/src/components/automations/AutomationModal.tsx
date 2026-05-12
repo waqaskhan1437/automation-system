@@ -223,6 +223,9 @@ function normalizeIntroConfig(config: Record<string, unknown>): Record<string, u
 
   next.intro_enabled = true;
   next.intro_disabled = false;
+  if (!readCleanString(next.intro_fit_mode || next.intro_scale_mode || next.intro_resize_mode)) {
+    next.intro_fit_mode = 'contain';
+  }
 
   const existingMap = next.intro_urls && typeof next.intro_urls === "object" && !Array.isArray(next.intro_urls)
     ? { ...(next.intro_urls as Record<string, unknown>) }

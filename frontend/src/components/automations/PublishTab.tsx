@@ -353,6 +353,14 @@ export default function PublishTab({ data, onChange }: TabProps) {
               </select>
             </div>
             <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Intro Fit Mode</label>
+              <select className="glass-select text-sm" value={data.intro_fit_mode as string || "contain"} onChange={(event) => onChange("intro_fit_mode", event.target.value)}>
+                <option value="contain">Fit / No crop (recommended)</option>
+                <option value="cover">Fill screen / Crop edges</option>
+              </select>
+              <p className="text-[11px] text-[#71717a] mt-1">Fit mode intro ko full visible rakhta hai; left/right crop nahi hota.</p>
+            </div>
+            <div className="md:col-span-2">
               <label className="block text-xs text-[#a1a1aa] mb-1">Fallback Intro URL</label>
               <input className="glass-input text-sm" placeholder="optional fallback mp4 url" value={data.intro_url as string || ""} onChange={(event) => onChange("intro_url", event.target.value)} />
             </div>
@@ -371,7 +379,7 @@ export default function PublishTab({ data, onChange }: TabProps) {
           </div>
         )}
         <p className="text-xs text-[#71717a] mt-3">
-          Recommended: intro files ko R2/Cloudinary public direct MP4 URL par rakhen. New robust mode multiple URL field aliases check karta hai, curl/fetch fallback use karta hai, aur intro_metadata.json mein applied/skipped/failed reason save karta hai.
+          Recommended: intro files ko R2/Cloudinary public direct MP4 URL par rakhen. Intro Fit Mode default no-crop hai, is liye logo/text left-right cut nahi honge. intro_metadata.json mein applied/skipped/failed reason aur fit mode save hota hai.
         </p>
       </div>
 

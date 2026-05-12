@@ -176,6 +176,9 @@ function normalizeIntroConfigForRun(config: Record<string, unknown>): Record<str
 
   next.intro_enabled = true;
   next.intro_disabled = false;
+  if (!readString(next.intro_fit_mode).trim() && !readString(next.intro_scale_mode).trim() && !readString(next.intro_resize_mode).trim()) {
+    next.intro_fit_mode = 'contain';
+  }
 
   const fallback = readString(next.intro_url).trim() || readString(next.fallback_intro_url).trim() || readString(next.intro_fallback_url).trim() || readString(introUrls.fallback).trim() || readString(introUrls.default).trim() || readString(introUrls.intro).trim();
   const vertical = readString(next.intro_url_vertical).trim() || readString(next.intro_vertical_url).trim() || readString(next.vertical_intro_url).trim() || readString(introUrls.vertical_9_16).trim() || readString(introUrls.vertical).trim() || readString(introUrls.shorts).trim() || fallback;
