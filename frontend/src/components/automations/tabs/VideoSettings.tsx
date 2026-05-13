@@ -8,15 +8,6 @@ interface Props {
 const perRunPresets = ["1", "3", "5", "10"];
 const durationPresets = ["15", "30", "45", "60", "90"];
 
-function resolutionForAspectRatio(value: string): string {
-  const base = value.replace("-fit", "");
-  if (base === "16:9") return "1920x1080";
-  if (base === "1:1") return "1080x1080";
-  if (base === "4:5") return "1080x1350";
-  if (base === "21:9") return "1920x823";
-  return "1080x1920";
-}
-
 export default function VideoSettings({ data, onChange }: Props) {
   const currentPerRun = (data.videos_per_run as string) || "1";
   const currentDuration = (data.short_duration as string) || "60";
@@ -127,12 +118,7 @@ export default function VideoSettings({ data, onChange }: Props) {
         </label>
         <select
           value={(data.aspect_ratio as string) || "9:16"}
-          onChange={e => {
-            const nextRatio = e.target.value;
-            onChange("aspect_ratio", nextRatio);
-            onChange("output_resolution", resolutionForAspectRatio(nextRatio));
-            onChange("output_resolution_mode", "auto_by_aspect");
-          }}
+          onChange={e => onChange("aspect_ratio", e.target.value)}
           className="w-full px-2.5 py-2 bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-lg text-xs text-white focus:border-purple-500 focus:outline-none transition-all"
         >
           <optgroup label="Crop (fill screen, may cut edges)">

@@ -42,7 +42,6 @@ interface ScheduledUpload {
   automation_id?: number | null;
   automation_name?: string | null;
   media_url: string;
-  thumbnail_url?: string | null;
   post_status: string;
   scheduled_at: string | null;
   postforme_id: string | null;
@@ -409,9 +408,7 @@ export default function ScheduledPostsModal({
                   <div key={upload.id} className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] p-4">
                     <div className="flex gap-4">
                       <div className="w-24 h-32 bg-[#27272a] rounded-xl overflow-hidden flex-shrink-0">
-                        {upload.thumbnail_url ? (
-                          <img src={upload.thumbnail_url} alt="Scheduled thumbnail preview" className="w-full h-full object-cover" />
-                        ) : isLikelyImageUrl(upload.media_url) ? (
+                        {isLikelyImageUrl(upload.media_url) ? (
                           <img src={upload.media_url} alt="Scheduled media preview" className="w-full h-full object-cover" />
                         ) : (
                           <video src={upload.media_url} className="w-full h-full object-cover" />

@@ -130,117 +130,6 @@ function normalizeHttpUrlText(value: unknown): string {
   return splitHttpLines(value).join("\n");
 }
 
-
-function hasIntroRunUrl(config: Record<string, unknown>): boolean {
-  const introUrls = config.intro_urls;
-  const flatKeys = [
-    "intro_url",
-    "fallback_intro_url",
-    "intro_url_fallback",
-    "intro_fallback_url",
-    "default_intro_url",
-    "intro_url_vertical",
-    "intro_vertical_url",
-    "vertical_intro_url",
-    "intro_url_landscape",
-    "intro_landscape_url",
-    "landscape_intro_url",
-    "intro_url_square",
-    "intro_square_url",
-    "square_intro_url",
-    "intro_url_4_5",
-    "intro_4_5_url",
-    "intro_url_portrait",
-    "intro_portrait_url",
-  ];
-  if (flatKeys.some((key) => readString(config[key]).trim().startsWith("http"))) return true;
-  if (introUrls && typeof introUrls === "object" && !Array.isArray(introUrls)) {
-    return Object.values(introUrls as Record<string, unknown>).some((value) => readString(value).trim().startsWith("http"));
-  }
-  return false;
-}
-
-function normalizeIntroConfigForRun(config: Record<string, unknown>): Record<string, unknown> {
-  const next = { ...config };
-  const introUrls = next.intro_urls && typeof next.intro_urls === "object" && !Array.isArray(next.intro_urls)
-    ? { ...(next.intro_urls as Record<string, unknown>) }
-    : {};
-  const enabled = next.intro_enabled === true || String(next.intro_enabled).toLowerCase() === "true" || hasIntroRunUrl(next);
-
-  if (!enabled || next.intro_disabled === true || String(next.intro_disabled).toLowerCase() === "true") {
-    next.intro_enabled = false;
-    next.intro_disabled = true;
-    next.intro_required = false;
-    return next;
-  }
-
-  next.intro_enabled = true;
-  next.intro_disabled = false;
-  if (!readString(next.intro_fit_mode).trim() && !readString(next.intro_scale_mode).trim() && !readString(next.intro_resize_mode).trim()) {
-    next.intro_fit_mode = 'contain';
-  }
-
-  const fallback = readString(next.intro_url).trim() || readString(next.fallback_intro_url).trim() || readString(next.intro_fallback_url).trim() || readString(introUrls.fallback).trim() || readString(introUrls.default).trim() || readString(introUrls.intro).trim();
-  const vertical = readString(next.intro_url_vertical).trim() || readString(next.intro_vertical_url).trim() || readString(next.vertical_intro_url).trim() || readString(introUrls.vertical_9_16).trim() || readString(introUrls.vertical).trim() || readString(introUrls.shorts).trim() || fallback;
-  const landscape = readString(next.intro_url_landscape).trim() || readString(next.intro_landscape_url).trim() || readString(next.landscape_intro_url).trim() || readString(introUrls.landscape_16_9).trim() || readString(introUrls.landscape).trim() || readString(introUrls.youtube).trim() || fallback;
-  const square = readString(next.intro_url_square).trim() || readString(next.intro_square_url).trim() || readString(next.square_intro_url).trim() || readString(introUrls.square_1_1).trim() || readString(introUrls.square).trim() || fallback;
-  const portrait = readString(next.intro_url_4_5).trim() || readString(next.intro_4_5_url).trim() || readString(next.intro_url_portrait).trim() || readString(next.intro_portrait_url).trim() || readString(introUrls.portrait_4_5).trim() || readString(introUrls.portrait).trim() || fallback;
-  const any = vertical || landscape || square || portrait || fallback;
-
-  if (vertical) next.intro_url_vertical = vertical;
-  if (landscape) next.intro_url_landscape = landscape;
-  if (square) next.intro_url_square = square;
-  if (portrait) next.intro_url_4_5 = portrait;
-  if (any) next.intro_url = any;
-
-  next.intro_urls = {
-    ...introUrls,
-    ...(vertical ? {
-      "9:16": vertical,
-      "9_16": vertical,
-      vertical_9_16: vertical,
-      vertical,
-      shorts_9_16: vertical,
-      shorts: vertical,
-      reels_9_16: vertical,
-      reels: vertical,
-      tiktok_9_16: vertical,
-      tiktok: vertical,
-    } : {}),
-    ...(landscape ? {
-      "16:9": landscape,
-      "16_9": landscape,
-      landscape_16_9: landscape,
-      landscape,
-      youtube_16_9: landscape,
-      youtube: landscape,
-      facebook_16_9: landscape,
-      facebook: landscape,
-    } : {}),
-    ...(square ? {
-      "1:1": square,
-      "1_1": square,
-      square_1_1: square,
-      square,
-    } : {}),
-    ...(portrait ? {
-      "4:5": portrait,
-      "4_5": portrait,
-      portrait_4_5: portrait,
-      portrait,
-      feed_4_5: portrait,
-    } : {}),
-    ...(any ? {
-      fallback: any,
-      default: any,
-      default_intro: any,
-      intro: any,
-    } : {}),
-  };
-
-  return next;
-}
-
 function getGooglePhotosSourceUrls(config: Record<string, unknown>): { text: string; migratedFromAlbumUrl: boolean } {
   const linksText = normalizeHttpUrlText(config.google_photos_links);
   if (linksText) return { text: linksText, migratedFromAlbumUrl: false };
@@ -1242,7 +1131,7 @@ export async function triggerAutomationRun(
 
   let config: Record<string, unknown>;
   try {
-    config = normalizeIntroConfigForRun(parseAutomationConfig(automation.config));
+    config = parseAutomationConfig(automation.config);
   } catch (err) {
     return {
       success: false,
@@ -1898,7 +1787,7 @@ export async function processDueAutomations(env: Env): Promise<void> {
 export async function processPendingUploads(env: Env): Promise<void> {
   // Get pending uploads
   const pendingUploads = await env.DB.prepare(
-    `SELECT vu.id as upload_id, vu.job_id, vu.media_url, vu.thumbnail_url, j.automation_id, j.user_id, a.config, j.input_data AS job_input_data, j.output_data AS job_output_data
+    `SELECT vu.id as upload_id, vu.job_id, vu.media_url, j.automation_id, j.user_id, a.config, j.input_data AS job_input_data, j.output_data AS job_output_data
      FROM video_uploads vu
      INNER JOIN jobs j ON j.id = vu.job_id
      INNER JOIN automations a ON a.id = j.automation_id
@@ -1909,7 +1798,6 @@ export async function processPendingUploads(env: Env): Promise<void> {
     upload_id: number;
     job_id: number;
     media_url: string;
-    thumbnail_url: string | null;
     automation_id: number;
     config: string;
     user_id: number;
@@ -1977,7 +1865,6 @@ export async function processPendingUploads(env: Env): Promise<void> {
         continue;
       }
       const mediaUrl = mediaUrls[0];
-      const thumbnailUrl = cleanPostformeText(upload.thumbnail_url);
 
       // Create draft post (always) for review queue
       const draftPost = await createPostformePost(
@@ -2069,8 +1956,7 @@ export async function processPendingUploads(env: Env): Promise<void> {
               [accountId],
               postScheduledAt,
               false,
-              content.platformConfigurations,
-              canAttachPostformeThumbnail([accountId], postformeSettings.saved_accounts, thumbnailUrl) ? thumbnailUrl : ""
+              content.platformConfigurations
             );
             const staggeredPostId = staggeredPost?.id || staggeredPost?.data?.id || null;
             scheduledAccountDetails.push({
@@ -2123,8 +2009,7 @@ export async function processPendingUploads(env: Env): Promise<void> {
             socialAccounts,
             scheduledAt,
             false,
-            content.platformConfigurations,
-            canAttachPostformeThumbnail(socialAccounts, postformeSettings.saved_accounts, thumbnailUrl) ? thumbnailUrl : ""
+            content.platformConfigurations
           );
           const livePostId = livePost?.id || livePost?.data?.id;
           console.log(`Live post created: ${livePostId}, scheduled: ${scheduledAt}, status: ${postStatus}`);
@@ -2176,7 +2061,6 @@ export async function processPendingUploads(env: Env): Promise<void> {
 }
 
 const POSTFORME_TITLE_PLATFORMS = new Set(["tiktok", "tiktok_business", "youtube"]);
-const POSTFORME_VIDEO_THUMBNAIL_PLATFORMS = new Set(["facebook", "instagram", "tiktok_business", "youtube"]);
 
 function cleanPostformeText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -2228,23 +2112,6 @@ function getSelectedPostformePlatforms(accountIds: string[], savedAccountsRaw: s
     .filter(Boolean);
 
   return Array.from(new Set(platforms));
-}
-
-function canAttachPostformeThumbnail(accountIds: string[], savedAccountsRaw: string | null | undefined, thumbnailUrl: string): boolean {
-  if (!thumbnailUrl.startsWith("https://") || !Array.isArray(accountIds) || accountIds.length === 0) {
-    return false;
-  }
-
-  const savedAccounts = parseSavedPostformeAccounts(savedAccountsRaw);
-  const matchedAccounts = accountIds
-    .map((accountId) => savedAccounts.find((account) => account.id === accountId) || null)
-    .filter((account): account is NonNullable<typeof account> => Boolean(account));
-
-  if (matchedAccounts.length !== accountIds.length) {
-    return false;
-  }
-
-  return matchedAccounts.every((account) => POSTFORME_VIDEO_THUMBNAIL_PLATFORMS.has(account.platform));
 }
 
 function buildPostformePlatformConfigurations(
@@ -2348,24 +2215,16 @@ async function createPostformePost(
   socialAccounts: string[],
   scheduledAt: string | null,
   isDraft: boolean,
-  platformConfigurations?: Record<string, { title: string }>,
-  thumbnailUrl = ""
+  platformConfigurations?: Record<string, { title: string }>
 ): Promise<{ id?: string; data?: { id?: string } }> {
   const normalizedMediaUrls = normalizeMediaUrls(mediaUrls);
   if (normalizedMediaUrls.length === 0) {
     throw new Error("At least one public media URL is required");
   }
 
-  const normalizedThumbnailUrl = cleanPostformeText(thumbnailUrl);
   const postBody: Record<string, unknown> = {
     caption,
-    media: normalizedMediaUrls.map((url) => {
-      const media: Record<string, string> = { url };
-      if (normalizedThumbnailUrl.startsWith("https://")) {
-        media.thumbnail_url = normalizedThumbnailUrl;
-      }
-      return media;
-    }),
+    media: normalizedMediaUrls.map((url) => ({ url })),
     social_accounts: socialAccounts,
     isDraft,
   };

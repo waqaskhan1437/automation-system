@@ -4,8 +4,6 @@ const path = require("path");
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 const FETCH_TIMEOUT_MS = 30000;
 const TITLE_PLATFORMS = new Set(["youtube", "tiktok", "tiktok_business"]);
-const VIDEO_THUMBNAIL_PLATFORMS = new Set(["facebook", "instagram", "tiktok_business", "youtube"]);
-const SHORT_FORM_EXTERNAL_THUMBNAIL_UNRELIABLE = new Set(["facebook", "youtube"]);
 
 async function timedFetch(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -35,70 +33,6 @@ function parsePositiveInteger(value, fallback = null) {
 
 function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeHttpsUrl(value) {
-  const url = cleanString(value);
-  return /^https:\/\//i.test(url) ? url : "";
-}
-
-function getAccountDetailsForIds(selectedAccounts, accountIds) {
-  if (!Array.isArray(selectedAccounts) || !Array.isArray(accountIds) || accountIds.length === 0) {
-    return [];
-  }
-
-  return accountIds
-    .map((accountId) => selectedAccounts.find((account) => account && account.id === accountId) || null)
-    .filter(Boolean);
-}
-
-function isShortFormConfig(config = {}) {
-  const aspect = cleanString(config.aspect_ratio || config.video_format || config.output_aspect_ratio).toLowerCase();
-  const placementText = JSON.stringify(config.platform_configurations || config.postforme_platform_configurations || {}).toLowerCase();
-  const publishKind = cleanString(config.publish_format || config.post_format || config.content_format).toLowerCase();
-  return aspect.includes("9:16")
-    || aspect.includes("short")
-    || aspect.includes("reel")
-    || placementText.includes("reel")
-    || placementText.includes("short")
-    || publishKind.includes("reel")
-    || publishKind.includes("short");
-}
-
-function canAttachThumbnailForAccounts(selectedAccounts, accountIds, thumbnailUrl, config = {}) {
-  const normalizedThumbnailUrl = normalizeHttpsUrl(thumbnailUrl);
-  if (!normalizedThumbnailUrl || !Array.isArray(accountIds) || accountIds.length === 0) {
-    return false;
-  }
-
-  const accountDetails = getAccountDetailsForIds(selectedAccounts, accountIds);
-  if (accountDetails.length !== accountIds.length) {
-    return false;
-  }
-
-  const allowExternalForShorts = config.external_thumbnail_mode === "all_supported"
-    || config.send_external_thumbnail_url === true
-    || String(config.send_external_thumbnail_url).toLowerCase() === "true";
-  const shortForm = isShortFormConfig(config);
-
-  return accountDetails.every((account) => {
-    const platform = cleanString(account.platform);
-    if (!VIDEO_THUMBNAIL_PLATFORMS.has(platform)) return false;
-    if (shortForm && !allowExternalForShorts && SHORT_FORM_EXTERNAL_THUMBNAIL_UNRELIABLE.has(platform)) {
-      console.log(`[THUMBNAIL] Not sending external thumbnail_url to ${platform} short-form post; first video frame cover will be used instead.`);
-      return false;
-    }
-    return true;
-  });
-}
-
-function buildMediaPayload(mediaUrl, thumbnailUrl = null) {
-  const item = { url: mediaUrl };
-  const normalizedThumbnailUrl = normalizeHttpsUrl(thumbnailUrl);
-  if (normalizedThumbnailUrl) {
-    item.thumbnail_url = normalizedThumbnailUrl;
-  }
-  return [item];
 }
 
 function normalizeHashtags(value) {
@@ -427,10 +361,10 @@ async function uploadMediaToPostforme(apiKey, filePath) {
   return mediaUrl;
 }
 
-async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations, thumbnailUrl = null) {
+async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations) {
   const postBody = {
     caption,
-    media: buildMediaPayload(mediaUrl, thumbnailUrl),
+    media: [{ url: mediaUrl }],
     social_accounts: socialAccounts,
     isDraft,
   };
@@ -464,7 +398,6 @@ async function main() {
 
   const apiKeyFromEnv = process.env.POSTFORME_API_KEY;
   const litterboxUrl = process.env.LITTERBOX_URL;
-  const thumbnailUrl = normalizeHttpsUrl(process.env.THUMBNAIL_URL);
 
   let config = {};
   try {
@@ -542,9 +475,6 @@ async function main() {
 
       if (publishingPlan.publishMode === "stagger" && scheduledAccounts.length > 0) {
         for (const scheduledAccount of scheduledAccounts) {
-          const accountThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, [scheduledAccount.id], thumbnailUrl, config)
-            ? thumbnailUrl
-            : null;
           const livePost = await createPostformePost(
             apiKey,
             mediaUrl,
@@ -552,8 +482,7 @@ async function main() {
             [scheduledAccount.id],
             scheduledAccount.scheduled_at,
             false,
-            platformConfigurations,
-            accountThumbnailUrl
+            platformConfigurations
           );
 
           const createdId = livePost && (livePost.id || (livePost.data && livePost.data.id)) || null;
@@ -562,9 +491,6 @@ async function main() {
 
         livePostId = livePostIds.find(Boolean) || null;
       } else {
-        const liveThumbnailUrl = canAttachThumbnailForAccounts(selectedAccountDetails, socialAccounts, thumbnailUrl, config)
-          ? thumbnailUrl
-          : null;
         const livePost = await createPostformePost(
           apiKey,
           mediaUrl,
@@ -572,8 +498,7 @@ async function main() {
           socialAccounts,
           scheduledAt,
           false,
-          platformConfigurations,
-          liveThumbnailUrl
+          platformConfigurations
         );
         livePostId = livePost && (livePost.id || (livePost.data && livePost.data.id)) || null;
         livePostIds = livePostId ? [livePostId] : [];
@@ -622,7 +547,6 @@ async function main() {
   const outputData = {
     success: true,
     media_url: mediaUrl,
-    thumbnail_url: thumbnailUrl || null,
     live_post_id: livePostId,
     live_post_ids: livePostIds.filter(Boolean),
     draft_post_id: draftPostId,
@@ -637,9 +561,6 @@ async function main() {
       caption,
       top_tagline: topTagline || "",
       bottom_tagline: bottomTagline || "",
-      thumbnail_url: thumbnailUrl || "",
-      thumbnail_platforms_supported: Array.from(VIDEO_THUMBNAIL_PLATFORMS),
-      external_thumbnail_sent_policy: cleanString(config.external_thumbnail_mode) || "short_form_first_frame_for_facebook_youtube",
       schedule_mode: cleanString(config.publish_mode) || (autoPublish ? "delay" : "immediate"),
       scheduled_accounts: scheduledAccountMetadata,
       platform_configurations: platformConfigurationMetadata,
@@ -661,9 +582,6 @@ module.exports = {
   ensureMinimumScheduledLead,
   normalizeTimezone,
   parseTimeValue,
-  canAttachThumbnailForAccounts,
-  buildMediaPayload,
-  VIDEO_THUMBNAIL_PLATFORMS,
 };
 
 if (require.main === module) {

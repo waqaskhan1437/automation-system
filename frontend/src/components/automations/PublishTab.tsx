@@ -110,14 +110,6 @@ export default function PublishTab({ data, onChange }: TabProps) {
     onChange("postforme_account_ids", updated);
   };
 
-  const setIntroEnabled = (enabled: boolean) => {
-    onChange("intro_enabled", enabled);
-    onChange("intro_disabled", !enabled);
-    if (!enabled) {
-      onChange("intro_required", false);
-    }
-  };
-
   const platformColors: Record<string, string> = {
     instagram: "#E1306C",
     youtube: "#FF0000",
@@ -309,165 +301,6 @@ export default function PublishTab({ data, onChange }: TabProps) {
         </div>
       )}
 
-
-      <div className="glass-card p-5">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <p className="text-sm font-medium">Intro Before Video</p>
-            <p className="text-xs text-[#a1a1aa]">Selected format ke hisaab se intro video ko final processed video se pehle attach karega</p>
-          </div>
-          <button
-            onClick={() => setIntroEnabled(data.intro_enabled !== true)}
-            className={`w-11 h-6 rounded-full transition-all ${data.intro_enabled === true ? "bg-gradient-to-r from-[#ec4899] to-[#f59e0b]" : "bg-[rgba(255,255,255,0.1)]"}`}
-          >
-            <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.intro_enabled === true ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
-          </button>
-        </div>
-
-        {data.intro_enabled === true && (
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Vertical Intro URL 9:16 / Shorts / Reels</label>
-              <input className="glass-input text-sm" placeholder="https://.../intro-vertical.mp4" value={data.intro_url_vertical as string || ""} onChange={(event) => onChange("intro_url_vertical", event.target.value)} />
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Landscape Intro URL 16:9</label>
-              <input className="glass-input text-sm" placeholder="https://.../intro-landscape.mp4" value={data.intro_url_landscape as string || ""} onChange={(event) => onChange("intro_url_landscape", event.target.value)} />
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Square Intro URL 1:1</label>
-              <input className="glass-input text-sm" placeholder="https://.../intro-square.mp4" value={data.intro_url_square as string || ""} onChange={(event) => onChange("intro_url_square", event.target.value)} />
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Portrait Intro URL 4:5</label>
-              <input className="glass-input text-sm" placeholder="https://.../intro-4x5.mp4" value={data.intro_url_4_5 as string || ""} onChange={(event) => onChange("intro_url_4_5", event.target.value)} />
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Intro Duration Limit</label>
-              <select className="glass-select text-sm" value={data.intro_duration_limit as string || "8"} onChange={(event) => onChange("intro_duration_limit", event.target.value)}>
-                <option value="3">3 seconds</option>
-                <option value="5">5 seconds</option>
-                <option value="8">8 seconds</option>
-                <option value="10">10 seconds</option>
-                <option value="15">15 seconds</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Intro Fit Mode</label>
-              <select className="glass-select text-sm" value={data.intro_fit_mode as string || "contain"} onChange={(event) => onChange("intro_fit_mode", event.target.value)}>
-                <option value="contain">Fit / No crop (recommended)</option>
-                <option value="cover">Fill screen / Crop edges</option>
-              </select>
-              <p className="text-[11px] text-[#71717a] mt-1">Fit mode intro ko full visible rakhta hai; left/right crop nahi hota.</p>
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-xs text-[#a1a1aa] mb-1">Fallback Intro URL</label>
-              <input className="glass-input text-sm" placeholder="optional fallback mp4 url" value={data.intro_url as string || ""} onChange={(event) => onChange("intro_url", event.target.value)} />
-            </div>
-            <div className="md:col-span-2 flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-              <div>
-                <p className="text-sm font-medium">Require Intro Attach</p>
-                <p className="text-xs text-[#a1a1aa]">ON karne par intro na lage to job fail hogi aur exact reason logs mein milega.</p>
-              </div>
-              <button
-                onClick={() => onChange("intro_required", data.intro_required !== true)}
-                className={`w-11 h-6 rounded-full transition-all ${data.intro_required === true ? "bg-gradient-to-r from-[#ef4444] to-[#f59e0b]" : "bg-[rgba(255,255,255,0.1)]"}`}
-              >
-                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.intro_required === true ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
-              </button>
-            </div>
-          </div>
-        )}
-        <p className="text-xs text-[#71717a] mt-3">
-          Recommended: intro files ko R2/Cloudinary public direct MP4 URL par rakhen. Intro Fit Mode default no-crop hai, is liye logo/text left-right cut nahi honge. intro_metadata.json mein applied/skipped/failed reason aur fit mode save hota hai.
-        </p>
-      </div>
-
-
-      <div className="glass-card p-5">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <p className="text-sm font-medium">Auto Thumbnail</p>
-            <p className="text-xs text-[#a1a1aa]">Original video se round cover + love/smile tagline banayega</p>
-          </div>
-          <button
-            onClick={() => onChange("thumbnail_enabled", data.thumbnail_enabled === false)}
-            className={`w-11 h-6 rounded-full transition-all ${data.thumbnail_enabled !== false ? "bg-gradient-to-r from-[#0ea5e9] to-[#6366f1]" : "bg-[rgba(255,255,255,0.1)]"}`}
-          >
-            <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.thumbnail_enabled !== false ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
-          </button>
-        </div>
-
-        {data.thumbnail_enabled !== false && (
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Style</label>
-              <select className="glass-select text-sm" value={data.thumbnail_style as string || "blue_love"} onChange={(event) => onChange("thumbnail_style", event.target.value)}>
-                <option value="blue_love">Blue Love</option>
-                <option value="pink_love">Pink Love</option>
-                <option value="premium_dark">Premium Dark</option>
-                <option value="clean_white">Clean White</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Frame Source</label>
-              <select className="glass-select text-sm" value={data.thumbnail_source as string || "original"} onChange={(event) => onChange("thumbnail_source", event.target.value)}>
-                <option value="original">Original video frame</option>
-                <option value="processed">Processed video frame</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Frame Time</label>
-              <select className="glass-select text-sm" value={data.thumbnail_frame_time as string || "auto"} onChange={(event) => onChange("thumbnail_frame_time", event.target.value)}>
-                <option value="auto">Auto best frame</option>
-                <option value="1">1 second</option>
-                <option value="2">2 seconds</option>
-                <option value="3">3 seconds</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Brand Text</label>
-              <input className="glass-input text-sm" value={data.thumbnail_brand_text as string || "Prankwish.com"} onChange={(event) => onChange("thumbnail_brand_text", event.target.value)} />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-xs text-[#a1a1aa] mb-1">Main Tagline</label>
-              <input className="glass-input text-sm" value={data.thumbnail_tagline as string || "Make Someone Smile Today"} onChange={(event) => onChange("thumbnail_tagline", event.target.value)} />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-xs text-[#a1a1aa] mb-1">Small Tagline</label>
-              <input className="glass-input text-sm" value={data.thumbnail_subtitle as string || "Auto unique words each thumbnail"} onChange={(event) => onChange("thumbnail_subtitle", event.target.value)} />
-            </div>
-            <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3 rounded-xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-3">
-              <label className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold text-white">Thumbnail as first frame</p>
-                  <p className="text-[11px] text-[#71717a]">Facebook Reels / YouTube Shorts blank thumbnail fix.</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onChange("social_cover_frame_enabled", data.social_cover_frame_enabled === false)}
-                  className={`w-11 h-6 rounded-full transition-all ${data.social_cover_frame_enabled !== false ? "bg-gradient-to-r from-[#22c55e] to-[#0ea5e9]" : "bg-[rgba(255,255,255,0.1)]"}`}
-                >
-                  <div className={`w-5 h-5 rounded-full bg-white transition-transform ${data.social_cover_frame_enabled !== false ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
-                </button>
-              </label>
-              <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">First frame duration</label>
-                <select className="glass-select text-sm" value={data.social_cover_frame_duration as string || "0.8"} onChange={(event) => onChange("social_cover_frame_duration", event.target.value)}>
-                  <option value="0.5">0.5 sec</option>
-                  <option value="0.8">0.8 sec recommended</option>
-                  <option value="1.0">1 sec</option>
-                  <option value="1.5">1.5 sec</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-        <p className="text-xs text-[#71717a] mt-3">
-          Safe mode: thumbnail fail ho to video automation continue rahegi. Facebook/YouTube short-form par external thumbnail ke bajaye first-frame cover use hoga.
-        </p>
-      </div>
-
       <div className="glass-card p-5">
         <p className="text-sm font-medium mb-3">Output Settings</p>
         <div className="grid grid-cols-3 gap-4">
@@ -489,7 +322,7 @@ export default function PublishTab({ data, onChange }: TabProps) {
           </div>
           <div>
             <label className="block text-xs text-[#a1a1aa] mb-1">Resolution</label>
-            <select className="glass-select text-sm" value={data.output_resolution as string || "1080x1920"} onChange={(event) => { onChange("output_resolution", event.target.value); onChange("output_resolution_mode", "custom"); }}>
+            <select className="glass-select text-sm" value={data.output_resolution as string || "1080x1920"} onChange={(event) => onChange("output_resolution", event.target.value)}>
               <option value="1080x1920">1080x1920</option>
               <option value="1920x1080">1920x1080</option>
               <option value="1080x1080">1080x1080</option>

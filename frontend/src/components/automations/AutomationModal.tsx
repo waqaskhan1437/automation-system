@@ -84,7 +84,6 @@ const DEFAULT_VIDEO_CONFIG = {
   short_duration: "60",
   videos_per_run: "1",
   aspect_ratio: "9:16",
-  output_resolution_mode: "auto_by_aspect",
   tagline_gen_count: 3,
   tagline_add_more: false,
   short_generation_mode: "normal",
@@ -101,22 +100,6 @@ const DEFAULT_VIDEO_CONFIG = {
   postforme_schedule_timezone: "",
   post_stagger_minutes: "15",
   postforme_account_stagger_enabled: false,
-  thumbnail_enabled: true,
-  thumbnail_style: "blue_love",
-  thumbnail_source: "original",
-  thumbnail_frame_time: "auto",
-  thumbnail_tagline: "Make Someone Smile Today",
-  thumbnail_subtitle: "Love • Laugh • Smile",
-  thumbnail_brand_text: "Prankwish.com",
-  social_cover_frame_enabled: true,
-  social_cover_frame_duration: "0.8",
-  external_thumbnail_mode: "short_form_first_frame",
-  intro_enabled: false,
-  intro_duration_limit: "8",
-  intro_url_vertical: "",
-  intro_url_landscape: "",
-  intro_url_square: "",
-  intro_url_4_5: "",
 };
 
 function extractPromptSocialContent(plan: PromptPlanPayload | null | undefined): {
@@ -177,122 +160,6 @@ function normalizeLegacyGooglePhotosConfig(config: Record<string, unknown>): Rec
       next.google_photos_migrated_from_album_url = true;
     }
   }
-  return next;
-}
-
-
-function readCleanString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function hasIntroUrl(config: Record<string, unknown>): boolean {
-  const introUrls = config.intro_urls;
-  const flatKeys = [
-    "intro_url",
-    "fallback_intro_url",
-    "intro_url_fallback",
-    "intro_fallback_url",
-    "default_intro_url",
-    "intro_url_vertical",
-    "intro_vertical_url",
-    "vertical_intro_url",
-    "intro_url_landscape",
-    "intro_landscape_url",
-    "landscape_intro_url",
-    "intro_url_square",
-    "intro_square_url",
-    "square_intro_url",
-    "intro_url_4_5",
-    "intro_4_5_url",
-    "intro_url_portrait",
-    "intro_portrait_url",
-  ];
-  if (flatKeys.some((key) => readCleanString(config[key]).startsWith("http"))) return true;
-  if (introUrls && typeof introUrls === "object" && !Array.isArray(introUrls)) {
-    return Object.values(introUrls as Record<string, unknown>).some((value) => readCleanString(value).startsWith("http"));
-  }
-  return false;
-}
-
-function normalizeIntroConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const next = { ...config };
-  const introEnabled = next.intro_enabled === true || String(next.intro_enabled).toLowerCase() === "true" || hasIntroUrl(next);
-
-  if (!introEnabled || next.intro_disabled === true || String(next.intro_disabled).toLowerCase() === "true") {
-    next.intro_enabled = false;
-    next.intro_disabled = true;
-    next.intro_required = false;
-    return next;
-  }
-
-  next.intro_enabled = true;
-  next.intro_disabled = false;
-  if (!readCleanString(next.intro_fit_mode || next.intro_scale_mode || next.intro_resize_mode)) {
-    next.intro_fit_mode = 'contain';
-  }
-
-  const existingMap = next.intro_urls && typeof next.intro_urls === "object" && !Array.isArray(next.intro_urls)
-    ? { ...(next.intro_urls as Record<string, unknown>) }
-    : {};
-
-  const fallback = readCleanString(next.intro_url) || readCleanString(next.fallback_intro_url) || readCleanString(next.intro_fallback_url) || readCleanString(existingMap.fallback) || readCleanString(existingMap.default) || readCleanString(existingMap.intro);
-  const vertical = readCleanString(next.intro_url_vertical) || readCleanString(next.intro_vertical_url) || readCleanString(next.vertical_intro_url) || readCleanString(existingMap.vertical_9_16) || readCleanString(existingMap.vertical) || readCleanString(existingMap.shorts) || fallback;
-  const landscape = readCleanString(next.intro_url_landscape) || readCleanString(next.intro_landscape_url) || readCleanString(next.landscape_intro_url) || readCleanString(existingMap.landscape_16_9) || readCleanString(existingMap.landscape) || readCleanString(existingMap.youtube) || fallback;
-  const square = readCleanString(next.intro_url_square) || readCleanString(next.intro_square_url) || readCleanString(next.square_intro_url) || readCleanString(existingMap.square_1_1) || readCleanString(existingMap.square) || fallback;
-  const portrait = readCleanString(next.intro_url_4_5) || readCleanString(next.intro_4_5_url) || readCleanString(next.intro_url_portrait) || readCleanString(next.intro_portrait_url) || readCleanString(existingMap.portrait_4_5) || readCleanString(existingMap.portrait) || fallback;
-  const any = vertical || landscape || square || portrait || fallback;
-
-  if (vertical) next.intro_url_vertical = vertical;
-  if (landscape) next.intro_url_landscape = landscape;
-  if (square) next.intro_url_square = square;
-  if (portrait) next.intro_url_4_5 = portrait;
-  if (any) next.intro_url = any;
-
-  next.intro_urls = {
-    ...existingMap,
-    ...(vertical ? {
-      "9:16": vertical,
-      "9_16": vertical,
-      vertical_9_16: vertical,
-      vertical,
-      shorts_9_16: vertical,
-      shorts: vertical,
-      reels_9_16: vertical,
-      reels: vertical,
-      tiktok_9_16: vertical,
-      tiktok: vertical,
-    } : {}),
-    ...(landscape ? {
-      "16:9": landscape,
-      "16_9": landscape,
-      landscape_16_9: landscape,
-      landscape,
-      youtube_16_9: landscape,
-      youtube: landscape,
-      facebook_16_9: landscape,
-      facebook: landscape,
-    } : {}),
-    ...(square ? {
-      "1:1": square,
-      "1_1": square,
-      square_1_1: square,
-      square,
-    } : {}),
-    ...(portrait ? {
-      "4:5": portrait,
-      "4_5": portrait,
-      portrait_4_5: portrait,
-      portrait,
-      feed_4_5: portrait,
-    } : {}),
-    ...(any ? {
-      fallback: any,
-      default: any,
-      default_intro: any,
-      intro: any,
-    } : {}),
-  };
-
   return next;
 }
 
@@ -712,7 +579,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
     if (!name.trim()) { alert("Name is required"); return; }
     setSaving(true);
     try {
-      const configToSave = normalizeIntroConfig(normalizeLegacyGooglePhotosConfig({ ...data }));
+      const configToSave = normalizeLegacyGooglePhotosConfig({ ...data });
       if (configToSave.short_generation_mode === "prompt") {
         const promptSourceType = typeof configToSave.prompt_source_type === "string" ? configToSave.prompt_source_type : "youtube";
         if (promptSourceType === "youtube" || promptSourceType === "direct") {

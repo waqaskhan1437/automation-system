@@ -250,62 +250,6 @@ function findExistingFont(candidates) {
   return null;
 }
 
-function findAnySystemFont(fontStyle = "bold") {
-  const preferred = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
-    "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
-  ];
-
-  for (const candidate of preferred) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-
-  const roots = ["/usr/share/fonts", "/usr/local/share/fonts", "/System/Library/Fonts", "C:/Windows/Fonts"];
-  const wantedBold = String(fontStyle || "").toLowerCase().includes("bold");
-  const extensions = new Set([".ttf", ".otf", ".ttc"]);
-
-  for (const root of roots) {
-    try {
-      if (!fs.existsSync(root)) continue;
-      const stack = [root];
-      let fallback = null;
-      while (stack.length) {
-        const current = stack.pop();
-        const entries = fs.readdirSync(current, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(current, entry.name);
-          if (entry.isDirectory()) {
-            stack.push(fullPath);
-            continue;
-          }
-          if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
-          if (!fallback) fallback = fullPath;
-          const isBold = /bold|black|heavy/i.test(entry.name);
-          if (!wantedBold || isBold) return fullPath;
-        }
-      }
-      if (fallback) return fallback;
-    } catch {}
-  }
-
-  return null;
-}
-
-function buildDrawtextFontOption(fontPath) {
-  if (fontPath && fs.existsSync(fontPath)) {
-    return `fontfile='${escapeFilterPath(fontPath)}'`;
-  }
-  console.log("No explicit font file found; falling back to FFmpeg/fontconfig default Sans");
-  return "font='Sans'";
-}
-
 function getFontFile(fontFamily, fontStyle) {
   if (process.platform === "win32") {
     const family = WINDOWS_FONT_MAP[fontFamily] || WINDOWS_FONT_MAP.ubuntu;
@@ -318,42 +262,16 @@ function getFontFile(fontFamily, fontStyle) {
     return findExistingFont(WINDOWS_FONT_MAP.ubuntu.bold) || null;
   }
 
-  const tryFamily = (familyName) => {
-    const family = FONT_MAP[familyName];
-    if (!family) return null;
-    const styleMap = {
-      normal: family.normal,
-      bold: family.bold,
-      italic: family.italic,
-      bold_italic: family.bold_italic,
-      medium: family.medium,
-      medium_italic: family.medium_italic
-    };
-    const candidate = path.join(FONT_DIR, styleMap[fontStyle] || family.bold);
-    return fs.existsSync(candidate) ? candidate : null;
+  const family = FONT_MAP[fontFamily] || FONT_MAP.ubuntu;
+  const styleMap = {
+    normal: family.normal,
+    bold: family.bold,
+    italic: family.italic,
+    bold_italic: family.bold_italic,
+    medium: family.medium,
+    medium_italic: family.medium_italic
   };
-
-  // GitHub runners do not always have Ubuntu fonts. Taglines must not disappear
-  // just because the preferred font is missing, so fall back to commonly
-  // available Linux fonts before skipping drawtext.
-  const requested = tryFamily(fontFamily);
-  if (requested) return requested;
-
-  for (const fallbackFamily of ["dejavu", "liberation", "lato", "noto", "nimbus", "ubuntu"]) {
-    const fallback = tryFamily(fallbackFamily);
-    if (fallback) {
-      console.log(`Font fallback: ${fontFamily || "default"}/${fontStyle || "bold"} -> ${fallbackFamily} (${fallback})`);
-      return fallback;
-    }
-  }
-
-  const generic = findAnySystemFont(fontStyle);
-  if (generic) {
-    console.log(`Font fallback: ${fontFamily || "default"}/${fontStyle || "bold"} -> generic (${generic})`);
-    return generic;
-  }
-
-  return null;
+  return path.join(FONT_DIR, styleMap[fontStyle] || family.bold);
 }
 
 function getFormatDimensions(format, outputDimensions) {
@@ -365,86 +283,6 @@ function getFormatDimensions(format, outputDimensions) {
   }
 
   return FORMAT_DIMENSIONS[format] || FORMAT_DIMENSIONS["9:16"];
-}
-
-function normalizeAspectRatio(value) {
-  const raw = String(value || "9:16").trim().toLowerCase().replace(/\s+/g, "");
-  const map = {
-    "vertical": "9:16",
-    "short": "9:16",
-    "shorts": "9:16",
-    "reels": "9:16",
-    "tiktok": "9:16",
-    "portrait9:16": "9:16",
-    "9_16": "9:16",
-    "916": "9:16",
-    "vertical-fit": "9:16-fit",
-    "vertical_nocrop": "9:16-fit",
-    "vertical-no-crop": "9:16-fit",
-    "verticalfit": "9:16-fit",
-    "short-fit": "9:16-fit",
-    "short_nocrop": "9:16-fit",
-    "short-no-crop": "9:16-fit",
-    "shorts-fit": "9:16-fit",
-    "shorts_nocrop": "9:16-fit",
-    "shorts-no-crop": "9:16-fit",
-    "reels-fit": "9:16-fit",
-    "reels_nocrop": "9:16-fit",
-    "nocrop-short-vertical": "9:16-fit",
-    "no-crop-short-vertical": "9:16-fit",
-    "9_16-fit": "9:16-fit",
-    "9:16-nocrop": "9:16-fit",
-    "9:16-no-crop": "9:16-fit",
-    "916fit": "9:16-fit",
-    "square": "1:1",
-    "1_1": "1:1",
-    "square-fit": "1:1-fit",
-    "square_nocrop": "1:1-fit",
-    "1_1-fit": "1:1-fit",
-    "1:1-nocrop": "1:1-fit",
-    "landscape": "16:9",
-    "horizontal": "16:9",
-    "wide": "16:9",
-    "16_9": "16:9",
-    "landscape-fit": "16:9-fit",
-    "horizontal-fit": "16:9-fit",
-    "landscape_nocrop": "16:9-fit",
-    "16_9-fit": "16:9-fit",
-    "16:9-nocrop": "16:9-fit",
-    "portrait": "4:5",
-    "4_5": "4:5",
-    "portrait-fit": "4:5-fit",
-    "portrait_nocrop": "4:5-fit",
-    "4_5-fit": "4:5-fit",
-    "4:5-nocrop": "4:5-fit",
-    "original": "original",
-    "keeporiginal": "original"
-  };
-  const normalized = map[raw] || raw;
-  if (normalized === "original" || normalized.endsWith("-fit")) return normalized;
-  if (FORMAT_DIMENSIONS[normalized]) return normalized;
-  return "9:16";
-}
-
-function parseTextList(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item || "").trim()).filter(Boolean);
-  }
-  if (typeof value === "string") {
-    return value
-      .split(/\r?\n|\|\||,/g)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
-
-function resolveTaglineList(config, keys) {
-  for (const key of keys) {
-    const list = parseTextList(config[key]);
-    if (list.length > 0) return list;
-  }
-  return [];
 }
 
 function normalizeTaglineText(text) {
@@ -648,14 +486,15 @@ function getRandomItem(array) {
 
 function checkFontsExist() {
   const fontPath = getFontFile("ubuntu", "bold");
-  if (fontPath && fs.existsSync(fontPath)) return true;
-  // Allow FFmpeg/fontconfig default font fallback. This avoids losing taglines
-  // just because apt font installation was skipped to prevent GitHub runner stalls.
-  return true;
+  try {
+    return !!fontPath && fs.existsSync(fontPath);
+  } catch (e) {
+    return false;
+  }
 }
 
 const FONTS_AVAILABLE = checkFontsExist();
-console.log("Fonts/drawtext available:", FONTS_AVAILABLE);
+console.log("Fonts available:", FONTS_AVAILABLE);
 
 function buildTaglineDrawtext(tagline, config, position, format, outputDimensions) {
   if (!tagline) return null;
@@ -684,7 +523,10 @@ function buildTaglineDrawtext(tagline, config, position, format, outputDimension
   const bottomMargin = parseInt(String(config.tagline_bottom_margin ?? "80"), 10);
 
   const fontPath = getFontFile(fontFamily, fontStyle);
-  const fontOption = buildDrawtextFontOption(fontPath);
+  if (!fontPath) {
+    console.log("Skipping tagline - no compatible font found");
+    return null;
+  }
   const baseFontSize = FONT_SIZES[fontSize] || FONT_SIZES.md;
   const layout = fitTaglineText(tagline, {
     format,
@@ -703,8 +545,9 @@ function buildTaglineDrawtext(tagline, config, position, format, outputDimension
 
   const textFilePath = writeDrawtextFile(layout.text);
   const escapedTextFilePath = escapeFilterPath(textFilePath);
+  const escapedFontPath = escapeFilterPath(fontPath);
 
-  let filter = `drawtext=textfile='${escapedTextFilePath}':${fontOption}:fontsize=${layout.fontSize}:fontcolor=${fontColor}:line_spacing=${layout.lineSpacing}:fix_bounds=1`;
+  let filter = `drawtext=textfile='${escapedTextFilePath}':fontfile='${escapedFontPath}':fontsize=${layout.fontSize}:fontcolor=${fontColor}:line_spacing=${layout.lineSpacing}:fix_bounds=1`;
 
   if (bgType === "box" || bgType === "rounded_box") {
     filter += `:box=1:boxcolor=${bgColor}@${bgOpacity}:boxborderw=10`;
@@ -734,15 +577,18 @@ function buildOverlayDrawtext(text, config, options) {
   const fontFamily = config.tagline_font_family || "ubuntu";
   const fontStyle = options.fontStyle || config.tagline_font_style || "bold";
   const fontPath = getFontFile(fontFamily, fontStyle);
-  const fontOption = buildDrawtextFontOption(fontPath);
+  if (!fontPath) {
+    return null;
+  }
   const textFilePath = writeDrawtextFile(text);
   const escapedTextFilePath = escapeFilterPath(textFilePath);
+  const escapedFontPath = escapeFilterPath(fontPath);
   const fontSize = options.fontSize || 24;
   const fontColor = options.fontColor || "#FFFFFF";
   const borderWidth = options.borderWidth || 2;
   const borderColor = options.borderColor || "black@0.45";
 
-  return `drawtext=textfile='${escapedTextFilePath}':${fontOption}:fontsize=${fontSize}:fontcolor=${fontColor}:x=${options.x}:y=${options.y}:borderw=${borderWidth}:bordercolor=${borderColor}`;
+  return `drawtext=textfile='${escapedTextFilePath}':fontfile='${escapedFontPath}':fontsize=${fontSize}:fontcolor=${fontColor}:x=${options.x}:y=${options.y}:borderw=${borderWidth}:bordercolor=${borderColor}`;
 }
 
 function getVideoDuration(inputFile) {
@@ -1106,13 +952,12 @@ function main() {
   // Duration settings
   const rawDuration = config.short_duration;
   const duration = parseInt(rawDuration || "60") || 60;
-  const aspectRatio = normalizeAspectRatio(config.aspect_ratio || config.video_format || config.output_aspect_ratio || config.format || "9:16");
+  const aspectRatio = config.aspect_ratio || "9:16";
   
   console.log("=== DURATION CONFIG ===");
   console.log("short_duration raw:", rawDuration, "(type:", typeof rawDuration, ")");
   console.log("Final duration:", duration, "seconds");
   console.log("Aspect ratio:", aspectRatio);
-  console.log("Aspect ratio raw:", config.aspect_ratio, "video_format:", config.video_format, "output_aspect_ratio:", config.output_aspect_ratio);
   console.log("========================");
   
   // Legacy support: mute_audio boolean
@@ -1157,9 +1002,7 @@ function main() {
   const isOriginal = aspectRatio === "original";
   const baseRatio = aspectRatio.replace("-fit", "");
 
-  const outputResolutionMode = String(config.output_resolution_mode || "auto_by_aspect").trim();
-  const allowCustomResolution = outputResolutionMode === "custom" || config.lock_output_resolution === true || config.force_output_resolution === true;
-  const outputResolution = allowCustomResolution ? parseResolution(config.output_resolution) : null;
+  const outputResolution = parseResolution(config.output_resolution);
   let width = outputResolution?.width || 1080;
   let height = outputResolution?.height || 1920;
   if (!outputResolution) {
@@ -1168,7 +1011,6 @@ function main() {
     else if (baseRatio === "4:5") { width = 1080; height = 1350; }
     else if (baseRatio === "21:9") { width = 1920; height = 823; }
   }
-  console.log("Output resolution mode:", outputResolutionMode, "custom allowed:", allowCustomResolution, "final:", `${width}x${height}`);
 
   let filters = [];
 
@@ -1184,10 +1026,8 @@ function main() {
     filters.push(`crop=${width}:${height}`);
   }
 
-  const topTaglines = resolveTaglineList(config, ["top_taglines", "top_tagline", "tagline_top", "taglines_top", "hook_taglines"]);
-  const bottomTaglines = resolveTaglineList(config, ["bottom_taglines", "bottom_tagline", "tagline_bottom", "taglines_bottom", "cta_taglines"]);
-  console.log("Resolved top taglines:", topTaglines.length);
-  console.log("Resolved bottom taglines:", bottomTaglines.length);
+  const topTaglines = Array.isArray(config.top_taglines) ? config.top_taglines : [];
+  const bottomTaglines = Array.isArray(config.bottom_taglines) ? config.bottom_taglines : [];
 
   if (topTaglines.length > 0) {
     const tagline = topTaglines[Math.floor(Math.random() * topTaglines.length)];

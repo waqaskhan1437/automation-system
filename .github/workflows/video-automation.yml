@@ -51,115 +51,38 @@ jobs:
       - name: Setup runner Node workspace
         uses: ./.github/actions/setup-runner-node
 
-      - name: Prepare debug output
-        run: |
-          mkdir -p runner-scripts/output
-          {
-            echo "run_id=${{ github.run_id }}"
-            echo "job_id=${{ github.event.inputs.job_id }}"
-            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } > runner-scripts/output/workflow-start.txt
-
       - name: Save config
         run: node runner-scripts/fetch-runtime-config.js
 
       - name: Install yt-dlp
-        timeout-minutes: 4
+        timeout-minutes: 5
         run: |
           set -euo pipefail
-          mkdir -p runner-scripts/output
-          python3 -m pip install -q "yt-dlp[default]" --upgrade --break-system-packages --timeout 60 --retries 2
-          yt-dlp --version | tee runner-scripts/output/yt-dlp-version.txt
+          python3 -m pip install -q "yt-dlp[default]" --upgrade --break-system-packages
+          yt-dlp --version
 
-      - name: Cache Playwright Chromium
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('runner-scripts/package-lock.json') }}
-          restore-keys: |
-            playwright-chromium-${{ runner.os }}-
-
-      - name: Verify FFmpeg without apt install
-        timeout-minutes: 3
-        run: |
-          set -euo pipefail
-          mkdir -p runner-scripts/output .github-tools/bin
-
-          log() {
-            echo "[TOOLS] $*" | tee -a runner-scripts/output/setup-tools.log
-          }
-
-          export PATH="$PWD/.github-tools/bin:$PATH"
-
-          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-            log "Using preinstalled FFmpeg: $(command -v ffmpeg)"
-          else
-            log "FFmpeg not found; downloading static FFmpeg binary without apt-get."
-            ARCH="$(uname -m)"
-            if [ "$ARCH" != "x86_64" ] && [ "$ARCH" != "amd64" ]; then
-              log "Unsupported architecture for static FFmpeg bootstrap: $ARCH"
-              exit 1
-            fi
-
-            TMP_DIR="$(mktemp -d)"
-            cleanup() { rm -rf "$TMP_DIR"; }
-            trap cleanup EXIT
-
-            if ! timeout 90s curl -fsSL --connect-timeout 15 --retry 1 --retry-delay 3 \
-              "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
-              -o "$TMP_DIR/ffmpeg-static.tar.xz"; then
-              log "Static FFmpeg download failed or timed out. Failing fast instead of hanging on apt-get."
-              exit 1
-            fi
-
-            timeout 30s tar -xJf "$TMP_DIR/ffmpeg-static.tar.xz" -C "$TMP_DIR"
-            FFMPEG_DIR="$(find "$TMP_DIR" -maxdepth 1 -type d -name 'ffmpeg-*-amd64-static' | head -n 1)"
-            test -n "$FFMPEG_DIR"
-            cp "$FFMPEG_DIR/ffmpeg" "$FFMPEG_DIR/ffprobe" .github-tools/bin/
-            chmod +x .github-tools/bin/ffmpeg .github-tools/bin/ffprobe
-            echo "$PWD/.github-tools/bin" >> "$GITHUB_PATH"
-            log "Static FFmpeg installed to repo-local tools directory."
-          fi
-
-          command -v ffmpeg | tee -a runner-scripts/output/setup-tools.log
-          command -v ffprobe | tee -a runner-scripts/output/setup-tools.log
-          ffmpeg -version | head -1 | tee runner-scripts/output/ffmpeg-version.txt
-
-          node - <<'NODE' | tee -a runner-scripts/output/setup-tools.log
-          const fs = require('fs');
-          const candidates = [
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-            '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
-            '/usr/share/fonts/truetype/lato/Lato-Bold.ttf',
-            '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf'
-          ];
-          const found = candidates.find((file) => fs.existsSync(file));
-          console.log(found ? `Font available: ${found}` : 'No preferred font file found; process-video will use FFmpeg Sans fallback.');
-          NODE
-
-      - name: Install Playwright Chromium fast
+      - name: Install FFmpeg and fonts
         timeout-minutes: 8
         run: |
           set -euo pipefail
-          mkdir -p runner-scripts/output
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            ffmpeg \
+            fonts-dejavu-core \
+            fonts-ubuntu \
+            python3
+          fc-cache -f -v >/dev/null 2>&1 || true
+          ffmpeg -version | head -1
+
+      - name: Install Playwright Chromium
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
           cd runner-scripts
-
-          log() {
-            echo "[PLAYWRIGHT] $*" | tee -a output/setup-tools.log
-          }
-
-          BROWSER_PATH="$(node -e 'const { chromium } = require("playwright-core"); console.log(chromium.executablePath())')"
-          if [ ! -x "$BROWSER_PATH" ]; then
-            log "Chromium not found in cache, installing browser only first."
-            if ! timeout 240s npx --no-install playwright-core install chromium; then
-              log "Browser-only install failed or timed out; trying dependency install fallback."
-              timeout 300s npx --no-install playwright-core install --with-deps chromium
-            fi
-          else
-            log "Chromium restored from cache: $BROWSER_PATH"
-          fi
-
+          npx --no-install playwright-core install --with-deps chromium
           BROWSER_PATH="$(node -e 'const { chromium } = require("playwright-core"); console.log(chromium.executablePath())')"
           test -x "$BROWSER_PATH"
           echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
@@ -208,11 +131,6 @@ jobs:
           fi
 
           echo "=============================================="
-          echo "=== INTRO DIAGNOSTICS ==="
-          grep -n "\[INTRO\]" output/runner.log 2>/dev/null || echo "No [INTRO] lines found in runner.log"
-          echo "=== intro_metadata.json ==="
-          cat output/intro_metadata.json 2>/dev/null || echo "intro_metadata.json not found"
-          echo "=== output files ==="
           ls -la output/ 2>/dev/null || echo "No output"
           echo "=============================================="
 

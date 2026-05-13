@@ -1297,12 +1297,6 @@ export default {
               continue;
             }
 
-            const thumbnailUrl = typeof uploadRecord.thumbnail_url === "string" && uploadRecord.thumbnail_url.trim()
-              ? uploadRecord.thumbnail_url.trim()
-              : (typeof mergedOutputData?.thumbnail_url === "string" && mergedOutputData.thumbnail_url.trim()
-                ? mergedOutputData.thumbnail_url.trim()
-                : null);
-
             const draftPostId = typeof uploadRecord.draft_post_id === "string" && uploadRecord.draft_post_id.trim()
               ? uploadRecord.draft_post_id.trim()
               : ((mergedOutputData?.draft_post_id as string) || null);
@@ -1345,7 +1339,6 @@ export default {
                   ELSE NULL
                 END,
                 aspect_ratio = COALESCE(?, aspect_ratio),
-                thumbnail_url = COALESCE(?, thumbnail_url),
                 post_metadata = COALESCE(?, post_metadata),
                 updated_at = CURRENT_TIMESTAMP
               WHERE id = ?`
@@ -1357,19 +1350,17 @@ export default {
               scheduledAt,
               scheduledAt,
               aspectRatio,
-              thumbnailUrl,
               storedPostMetadata,
               existingUpload.id,
             ).run();
           } else {
             await env.DB.prepare(
-              "INSERT INTO video_uploads (user_id, job_id, postforme_id, media_url, thumbnail_url, upload_status, post_status, scheduled_at, aspect_ratio, post_metadata) VALUES (?, ?, ?, ?, ?, 'uploaded', ?, ?, ?, ?)"
+              "INSERT INTO video_uploads (user_id, job_id, postforme_id, media_url, upload_status, post_status, scheduled_at, aspect_ratio, post_metadata) VALUES (?, ?, ?, ?, 'uploaded', ?, ?, ?, ?)"
             ).bind(
               jobRecord.user_id,
               jobId,
               livePostId || draftPostId,
               mediaUrl,
-              thumbnailUrl,
               postStatus,
               scheduledAt,
               aspectRatio,
