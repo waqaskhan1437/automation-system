@@ -265,7 +265,6 @@ function buildPromptPlanOverrides(config: Record<string, unknown>): {
 
   const aggregateTitles = segments.map((segment) => segment.title).filter(Boolean);
   const aggregateDescriptions = segments.map((segment) => segment.caption).filter(Boolean);
-  const aggregateHooks = segments.map((segment) => segment.hook).filter(Boolean);
   const aggregateHashtags = Array.from(new Set(segments.flatMap((segment) => segment.hashtags))).slice(0, 40);
 
   return {
@@ -289,8 +288,8 @@ function buildPromptPlanOverrides(config: Record<string, unknown>): {
       titles: aggregateTitles,
       descriptions: aggregateDescriptions,
       hashtags: aggregateHashtags,
-      top_taglines: aggregateHooks,
-      bottom_taglines: [],
+      // Video overlay taglines come exclusively from the user's Tagline tab,
+      // never from AI-generated per-segment hooks.
     },
   };
 }

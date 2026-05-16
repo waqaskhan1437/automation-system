@@ -247,9 +247,10 @@ function buildSegmentRuntimeConfig(baseConfig, segment) {
     : [];
   const duration = Math.max(1, Math.round(Number(segment?.duration) || Number(baseConfig.short_duration) || 60));
 
-  if (hook) {
-    nextConfig.top_taglines = [hook];
-  }
+  // NOTE: Do not override top_taglines / bottom_taglines from AI hooks.
+  // Video overlay taglines must always come from the user's Tagline tab,
+  // not from prompt-generated per-segment hooks. The hook is still kept in
+  // prompt_active_segment below for social post metadata reference.
   if (title) {
     nextConfig.titles = [title];
   }
