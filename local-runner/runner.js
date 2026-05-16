@@ -649,11 +649,35 @@ function ensureLocalOutputDir(job) {
   return outputDir;
 }
 
+function findRealExeOnPath(name) {
+  const dirs = (process.env.PATH || '').split(path.delimiter);
+  for (const dir of dirs) {
+    if (!dir) continue;
+    if (/[\\/]WindowsApps([\\/]|$)/i.test(dir)) continue;
+    const full = path.join(dir, `${name}.exe`);
+    try {
+      if (fs.existsSync(full)) return path.dirname(full);
+    } catch {}
+  }
+  return null;
+}
+
 function buildRunnerScriptsEnv(job) {
+  const bundledFfmpegDir = path.join(__dirname, 'tools', 'ffmpeg', 'bin');
+  const bundledYtDlpDir = path.join(__dirname, 'tools', 'yt-dlp');
+  // Prepend real .exe directories so cmd-shell command lookups skip
+  // WindowsApps reparse-point .cmd stubs that fail with spawn EINVAL.
+  const externalFfmpegDir = fs.existsSync(bundledFfmpegDir) ? null : findRealExeOnPath('ffmpeg');
+  const externalFfprobeDir = fs.existsSync(bundledFfmpegDir) ? null : findRealExeOnPath('ffprobe');
+  const externalYtDlpDir = fs.existsSync(bundledYtDlpDir) ? null : findRealExeOnPath('yt-dlp');
+
   const toolPathEntries = [
-    path.join(__dirname, 'tools', 'ffmpeg', 'bin'),
+    bundledFfmpegDir,
     path.join(__dirname, 'tools', 'node'),
-    path.join(__dirname, 'tools', 'yt-dlp'),
+    bundledYtDlpDir,
+    externalFfmpegDir,
+    externalFfprobeDir,
+    externalYtDlpDir,
     process.env.PATH || '',
   ].filter(Boolean).join(path.delimiter);
 

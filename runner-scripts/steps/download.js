@@ -103,17 +103,29 @@ function resolveCommand(name) {
     }
   }
 
-  // On Windows, spawnSync with shell:false can't find .exe via PATH
+  // On Windows, spawnSync with shell:false can't find .exe via PATH.
+  // Prefer .exe over .cmd/.bat globally: Node 20+ refuses to spawn .cmd/.bat
+  // without shell:true (CVE-2024-27980), and WindowsApps alias .cmd stubs
+  // throw EINVAL even via shell. Scan every PATH dir for .exe first.
   if (process.platform === 'win32') {
     const dirs = (process.env.PATH || '').split(path.delimiter);
-    for (const dir of dirs) {
-      for (const ext of ['.exe', '.cmd', '.bat', '']) {
+    for (const ext of ['.exe', '.cmd', '.bat', '']) {
+      for (const dir of dirs) {
+        if (!dir) continue;
+        // Skip WindowsApps alias stubs entirely — they are reparse points
+        // that throw spawn EINVAL when invoked from non-interactive contexts.
+        if (/[\\/]WindowsApps([\\/]|$)/i.test(dir)) continue;
         const full = path.join(dir, name + ext);
         if (fs.existsSync(full)) return full;
       }
     }
   }
   return name;
+}
+
+function needsShellWrapper(resolvedCommand) {
+  if (process.platform !== 'win32') return false;
+  return /\.(cmd|bat)$/i.test(String(resolvedCommand || ''));
 }
 
 function validateOutput(outFile) {
@@ -144,7 +156,7 @@ function validateOutput(outFile) {
       ],
       {
         encoding: 'utf8',
-        shell: false,
+        shell: needsShellWrapper(ffprobe),
         timeout: 45000,
       }
     );
@@ -360,8 +372,9 @@ function resolveYtDlpRunner() {
       continue;
     }
 
-    const probe = spawnSync(candidate, ['-m', 'yt_dlp', '--version'], {
-      shell: false,
+    const resolvedCandidate = resolveCommand(candidate);
+    const probe = spawnSync(resolvedCandidate, ['-m', 'yt_dlp', '--version'], {
+      shell: needsShellWrapper(resolvedCandidate),
       stdio: 'ignore',
       timeout: 15000,
     });
@@ -745,10 +758,11 @@ function resolveCookiesFile(sourceUrl) {
 }
 
 function runCommand(command, args, label, timeout) {
-  const result = spawnSync(resolveCommand(command), args, {
+  const resolved = resolveCommand(command);
+  const result = spawnSync(resolved, args, {
     stdio: 'inherit',
     timeout,
-    shell: false,
+    shell: needsShellWrapper(resolved),
   });
 
   if (result.error) {

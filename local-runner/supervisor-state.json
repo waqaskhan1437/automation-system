@@ -1,0 +1,11 @@
+{
+  "status": "running",
+  "message": "runner exited (1). Restarting.",
+  "updatedAt": "2026-05-16T09:12:18.785Z",
+  "startedAt": "2026-05-16T08:51:47.478Z",
+  "supervisorPid": 16212,
+  "dashboardPid": 22040,
+  "frontendPid": null,
+  "runnerSupervisorPid": 22468,
+  "lastError": ""
+}
