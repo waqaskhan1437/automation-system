@@ -380,12 +380,14 @@ function ensureDirectoryForFile(filePath) {
 }
 
 function launchDetachedProcess(command, args, options = {}) {
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(String(command || ''));
   const child = spawn(command, args, {
     cwd: options.cwd || process.cwd(),
     env: options.env || process.env,
     detached: false,
     stdio: 'ignore',
     windowsHide: true,
+    shell: needsShell,
   });
   return child.pid;
 }
@@ -496,6 +498,42 @@ async function downloadManifestFile(rawBaseUrl, entry) {
   fs.writeFileSync(tempTarget, fileBuffer);
   fs.copyFileSync(tempTarget, entry.absoluteTarget);
   fs.rmSync(tempTarget, { force: true });
+}
+
+function expandLocalDirectorySources(rawSources) {
+  if (!Array.isArray(rawSources)) return [];
+  const expanded = [];
+  for (const raw of rawSources) {
+    const source = typeof raw === 'string' ? raw.trim() : '';
+    if (!source) continue;
+
+    // Remote URLs stay as-is — only resolve local paths.
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(source)) {
+      expanded.push(source);
+      continue;
+    }
+
+    let stats;
+    try {
+      stats = fs.statSync(source);
+    } catch {
+      expanded.push(source);
+      continue;
+    }
+
+    if (stats.isDirectory()) {
+      const videos = listVideoFiles(source);
+      if (videos.length === 0) {
+        throw new Error(`No video files found in folder: ${source}`);
+      }
+      videos.sort((a, b) => a.path.localeCompare(b.path));
+      expanded.push(videos[0].path);
+      console.log(`[LOCAL] Resolved directory ${source} → ${videos[0].path}`);
+    } else {
+      expanded.push(source);
+    }
+  }
+  return expanded;
 }
 
 function listVideoFiles(folderPath) {
@@ -756,7 +794,18 @@ function getNpmCommand() {
     return localNpm;
   }
 
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  if (process.platform === 'win32') {
+    // npm.cmd ships next to node.exe — resolve absolute path so spawn can
+    // find it without relying on PATH (which may also yield .cmd shims).
+    const nodeDir = path.dirname(process.execPath);
+    const colocatedNpm = path.join(nodeDir, 'npm.cmd');
+    if (fs.existsSync(colocatedNpm)) {
+      return colocatedNpm;
+    }
+    return 'npm.cmd';
+  }
+
+  return 'npm';
 }
 
 async function ensureRunnerScriptsDependency(packageName) {
@@ -775,6 +824,9 @@ async function ensureRunnerScriptsDependency(packageName) {
 
 function runChildProcess(command, args, options = {}) {
   const timeoutMs = options.timeoutMs || 0;
+  // Node 20+ refuses to spawn .cmd/.bat without shell:true (CVE-2024-27980).
+  // npm on Windows is npm.cmd, so we must opt into the shell wrapper.
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(String(command || ''));
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -783,6 +835,7 @@ function runChildProcess(command, args, options = {}) {
       stdio: 'inherit',
       windowsHide: true,
       detached: false,
+      shell: needsShell,
     });
 
     let settled = false;
@@ -1443,11 +1496,13 @@ async function mainLoop() {
               10
             ) || 1;
 
-            const sourceUrls = job?.config?.video_source === 'local_folder'
+            const rawSourceUrls = job?.config?.video_source === 'local_folder'
               ? await pickLocalFolderVideos(job, videosPerRun)
               : Array.isArray(job?.input_data?.video_urls) && job.input_data.video_urls.length > 0
               ? job.input_data.video_urls
               : [job?.input_data?.video_url || job.video_url].filter(Boolean);
+
+            const sourceUrls = expandLocalDirectorySources(rawSourceUrls);
 
             if (!sourceUrls.length) {
               throw new Error('Job does not contain a usable video source');

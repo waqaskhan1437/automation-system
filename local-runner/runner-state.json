@@ -3,7 +3,7 @@
   "message": "No pending jobs. Waiting for next poll.",
   "currentJobId": null,
   "processedVideos": 0,
-  "updatedAt": "2026-05-16T09:12:14.106Z",
-  "lastHeartbeatAt": "2026-05-16T09:12:02.113Z",
+  "updatedAt": "2026-05-16T09:39:08.852Z",
+  "lastHeartbeatAt": "2026-05-16T09:38:53.992Z",
   "lastError": ""
 }
