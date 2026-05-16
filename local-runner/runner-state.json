@@ -1,9 +1,26 @@
 {
   "status": "idle",
-  "message": "No pending jobs. Waiting for next poll.",
+  "message": "Runner heartbeat OK",
   "currentJobId": null,
-  "processedVideos": 0,
-  "updatedAt": "2026-05-16T09:39:08.852Z",
-  "lastHeartbeatAt": "2026-05-16T09:38:53.992Z",
-  "lastError": ""
+  "processedVideos": 3,
+  "updatedAt": "2026-05-16T09:42:55.789Z",
+  "lastHeartbeatAt": "2026-05-16T09:42:55.789Z",
+  "lastError": "",
+  "currentCommandId": null,
+  "currentCommandType": null,
+  "remoteAccess": {
+    "platform": "win32 10.0.26200",
+    "version": "1.1.0",
+    "tailscale": {
+      "installed": false,
+      "status": "not_installed",
+      "ip": null,
+      "dnsName": null
+    },
+    "ssh": {
+      "enabled": false,
+      "status": "not_installed",
+      "target": null
+    }
+  }
 }

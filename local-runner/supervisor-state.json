@@ -1,11 +1,11 @@
 {
   "status": "running",
-  "message": "Background supervisor starting.",
-  "updatedAt": "2026-05-16T09:39:15.857Z",
-  "startedAt": "2026-05-16T09:27:54.922Z",
-  "supervisorPid": 24692,
-  "dashboardPid": null,
+  "message": "runner exited (1). Restarting.",
+  "updatedAt": "2026-05-16T09:42:54.525Z",
+  "startedAt": "2026-05-16T09:40:24.218Z",
+  "supervisorPid": 20544,
+  "dashboardPid": 24452,
   "frontendPid": null,
-  "runnerSupervisorPid": null,
+  "runnerSupervisorPid": 6452,
   "lastError": ""
 }
