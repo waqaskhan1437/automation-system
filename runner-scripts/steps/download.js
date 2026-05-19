@@ -128,6 +128,40 @@ function needsShellWrapper(resolvedCommand) {
   return /\.(cmd|bat)$/i.test(String(resolvedCommand || ''));
 }
 
+// Sniff whether ffprobe.exe itself is broken/corrupted by probing -version.
+// If `-version` fails too, the binary (not the video) is the problem and we
+// must not blame the user's video file.
+function probeFfprobeBinary(ffprobe) {
+  try {
+    const versionProbe = spawnSync(ffprobe, ['-version'], {
+      encoding: 'utf8',
+      shell: needsShellWrapper(ffprobe),
+      timeout: 15000,
+    });
+
+    if (versionProbe.error) {
+      return { ok: false, error: versionProbe.error };
+    }
+    if (typeof versionProbe.status === 'number' && versionProbe.status !== 0) {
+      return {
+        ok: false,
+        error: new Error((versionProbe.stderr || '').trim() || `ffprobe -version exited ${versionProbe.status}`),
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err };
+  }
+}
+
+function isLikelyCorruptBinaryError(error) {
+  const msg = String(error && (error.message || error.code) || '').toLowerCase();
+  // Windows-specific corruption signals — Node surfaces these as UNKNOWN or
+  // similar opaque codes when the PE header is damaged or the file is
+  // blocked by the OS (e.g. SmartScreen / Defender quarantine).
+  return /unknown|corrupted|corrupt|exec format|einval|access is denied|not a valid win32/i.test(msg);
+}
+
 function validateOutput(outFile) {
   if (!fs.existsSync(outFile) || fs.statSync(outFile).size < 50000) {
     throw new Error('Download failed or file too small');
@@ -173,6 +207,22 @@ function validateOutput(outFile) {
       throw new Error('ffprobe did not detect a video stream');
     }
   } catch (error) {
+    // Before blaming the video, confirm ffprobe itself is healthy. A common
+    // failure mode on Windows is a corrupted bundled ffprobe.exe (incomplete
+    // zip extraction, antivirus quarantine, disk error) — `spawnSync` then
+    // returns an UNKNOWN error and the old code mislabeled the user's video
+    // as invalid.
+    if (isLikelyCorruptBinaryError(error)) {
+      const sanity = probeFfprobeBinary(ffprobe);
+      if (!sanity.ok) {
+        throw new Error(
+          `Bundled ffprobe is unusable at ${ffprobe} (${(sanity.error && sanity.error.message) || sanity.error}). ` +
+            `Re-extract the local-runner portable package or delete tools\\ffmpeg and re-run setup.bat to redownload it. ` +
+            `Original probe failure: ${error.message}`,
+        );
+      }
+    }
+
     let header = '';
     try {
       header = fs.readFileSync(outFile).subarray(0, 512).toString('utf8');
