@@ -1,7 +1,6 @@
 import { Automation, Env, GithubSettings, PostformeSettings, VideoSourceSettings } from "../types";
 import { buildWorkflowInputs, buildWorkflowRuntimeConfigToken, dispatchWorkflow, getWorkflowRunStatus } from "./github";
 import { getImageAspectRatio, prepareImageAutomationRunConfig } from "./image-automation";
-import { prepareCaptionAutomationRunConfig } from "./caption-automation";
 import { buildStoredPostMetadata, parseSavedPostformeAccounts, resolveScheduledAccounts } from "./post-metadata";
 import { getScopedSettings } from "./user-settings";
 import { parseGhazalTimestamps, createVideoMetadata, processGhazalVideo } from "./ghazal-timestamps";
@@ -959,23 +958,9 @@ function buildWorkflowDispatch(
   if (automation.type === "image") {
     return buildImageWorkflowInputs(jobId, automation.id as number);
   }
-  if (automation.type === "caption") {
-    return buildCaptionWorkflowInputs(jobId, automation.id as number);
-  }
-
   return {
     workflowName: "video-automation.yml",
     inputs: { ...buildWorkflowInputs(jobId, automation.id as number) },
-  };
-}
-
-function buildCaptionWorkflowInputs(
-  jobId: number,
-  automationId: number
-): WorkflowDispatchConfig {
-  return {
-    workflowName: "caption-automation.yml",
-    inputs: { ...buildWorkflowInputs(jobId, automationId) },
   };
 }
 
@@ -1255,82 +1240,6 @@ export async function triggerAutomationRun(
       githubRunId: dispatchResult.runId,
       executionMode: "github",
       message: "Image render dispatched to GitHub Actions.",
-    };
-  }
-
-  // ── Caption automation ───────────────────────────────────────────────
-  if (automation.type === "caption") {
-    const captionJobConfig = await prepareCaptionAutomationRunConfig(env, userId, automation.name, config);
-
-    const jobInputData = JSON.stringify(captionJobConfig);
-    const jobResult = await env.DB.prepare(
-      "INSERT INTO jobs (user_id, automation_id, status, input_data, started_at) VALUES (?, ?, 'queued', ?, CURRENT_TIMESTAMP)"
-    ).bind(userId, automation.id, jobInputData).run();
-    const jobId = Number(jobResult.meta.last_row_id);
-
-    if (executionMode === "local") {
-      const rule = getScheduleRule(config);
-      if (rule && automation.status === "active") {
-        await env.DB.prepare(
-          "UPDATE automations SET schedule = ?, next_run = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-        ).bind(rule.label, automation.id).run();
-      }
-
-      return {
-        success: true,
-        jobId,
-        githubRunId: null,
-        executionMode: "local",
-        message: "Caption automation queued for the local runner.",
-      };
-    }
-
-    const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
-    if (!githubSettings) {
-      const error = "GitHub settings not configured. Go to Settings -> GitHub Runner";
-      await failExistingAutomationJob(env, jobId, error, "dispatch.github_settings", { execution_mode: executionMode });
-      return { success: false, jobId, executionMode, error };
-    }
-
-    const workflow = buildWorkflowDispatch(automation, jobId, captionJobConfig);
-    workflow.inputs.runtime_config_token = await buildWorkflowRuntimeConfigToken(jobId, githubSettings.pat_token);
-    workflow.inputs.runner_labels = serializeRunnerLabels(githubSettings.runner_labels);
-    const dispatchResult = await dispatchWorkflow(githubSettings, workflow.inputs, workflow.workflowName);
-
-    if (!dispatchResult.success) {
-      const error = dispatchResult.error || "Workflow dispatch failed";
-      await failExistingAutomationJob(env, jobId, error, "dispatch.github_api", {
-        workflow: workflow.workflowName,
-        dispatch_status: dispatchResult.dispatchStatus,
-        payload_bytes: dispatchResult.payloadBytes,
-        dispatch_nonce: dispatchResult.dispatchNonce,
-      });
-
-      return { success: false, jobId, executionMode, error };
-    }
-
-    await env.DB.prepare(
-      "UPDATE jobs SET status = 'running', github_run_id = ?, github_run_url = ?, logs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(
-      dispatchResult.runId,
-      dispatchResult.runUrl,
-      dispatchResult.warning ? JSON.stringify([{ at: new Date().toISOString(), stage: "dispatch.run_lookup", level: "warning", message: dispatchResult.warning, dispatch_nonce: dispatchResult.dispatchNonce }]) : null,
-      jobId
-    ).run();
-
-    const rule = getScheduleRule(config);
-    if (rule && automation.status === "active") {
-      await env.DB.prepare(
-        "UPDATE automations SET schedule = ?, next_run = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-      ).bind(rule.label, automation.id).run();
-    }
-
-    return {
-      success: true,
-      jobId,
-      githubRunId: dispatchResult.runId,
-      executionMode: "github",
-      message: "Caption automation dispatched to GitHub Actions.",
     };
   }
 

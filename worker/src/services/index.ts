@@ -20,8 +20,3 @@ export {
   calculateBackoff,
   withRetry,
 } from "../lib";
-
-export {
-  prepareCaptionAutomationRunConfig,
-  getCaptionDefaultFonts,
-} from "./caption-automation";
