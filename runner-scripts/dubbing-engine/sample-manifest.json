@@ -1,0 +1,21 @@
+{
+  "workflow": "dubbing",
+  "type": "video",
+  "name": "English to Urdu short",
+  "video_source": "direct",
+  "source_mode": "url",
+  "source_value": "https://example.com/source.mp4",
+  "dubbing": {
+    "source_language": "en",
+    "target_language": "ur",
+    "translation_engine": "llm",
+    "voice_engine": "voxcpm2",
+    "voice_reference_seconds": 18,
+    "diarization_enabled": true,
+    "mix_mode": "bed",
+    "preserve_background": true,
+    "max_tempo": 1.2,
+    "lip_sync_enabled": false,
+    "stages": ["extract", "separate", "transcribe", "speakers", "translate", "clone", "align", "mix"]
+  }
+}

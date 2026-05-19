@@ -71,6 +71,9 @@ export default function Dashboard() {
             <a href="/automations/image/new" className="glass-button-primary text-center py-4 rounded-xl block">
               Create Image Automation
             </a>
+            <a href="/dubbing" className="glass-button-primary text-center py-4 rounded-xl block">
+              Create Dubbing Job
+            </a>
             <a href="/settings" className="glass-button text-center py-4 rounded-xl block">
               Settings
             </a>

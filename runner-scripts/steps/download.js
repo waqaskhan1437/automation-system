@@ -63,6 +63,36 @@ function buildYtDlpArgs(ytDlp, outFile) {
   ];
 }
 
+function getBrowserCookieFallbacks() {
+  const runtimeConfig = loadRuntimeConfig();
+  const configured = String(
+    process.env.YOUTUBE_COOKIES_FROM_BROWSER ||
+    runtimeConfig.youtube_cookies_from_browser ||
+    runtimeConfig.cookies_from_browser ||
+    ''
+  ).trim();
+
+  if (configured && !/^0|false|off|none$/i.test(configured)) {
+    return configured.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+
+  if (process.env.RUNNER_EXECUTION_MODE === 'local') {
+    return ['firefox', 'chrome', 'edge'];
+  }
+
+  return [];
+}
+
+function isYouTubeUrl(sourceUrl) {
+  return /youtube\.com|youtu\.be/i.test(String(sourceUrl || ''));
+}
+
+function runYtDlpWithArgs(ytDlp, args, outFile) {
+  clearDownloadArtifacts(outFile);
+  runCommand(ytDlp.command, args, ytDlp.label, 480000);
+  validateOutput(outFile);
+}
+
 function runYtDlpDownload(normalizedSource, outFile) {
   const ytDlp = resolveYtDlpRunner();
   if (!ytDlp) {
@@ -70,17 +100,40 @@ function runYtDlpDownload(normalizedSource, outFile) {
   }
 
   const cookiesFile = resolveCookiesFile(normalizedSource);
-  const ytArgs = buildYtDlpArgs(ytDlp, outFile);
+  const baseArgs = buildYtDlpArgs(ytDlp, outFile);
 
   if (cookiesFile) {
+    const ytArgs = [...baseArgs];
     ytArgs.push('--cookies', cookiesFile);
     console.log('[DOWNLOAD] Using cookie file for YouTube/source authentication');
+    ytArgs.push(normalizedSource);
+    runYtDlpWithArgs(ytDlp, ytArgs, outFile);
+    return;
   }
 
-  ytArgs.push(normalizedSource);
-  clearDownloadArtifacts(outFile);
-  runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
-  validateOutput(outFile);
+  const browserFallbacks = isYouTubeUrl(normalizedSource) ? getBrowserCookieFallbacks() : [];
+  let lastError = null;
+  for (const browser of browserFallbacks) {
+    try {
+      const ytArgs = [...baseArgs, '--cookies-from-browser', browser, normalizedSource];
+      console.log(`[DOWNLOAD] No server cookie file found; trying local browser cookies from ${browser}`);
+      runYtDlpWithArgs(ytDlp, ytArgs, outFile);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.log(`[DOWNLOAD] Browser cookie fallback failed for ${browser}: ${error.message}`);
+    }
+  }
+
+  try {
+    const ytArgs = [...baseArgs, normalizedSource];
+    runYtDlpWithArgs(ytDlp, ytArgs, outFile);
+  } catch (error) {
+    if (lastError && isAuthLikeDownloadError(error)) {
+      throw new Error(`${error.message}. Browser cookie fallback also failed: ${lastError.message}`);
+    }
+    throw error;
+  }
 }
 
 function getCommandCandidates(name) {

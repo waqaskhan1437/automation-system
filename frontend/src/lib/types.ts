@@ -1,7 +1,7 @@
 export interface Automation {
   id: number;
   name: string;
-  type: "video" | "image";
+  type: "video" | "image" | "caption";
   status: "active" | "paused" | "completed" | "failed";
   schedule: string | null;
   config: string;

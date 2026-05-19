@@ -237,6 +237,11 @@ select option:hover {
   color: #ec4899;
 }
 
+.badge-dubbing {
+  background: rgba(20, 184, 166, 0.15);
+  color: #5eead4;
+}
+
 .scrollbar-thin::-webkit-scrollbar {
   width: 6px;
 }

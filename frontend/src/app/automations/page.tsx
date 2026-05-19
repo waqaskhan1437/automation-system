@@ -58,6 +58,11 @@ function parseAutomationConfig(config: string | null): Record<string, unknown> {
   }
 }
 
+function isDubbingAutomationConfig(config: Record<string, unknown>): boolean {
+  const dubbing = config.dubbing;
+  return config.workflow === "dubbing" || (Boolean(dubbing) && typeof dubbing === "object");
+}
+
 function estimateProgress(status: string): number {
   if (status === "success" || status === "failed") return 100;
   if (status === "running") return 60;
@@ -434,7 +439,13 @@ export default function AutomationsPage() {
 
   const sc = (status: string) => status === "success" ? "#10b981" : status === "failed" ? "#ef4444" : status === "running" || status === "in_progress" ? "#6366f1" : "#f59e0b";
   const si = (step: StepInfo) => step.conclusion === "success" ? "\u2713" : step.conclusion === "failure" ? "\u2717" : step.status === "in_progress" ? "\u27F3" : "\u25CB";
-  const filtered = filter === "all" ? automations : automations.filter((automation) => automation.type === filter);
+  const filtered = filter === "all" ? automations : automations.filter((automation) => {
+    const config = parseAutomationConfig(automation.config);
+    const isDubbing = isDubbingAutomationConfig(config);
+    if (filter === "dubbing") return isDubbing;
+    if (filter === "video") return automation.type === "video" && !isDubbing;
+    return automation.type === filter;
+  });
 
   return (
     <div>
@@ -453,11 +464,12 @@ export default function AutomationsPage() {
           </button>
           <button onClick={() => openCreate("video")} className="glass-button-primary">+ Video</button>
           <button onClick={() => openCreate("image")} className="glass-button-primary">+ Image</button>
+          <a href="/dubbing" className="glass-button-primary">+ Dubbing</a>
         </div>
       </div>
 
       <div className="flex gap-2 mb-6">
-        {["all", "video", "image"].map((item) => (
+        {["all", "video", "image", "dubbing"].map((item) => (
           <button key={item} onClick={() => setFilter(item)} className={`px-4 py-2 rounded-xl text-sm font-medium capitalize ${filter === item ? "bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] text-white" : "glass-button"}`}>
             {item === "all" ? "All" : item}
           </button>
@@ -483,6 +495,7 @@ export default function AutomationsPage() {
             const linkQueue = linkQueues[auto.id];
             const jobs = jobStats[auto.id] || { totalJobs: 0, successJobs: 0, failedJobs: 0, runningJobs: 0, queuedJobs: 0, otherJobs: 0 };
             const config = parseAutomationConfig(auto.config);
+            const isDubbing = isDubbingAutomationConfig(config);
             const isLocalFolderSource = config.video_source === "local_folder";
             const nextRunTs = parseAutomationDate(auto.next_run);
             const countdownLabel = nextRunTs ? (nextRunTs <= now ? "Running soon" : `Next in ${formatCountdown(nextRunTs - now)}`) : null;
@@ -494,11 +507,17 @@ export default function AutomationsPage() {
               <div key={auto.id} className="glass-card overflow-hidden">
                 <div className="p-5 flex items-center justify-between">
                   <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl ${auto.type === "video" ? "bg-[rgba(139,92,246,0.15)] text-[#8b5cf6]" : "bg-[rgba(236,72,153,0.15)] text-[#ec4899]"}`}>{auto.type === "video" ? "\u25B6" : "\uD83D\uDDBC"}</div>
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl ${
+                      isDubbing
+                        ? "bg-[rgba(20,184,166,0.15)] text-[#5eead4]"
+                        : auto.type === "video"
+                          ? "bg-[rgba(139,92,246,0.15)] text-[#8b5cf6]"
+                          : "bg-[rgba(236,72,153,0.15)] text-[#ec4899]"
+                    }`}>{isDubbing ? "\u266B" : auto.type === "video" ? "\u25B6" : "\uD83D\uDDBC"}</div>
                     <div>
                       <h4 className="font-semibold text-lg">{auto.name}</h4>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <span className={`badge ${auto.type === "video" ? "badge-video" : "badge-image"}`}>{auto.type}</span>
+                        <span className={`badge ${isDubbing ? "badge-dubbing" : auto.type === "video" ? "badge-video" : "badge-image"}`}>{isDubbing ? "dubbing" : auto.type}</span>
                         <span className={`badge badge-${auto.status}`}>{auto.status}</span>
                         {isRunning && (
                           <span className="text-[11px] px-2 py-1 rounded-lg bg-[rgba(99,102,241,0.15)] text-indigo-300">
@@ -514,7 +533,11 @@ export default function AutomationsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => openEdit(auto)} className="glass-button text-sm py-2 px-4">Edit</button>
+                    {isDubbing ? (
+                      <a href="/dubbing" className="glass-button text-sm py-2 px-4">Edit</a>
+                    ) : (
+                      <button onClick={() => openEdit(auto)} className="glass-button text-sm py-2 px-4">Edit</button>
+                    )}
                     {runningJob ? (
                       <>
                         <button onClick={() => setShowLogs({ autoId: auto.id, job: runningJob })} className="glass-button-primary text-sm py-2 px-4 flex items-center gap-2">
@@ -543,9 +566,14 @@ export default function AutomationsPage() {
                           </button>
                         )}
                       </>
-                    ) : auto.status === "active" && <button onClick={() => void handleRun(auto.id)} className="glass-button-primary text-sm py-2 px-4">Run Now</button>}
-                    {auto.status === "active" && !runningJob && <button onClick={() => void handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">Pause</button>}
-                    {auto.status !== "active" && !runningJob && <button onClick={() => void handleAction(auto.id, "resume")} className="glass-button text-sm py-2 px-4">Resume</button>}
+                    ) : auto.status === "active" && !isDubbing && <button onClick={() => void handleRun(auto.id)} className="glass-button-primary text-sm py-2 px-4">Run Now</button>}
+                    {auto.status === "active" && !runningJob && !isDubbing && <button onClick={() => void handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">Pause</button>}
+                    {auto.status !== "active" && !runningJob && !isDubbing && <button onClick={() => void handleAction(auto.id, "resume")} className="glass-button text-sm py-2 px-4">Resume</button>}
+                    {isDubbing && !runningJob && (
+                      <span className="rounded-xl bg-[rgba(20,184,166,0.12)] px-3 py-2 text-xs font-semibold text-teal-200">
+                        Engine setup pending
+                      </span>
+                    )}
                     <button onClick={() => void handleAction(auto.id, "delete")} className="glass-button text-sm py-2 px-4 text-[#ef4444]">Delete</button>
                   </div>
                 </div>

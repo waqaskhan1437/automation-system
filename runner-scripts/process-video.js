@@ -30,6 +30,41 @@ const OUTPUT_FILE = process.env.OUTPUT_FILE_PATH ? path.resolve(process.env.OUTP
 const TEMP_FILE = process.env.TEMP_FILE_PATH ? path.resolve(process.env.TEMP_FILE_PATH) : path.join(OUTPUT_DIR, "temp-noaudio.mp4");
 const SPEED_FILE = process.env.SPEED_FILE_PATH ? path.resolve(process.env.SPEED_FILE_PATH) : path.join(OUTPUT_DIR, "temp-speed.mp4");
 
+function getCommandCandidates(name) {
+  const isWin = process.platform === "win32";
+  const extension = isWin ? ".exe" : "";
+  return [
+    path.resolve(__dirname, "..", "local-runner", "tools", "ffmpeg", "bin", `${name}${extension}`),
+    path.resolve(__dirname, "tools", "ffmpeg", "bin", `${name}${extension}`),
+    path.resolve(process.cwd(), `${name}${extension}`),
+  ];
+}
+
+function resolveCommand(name) {
+  for (const candidate of getCommandCandidates(name)) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (process.platform === "win32") {
+    for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+      if (!dir || /[\\/]WindowsApps([\\/]|$)/i.test(dir)) continue;
+      const full = path.join(dir, `${name}.exe`);
+      if (fs.existsSync(full)) return full;
+    }
+  }
+
+  return name;
+}
+
+function quoteCommand(command) {
+  return command.includes(" ") || command.includes("\\") ? `"${command}"` : command;
+}
+
+const FFMPEG = quoteCommand(resolveCommand("ffmpeg"));
+const FFPROBE = quoteCommand(resolveCommand("ffprobe"));
+
 function copyFileSync(source, destination) {
   fs.copyFileSync(source, destination);
   console.log(`Copied file: ${source} -> ${destination}`);
@@ -593,7 +628,7 @@ function buildOverlayDrawtext(text, config, options) {
 
 function getVideoDuration(inputFile) {
   try {
-    const output = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputFile}"`, { encoding: "utf8" });
+    const output = execSync(`${FFPROBE} -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputFile}"`, { encoding: "utf8" });
     return parseFloat(output.trim());
   } catch (e) {
     return null;
@@ -602,7 +637,7 @@ function getVideoDuration(inputFile) {
 
 function hasAudioTrack(inputFile) {
   try {
-    const output = execSync(`ffprobe -v error -select_streams a -show_entries stream=codec_name "${inputFile}"`, { encoding: "utf8" });
+    const output = execSync(`${FFPROBE} -v error -select_streams a -show_entries stream=codec_name "${inputFile}"`, { encoding: "utf8" });
     return output.includes("codec_name");
   } catch (e) {
     return false;
@@ -610,7 +645,7 @@ function hasAudioTrack(inputFile) {
 }
 
 function remuxWithFaststart(inputFile, outputFile, codecArgs) {
-  const cmd = `ffmpeg -y -i "${inputFile}" ${codecArgs} -movflags +faststart "${outputFile}"`;
+  const cmd = `${FFMPEG} -y -i "${inputFile}" ${codecArgs} -movflags +faststart "${outputFile}"`;
   console.log("Finalize CMD:", cmd);
   execSync(cmd, { stdio: "inherit", timeout: 300000 });
 }
@@ -800,7 +835,7 @@ function applySpeedSegments(inputFile, tempFile, config, videoDuration, segments
   const complexFilter = `${allFilters}; ${concatParts.join("")}concat=n=${n}:v=1${concatAudio}[out]`;
 
   const encodeArgs = getOutputEncodeArgs(config, { disableAudio: !hasAudio });
-  const cmd = `ffmpeg -y -i "${inputFile}" -filter_complex "${complexFilter}" -map "[out]" ${encodeArgs} -movflags +faststart "${tempFile}"`;
+  const cmd = `${FFMPEG} -y -i "${inputFile}" -filter_complex "${complexFilter}" -map "[out]" ${encodeArgs} -movflags +faststart "${tempFile}"`;
 
   console.log("Speed CMD:", cmd.substring(0, 300) + "...");
 
@@ -855,7 +890,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       console.log(`Mode: Fade Out (last ${audioFadeDuration}s)`);
       if (videoDuration && videoDuration > audioFadeDuration) {
         const fadeStart = videoDuration - audioFadeDuration;
-        const cmd = `ffmpeg -y -i "${tempFile}" -af "afade=t=out:st=${fadeStart}:d=${audioFadeDuration}" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "afade=t=out:st=${fadeStart}:d=${audioFadeDuration}" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Fade CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -868,7 +903,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       console.log(`Mode: Mute Last (${muteLastSeconds}s)`);
       if (videoDuration && videoDuration > muteLastSeconds) {
         const keepEnd = videoDuration - muteLastSeconds;
-        const cmd = `ffmpeg -y -i "${tempFile}" -af "volume=enable='between(t,${keepEnd},${videoDuration})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "volume=enable='between(t,${keepEnd},${videoDuration})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Mute Last CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -882,7 +917,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       if (videoDuration && muteRangeEnd > muteRangeStart && muteRangeStart >= 0) {
         const actualEnd = Math.min(muteRangeEnd, videoDuration);
         // Mute audio between start and end using volume filter with enable expression
-        const cmd = `ffmpeg -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Mute Range CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -896,7 +931,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       if (videoDuration && muteRangeEnd > muteRangeStart && muteRangeStart >= 0) {
         const actualEnd = Math.min(muteRangeEnd, videoDuration);
         // Same as mute_range but semantically different (could be extended)
-        const cmd = `ffmpeg -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Mute Between CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -1143,9 +1178,9 @@ function main() {
       complexFilter = `[0:v]${vfChain}select='${splitSelectExpr}',setpts=N/FRAME_RATE/TB[v]`;
       mapArgs = `-map "[v]"`;
     }
-      cmd = `ffmpeg -y -i "${SPEED_FILE}" -t ${duration} -filter_complex "${complexFilter}" ${mapArgs} ${getOutputEncodeArgs(config, { disableAudio: !hasAudio })} -movflags +faststart "${TEMP_FILE}"`;
+      cmd = `${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -filter_complex "${complexFilter}" ${mapArgs} ${getOutputEncodeArgs(config, { disableAudio: !hasAudio })} -movflags +faststart "${TEMP_FILE}"`;
   } else {
-    cmd = `ffmpeg -y -i "${SPEED_FILE}" -t ${duration} -vf "${filterStr}" ${getOutputEncodeArgs(config)} -movflags +faststart "${TEMP_FILE}"`;
+    cmd = `${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -vf "${filterStr}" ${getOutputEncodeArgs(config)} -movflags +faststart "${TEMP_FILE}"`;
   }
 
   console.log("CMD:", cmd);
@@ -1156,7 +1191,7 @@ function main() {
     console.error("FFmpeg error:", e.message);
     console.log("Trying copy fallback...");
     try {
-      execSync(`ffmpeg -y -i "${SPEED_FILE}" -t ${duration} -c copy "${TEMP_FILE}"`, {
+      execSync(`${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -c copy "${TEMP_FILE}"`, {
         stdio: "inherit", timeout: 300000
       });
     } catch (e2) {

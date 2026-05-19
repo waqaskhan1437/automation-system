@@ -9,7 +9,7 @@ interface UseAutomationsReturn {
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
-  create: (data: Partial<Automation> & { type: "video" | "image" }) => Promise<Automation | null>;
+  create: (data: Partial<Automation> & { type: "video" | "image" | "caption" }) => Promise<Automation | null>;
   update: (id: number, data: Partial<Automation>) => Promise<boolean>;
   remove: (id: number) => Promise<boolean>;
   run: (id: number) => Promise<{ success: boolean; error?: string }>;
@@ -43,7 +43,7 @@ export function useAutomations(): UseAutomationsReturn {
     refetch();
   }, [refetch]);
 
-  const create = useCallback(async (data: Partial<Automation> & { type: "video" | "image" }): Promise<Automation | null> => {
+  const create = useCallback(async (data: Partial<Automation> & { type: "video" | "image" | "caption" }): Promise<Automation | null> => {
     try {
       const response = await api.post<{ id: number }>("/api/automations", {
         name: data.name,

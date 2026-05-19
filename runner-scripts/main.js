@@ -15,6 +15,37 @@ const tracker = require('./steps/tracker');
 const FAILURE_REPORT_PATH = path.join(OUTPUT_DIR, 'failure-report.json');
 const ERROR_LOG_PATH = path.join(OUTPUT_DIR, 'error.log');
 
+function getCommandCandidates(name) {
+  const isWin = process.platform === 'win32';
+  const extension = isWin ? '.exe' : '';
+  return [
+    path.resolve(__dirname, '..', 'local-runner', 'tools', 'ffmpeg', 'bin', `${name}${extension}`),
+    path.resolve(__dirname, 'tools', 'ffmpeg', 'bin', `${name}${extension}`),
+    path.resolve(process.cwd(), `${name}${extension}`),
+  ];
+}
+
+function resolveCommand(name) {
+  for (const candidate of getCommandCandidates(name)) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  if (process.platform === 'win32') {
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+      if (!dir || /[\\/]WindowsApps([\\/]|$)/i.test(dir)) continue;
+      const full = path.join(dir, `${name}.exe`);
+      if (fs.existsSync(full)) return full;
+    }
+  }
+  return name;
+}
+
+function quoteCommand(command) {
+  return command.includes(' ') || command.includes('\\') ? `"${command}"` : command;
+}
+
+const FFMPEG = quoteCommand(resolveCommand('ffmpeg'));
+const FFPROBE = quoteCommand(resolveCommand('ffprobe'));
+
 function writeFailureReport(payload) {
   try {
     fs.writeFileSync(FAILURE_REPORT_PATH, JSON.stringify(payload, null, 2), 'utf8');
@@ -83,7 +114,10 @@ function removeFileIfExists(filePath, label) {
 function syncManagedCookieFile(targetFile, rawCookieText, label) {
   const normalized = normalizeCookieText(rawCookieText);
   if (normalized === null || !normalized) {
-    removeFileIfExists(targetFile, label);
+    if (fs.existsSync(targetFile)) {
+      console.log(`[COOKIES] No server-managed ${label} cookies in config; keeping existing local fallback file: ${targetFile}`);
+      return targetFile;
+    }
     return null;
   }
   const fingerprint = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 12);
@@ -126,7 +160,7 @@ function saveLocalFinalMedia(config, extensionSuffix = '.mp4', sourceFile = path
 
 function getVideoDuration(inputFile) {
   try {
-    const output = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputFile}"`, { encoding: "utf8" });
+    const output = execSync(`${FFPROBE} -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputFile}"`, { encoding: "utf8" });
     return parseFloat(output.trim()) || null;
   } catch {
     return null;
@@ -337,12 +371,12 @@ function mergeVideoFiles(inputFiles, outputFile) {
   );
 
   try {
-    execSync(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c copy "${outputFile}"`, {
+    execSync(`${FFMPEG} -y -f concat -safe 0 -i "${listFile}" -c copy "${outputFile}"`, {
       stdio: 'inherit',
       timeout: 600000,
     });
   } catch {
-    execSync(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c:v libx264 -c:a aac -movflags +faststart "${outputFile}"`, {
+    execSync(`${FFMPEG} -y -f concat -safe 0 -i "${listFile}" -c:v libx264 -c:a aac -movflags +faststart "${outputFile}"`, {
       stdio: 'inherit',
       timeout: 600000,
     });
@@ -357,11 +391,11 @@ function extractSegment(inputFile, outputFile, start, end) {
   const duration = end - start;
   console.log(`[SEGMENT] Extracting: ${start.toFixed(1)}s → ${end.toFixed(1)}s (${duration.toFixed(1)}s)`);
 
-  let cmd = `ffmpeg -y -ss ${start} -i "${inputFile}" -t ${duration} -c copy "${outputFile}"`;
+  let cmd = `${FFMPEG} -y -ss ${start} -i "${inputFile}" -t ${duration} -c copy "${outputFile}"`;
   try {
     execSync(cmd, { stdio: "inherit", timeout: 60000 });
   } catch {
-    cmd = `ffmpeg -y -ss ${start} -i "${inputFile}" -t ${duration} -c copy -avoid_negative_ts make_zero "${outputFile}"`;
+    cmd = `${FFMPEG} -y -ss ${start} -i "${inputFile}" -t ${duration} -c copy -avoid_negative_ts make_zero "${outputFile}"`;
     execSync(cmd, { stdio: "inherit", timeout: 60000 });
   }
 
