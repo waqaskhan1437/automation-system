@@ -665,7 +665,7 @@ export async function handleSettingsRoutes(
           getTaglinesMessages({ topic, count }),
           aiRuntimeConfig
         );
-        const normalized = normalizeTaglinesResult(parsed, count);
+        const normalized = normalizeTaglinesResult(parsed, count, topic);
 
         return jsonResponse({
           success: true,

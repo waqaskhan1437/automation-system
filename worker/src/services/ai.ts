@@ -441,50 +441,112 @@ function parseTimestampSeconds(value: unknown): number | null {
   return first * 60 + second;
 }
 
+// Detect concrete contact references the user actually wrote into the prompt.
+// We pass these to the LLM as an explicit "allow list" so it knows it has no
+// permission to invent any other domain/handle/number on its own. The same
+// extractor is reused server-side to strip fabricated URLs from the response.
+function extractAllowedReferences(topic: string): {
+  domains: string[];
+  urls: string[];
+  phones: string[];
+  handles: string[];
+  hasAny: boolean;
+} {
+  const text = String(topic || "");
+
+  // Domains: capture word.word(.word)+ with a TLD-shaped tail. Generous on
+  // length to allow shop.example.co.uk style. Lowercased and deduped.
+  const domainRe = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b/gi;
+  const urlRe = /\bhttps?:\/\/[^\s<>"']+/gi;
+  const phoneRe = /(?:\+?\d[\d\s().-]{6,}\d)/g;
+  const handleRe = /(?:^|[^a-z0-9_])@([a-z0-9_.]{2,32})\b/gi;
+
+  const domains = Array.from(new Set(
+    (text.match(domainRe) || []).map((d) => d.toLowerCase()),
+  ));
+  const urls = Array.from(new Set(text.match(urlRe) || []));
+  const phones = Array.from(new Set((text.match(phoneRe) || []).map((p) => p.trim())));
+
+  const handles: string[] = [];
+  let handleMatch: RegExpExecArray | null;
+  while ((handleMatch = handleRe.exec(text)) !== null) {
+    const h = `@${handleMatch[1]}`;
+    if (!handles.includes(h)) handles.push(h);
+  }
+
+  return {
+    domains,
+    urls,
+    phones,
+    handles,
+    hasAny: domains.length + urls.length + phones.length + handles.length > 0,
+  };
+}
+
 function buildTaglinesPrompt({ topic, count }: GenerateTaglinesInput): GenerationMessages {
+  const allowed = extractAllowedReferences(topic);
+
+  const allowedSummary = allowed.hasAny
+    ? [
+        "ALLOWED contact references the user explicitly provided (you may ONLY use these — nothing else):",
+        allowed.domains.length ? `  • Domains: ${allowed.domains.join(", ")}` : "",
+        allowed.urls.length ? `  • URLs: ${allowed.urls.join(", ")}` : "",
+        allowed.phones.length ? `  • Phone numbers: ${allowed.phones.join(", ")}` : "",
+        allowed.handles.length ? `  • Social handles: ${allowed.handles.join(", ")}` : "",
+      ].filter(Boolean).join("\n")
+    : [
+        "ALLOWED contact references the user explicitly provided: NONE.",
+        "Because the user did NOT provide any website / domain / URL / phone / handle, your bottom taglines MUST NOT contain any of these. No '.com', no '.in', no '.net', no '.co', no '.pk', no '.io', no slash URLs, no '@handle', no phone numbers. Write a plain action or curiosity CTA instead.",
+      ].join("\n");
+
   return {
     system: [
       "You create short-form video overlay copy. Return valid JSON only — no markdown, no prose, no code fences.",
-      "Follow the user's prompt LITERALLY. Only use a website, domain, URL, phone number, social handle, brand name, or any other contact reference if it is EXPLICITLY present in the user's prompt.",
-      "Never invent, guess, fabricate, modify, abbreviate, or hallucinate any website, domain, URL, phone number, or handle that is not literally written in the user's prompt — not even as an example.",
+      "Follow the user's prompt LITERALLY. You are only allowed to use a website, domain, URL, phone number, social handle, brand name, or any other contact reference if it appears character-for-character in the user's prompt.",
+      "Inventing, guessing, fabricating, modifying, abbreviating, hallucinating, or stitching together any website / domain / URL / phone / handle that is not literally present in the user's prompt is FORBIDDEN — not even in examples, not even as a placeholder, not even if it 'sounds plausible'.",
+      "When the user provides no contact references, your bottom taglines must contain ZERO domains, ZERO URLs, ZERO '.com'/'.in'/'.net'/'.co'/'.pk'/'.io' style strings, ZERO '@handles', and ZERO phone numbers.",
       "Never generate duplicate taglines — even if they differ slightly in wording, they must be meaningfully different.",
     ].join(" "),
     user: [
       `Generate exactly ${count} TOP taglines and exactly ${count} BOTTOM taglines for a short-form video.`,
       `Topic / user prompt: ${topic}`,
       "",
+      allowedSummary,
+      "",
       "TOP TAGLINES (curiosity hooks that describe or tease the video):",
       "- Describe WHAT is happening, or create curiosity / surprise / a question.",
       "- Short, punchy phrases that make viewers stop scrolling and watch.",
-      "- Never include any link, domain, phone, or social handle in the TOP taglines.",
+      "- Never include any link, domain, phone, or social handle in TOP taglines — ever.",
       "- Style examples (do NOT copy verbatim, just match the energy): 'What he did next will shock you', 'This is not what it looks like', 'She never expected this'.",
       "",
-      "BOTTOM TAGLINES (closing line / call-to-action):",
-      "- READ THE USER'S PROMPT CAREFULLY before writing these. Pick the rule below that matches what the user actually provided:",
+      "BOTTOM TAGLINES — pick the ONE rule below that matches what the user actually provided:",
       "",
-      "  Rule A — User explicitly gave a website / domain / URL:",
-      "    • Use ONLY that exact domain, exactly as the user wrote it. Strip 'https://' and 'www.' but do NOT change the rest.",
-      "    • If the user wrote 'shop.example.in', use 'shop.example.in' — do not shorten it to 'example.in' or change it to '.com'.",
-      "    • Format the CTA naturally around that domain, e.g. 'Order on <domain>', 'Available at <domain>', 'Get yours on <domain>'.",
-      "    • You may vary the verb across the bottom taglines, but the domain itself must be identical in every one.",
+      "  Rule A — User's prompt contains a website / domain / URL:",
+      "    • Use ONLY that exact domain, character-for-character. Strip 'https://' and 'www.' but do NOT change anything else.",
+      "    • If the user wrote 'shop.example.in', use 'shop.example.in' — do not shorten it to 'example.in', do not change '.in' to '.com'.",
+      "    • Format the CTA naturally around that domain: 'Order on <domain>', 'Available at <domain>', 'Get yours on <domain>'.",
+      "    • Vary the verb across the bottom taglines, but the domain itself must be identical in every one.",
       "",
-      "  Rule B — User explicitly gave a phone number:",
-      "    • Use the exact phone number, formatted naturally. Example: 'Call 0300-1234567', 'WhatsApp 0300-1234567'.",
+      "  Rule B — User's prompt contains a phone number:",
+      "    • Use that exact phone number, formatted naturally. Example: 'Call 0300-1234567', 'WhatsApp 0300-1234567'.",
       "    • Do NOT invent a domain alongside it.",
       "",
-      "  Rule C — User explicitly gave a social handle / Instagram / TikTok / brand username:",
+      "  Rule C — User's prompt contains a social handle / Instagram / TikTok / brand username:",
       "    • Reference that exact handle. Example: 'Follow @brand', 'Find us @brand on Instagram'.",
       "    • Do NOT invent a domain alongside it.",
       "",
-      "  Rule D — User did NOT mention any website, domain, URL, phone, handle, or other concrete contact info:",
-      "    • DO NOT invent one. DO NOT add a fake '.com' domain stitched together from the topic words. DO NOT use 'visit our website', 'check the link in bio', or any placeholder URL.",
-      "    • Instead, write a clean action / curiosity CTA with NO link of any kind. Examples: 'You have to see the ending', 'Watch till the last second', 'Try it before it sells out', 'Wait for the twist'.",
+      "  Rule D — User's prompt contains NONE of the above (no website, no domain, no phone, no handle):",
+      "    • Your bottom taglines must contain ZERO link-like text. No '.com', no '.in', no '.net', no '.co', no '.pk', no '.io', no URLs, no '@handles', no phone numbers, no 'visit our website', no 'check link in bio', no 'DM us', no 'tap the link'.",
+      "    • Write a plain action / curiosity / urgency CTA instead.",
+      "    • GOOD examples (no link): 'You have to see the ending', 'Watch till the last second', 'Try it before it sells out', 'Wait for the twist', 'This one is worth the watch'.",
+      "    • BAD examples (forbidden — these invent fake links): 'Order on pranks.com', 'Get yours at storehub.com', 'Shop now at funnyvideos.in', 'Visit puzzlebooks.net', 'Find it on shop.com'.",
       "",
       "- Keep every bottom tagline short and punchy.",
       "- Avoid generic clichés like 'Follow for more', 'Like and subscribe', 'Don't forget to share'.",
       "",
       "GLOBAL RULES:",
-      "- Never invent a domain, phone number, handle, or any contact info that is not literally in the user's prompt above.",
+      "- The ALLOWED references list above is the COMPLETE set of contact info you may reference. If it says NONE, then NONE means ZERO links of any kind.",
+      "- Never invent a domain, phone number, handle, or contact info that is not literally in the user's prompt.",
       "- Never generate duplicate taglines — each must be unique in meaning AND wording.",
       "- Top and bottom taglines should complement each other, not overlap.",
       "- Avoid emojis entirely.",
@@ -1215,9 +1277,102 @@ export function buildAiRuntimeConfig(
   };
 }
 
+// Last line of defence. Even with the most carefully worded prompt, LLMs
+// (especially smaller open-weight ones) will still occasionally invent a
+// '.com' CTA when the user did not provide one. This filter runs over every
+// generated tagline and removes any URL / domain / email / phone / handle
+// that is not on the allow-list derived from the user's original prompt.
+//
+// If sanitising the tagline would leave it empty or stub-like, we replace it
+// with a clean no-link fallback so the UI never shows a fabricated link.
+function sanitizeTaglineAgainstAllowList(
+  text: string,
+  allowed: ReturnType<typeof extractAllowedReferences>,
+  fallback: string,
+): string {
+  let out = String(text || "").trim();
+  if (!out) return fallback;
+
+  const allowedDomainSet = new Set(allowed.domains);
+  const allowedHandleSet = new Set(allowed.handles.map((h) => h.toLowerCase()));
+  const allowedPhoneDigits = new Set(allowed.phones.map((p) => p.replace(/\D+/g, "")));
+
+  // 1) Strip http(s) URLs that aren't in the allow-list.
+  out = out.replace(/\bhttps?:\/\/\S+/gi, (match) => {
+    if (allowed.urls.includes(match)) return match;
+    try {
+      const host = new URL(match).hostname.toLowerCase().replace(/^www\./, "");
+      if (allowedDomainSet.has(host)) return host;
+    } catch {}
+    return "";
+  });
+
+  // 2) Strip bare domain mentions (foo.com / shop.bar.co.uk) that aren't allowed.
+  out = out.replace(/\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b/gi, (match) => {
+    const lower = match.toLowerCase().replace(/^www\./, "");
+    return allowedDomainSet.has(lower) ? lower : "";
+  });
+
+  // 3) Strip @handles that aren't allowed.
+  out = out.replace(/(^|[^a-z0-9_])@([a-z0-9_.]{2,32})\b/gi, (match, lead, handle) => {
+    return allowedHandleSet.has(`@${handle.toLowerCase()}`) ? match : lead;
+  });
+
+  // 4) Strip phone-number-shaped runs that aren't allowed.
+  out = out.replace(/(?:\+?\d[\d\s().-]{6,}\d)/g, (match) => {
+    const digits = match.replace(/\D+/g, "");
+    return allowedPhoneDigits.has(digits) ? match : "";
+  });
+
+  // 5) Strip standalone email addresses that aren't allowed.
+  out = out.replace(/\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}\b/gi, (match) => {
+    const host = match.split("@")[1]?.toLowerCase();
+    return host && allowedDomainSet.has(host) ? match : "";
+  });
+
+  // Tidy up dangling connectors left behind by the strips ("Order on " → "Order").
+  out = out
+    .replace(/\s+/g, " ")
+    .replace(/[\s,;:.!?-]+(?:on|at|via|from|to|@)\s*$/i, "")
+    .replace(/^\s*(?:on|at|via|from|to|@)[\s,;:.!?-]+/i, "")
+    .replace(/[\s,;:.!?-]+$/g, "")
+    .trim();
+
+  // Common "visit our website" / "check link in bio" placeholders the model
+  // sometimes substitutes when forbidden from inventing a URL.
+  if (
+    /^(?:visit\s+our\s+website|check\s+(?:the\s+)?link\s+in\s+bio|dm\s+us|tap\s+the\s+link|link\s+in\s+bio)\b/i.test(out)
+    || out.length < 3
+  ) {
+    return fallback;
+  }
+
+  // If the strip left only a verb-stub ("Order", "Get yours", "Shop now",
+  // "Available"…) the tagline is meaningless without its target — fall back
+  // to a clean no-link CTA instead of shipping the fragment.
+  const verbStubRe = /^(?:order|shop(?:\s+now)?|get(?:\s+yours)?|available|find\s+us|find\s+it|grab\s+yours?|visit|check|follow|call|whatsapp|text|dm)\s*$/i;
+  if (verbStubRe.test(out) || out.split(/\s+/).filter(Boolean).length < 2) {
+    return fallback;
+  }
+
+  return out;
+}
+
+const NO_LINK_FALLBACK_BOTTOM_TAGLINES = [
+  "You have to see this",
+  "Watch till the very end",
+  "Wait for the twist",
+  "This one is worth the watch",
+  "Try it before it sells out",
+  "Don't miss the ending",
+  "Save this for later",
+  "Trust me, watch the end",
+];
+
 export function normalizeTaglinesResult(
   payload: Record<string, unknown>,
-  count: number
+  count: number,
+  topic?: string,
 ): { top: string[]; bottom: string[] } {
   const top = cleanStringList(payload.top, count);
   const bottom = cleanStringList(payload.bottom, count);
@@ -1226,7 +1381,21 @@ export function normalizeTaglinesResult(
     throw new Error("Provider response did not include valid top/bottom taglines");
   }
 
-  return { top, bottom };
+  // Top taglines must never contain any link / handle / phone regardless
+  // of what the user provided — the schema reserves bottom for the CTA.
+  const emptyAllowed = extractAllowedReferences("");
+  const cleanedTop = top.map((line, idx) => {
+    const fallback = top[(idx + 1) % top.length] || "Watch this until the end";
+    return sanitizeTaglineAgainstAllowList(line, emptyAllowed, fallback);
+  });
+
+  const allowed = extractAllowedReferences(topic || "");
+  const cleanedBottom = bottom.map((line, idx) => {
+    const fallback = NO_LINK_FALLBACK_BOTTOM_TAGLINES[idx % NO_LINK_FALLBACK_BOTTOM_TAGLINES.length];
+    return sanitizeTaglineAgainstAllowList(line, allowed, fallback);
+  });
+
+  return { top: cleanedTop, bottom: cleanedBottom };
 }
 
 export function normalizeSocialResult(
