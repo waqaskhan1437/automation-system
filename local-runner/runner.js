@@ -814,12 +814,48 @@ async function ensureRunnerScriptsDependency(packageName) {
     return;
   }
 
-  console.log(`[RUNNER] ${packageName} missing, installing runner-scripts dependencies...`);
-  await runChildProcess(getNpmCommand(), ['ci'], {
-    cwd: RUNNER_SCRIPTS_DIR,
-    env: buildRunnerScriptsEnv({ id: 0, automation_id: 0, automation_type: 'image' }),
-    timeoutMs: 900000,
-  });
+  // Some installs lack a matching package-lock.json (or the lockfile drifts
+  // when files are edited locally) — `npm ci` would hard-fail on that.
+  // `npm install` is permissive and still works without a lockfile, which is
+  // what we want on a fresh machine. We also retry on transient registry
+  // failures (proxy/DNS hiccups are the #1 cause of "npm.cmd exited 1").
+  const npmCmd = getNpmCommand();
+  const env = buildRunnerScriptsEnv({ id: 0, automation_id: 0, automation_type: 'image' });
+  const args = ['install', '--no-audit', '--no-fund', '--omit=dev', '--prefer-offline'];
+
+  const maxAttempts = 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    console.log(
+      `[RUNNER] ${packageName} missing, installing runner-scripts dependencies (attempt ${attempt}/${maxAttempts})...`,
+    );
+    try {
+      await runChildProcess(npmCmd, args, {
+        cwd: RUNNER_SCRIPTS_DIR,
+        env,
+        timeoutMs: 900000,
+      });
+      if (fs.existsSync(packageDir)) {
+        return;
+      }
+      lastError = new Error(
+        `npm finished but ${packageName} is still missing under ${RUNNER_SCRIPTS_DIR}`,
+      );
+    } catch (err) {
+      lastError = err;
+      console.warn(`[RUNNER] npm install attempt ${attempt} failed: ${err.message || err}`);
+    }
+
+    if (attempt < maxAttempts) {
+      await new Promise((r) => setTimeout(r, 3000 * attempt));
+    }
+  }
+
+  const detail = lastError ? ` (${lastError.message || lastError})` : '';
+  throw new Error(
+    `Failed to install runner-scripts dependency "${packageName}" after ${maxAttempts} attempts${detail}. ` +
+      `Verify internet access, or pre-bundle node_modules under ${RUNNER_SCRIPTS_DIR}.`,
+  );
 }
 
 function runChildProcess(command, args, options = {}) {

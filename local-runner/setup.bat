@@ -110,15 +110,35 @@ if exist "package.json" (
 )
 if /I "!HAS_DEPENDENCIES!"=="yes" (
     if not exist "node_modules" (
-        call npm install --no-fund --no-audit
+        call :npm_install_with_retry "%SCRIPT_DIR%"
+        if !errorlevel! neq 0 (
+            echo [ERROR] npm install failed for local-runner.
+            exit /b 1
+        )
     )
-    if %errorlevel% neq 0 (
-        echo [ERROR] npm install failed.
-        exit /b 1
-    )
-    echo [OK] Dependencies ready
+    echo [OK] local-runner dependencies ready
 ) else (
-    echo [OK] No npm dependencies to install
+    echo [OK] No local-runner npm dependencies to install
+)
+
+REM Install runner-scripts deps too (these are what the runtime actually needs:
+REM axios, playwright-core, youtubei.js). Skip if already bundled or absent.
+set "RUNNER_SCRIPTS_DIR=%SCRIPT_DIR%..\runner-scripts"
+if not exist "%RUNNER_SCRIPTS_DIR%\package.json" set "RUNNER_SCRIPTS_DIR=%SCRIPT_DIR%runner-scripts"
+if exist "%RUNNER_SCRIPTS_DIR%\package.json" (
+    if not exist "%RUNNER_SCRIPTS_DIR%\node_modules" (
+        echo Installing runner-scripts dependencies...
+        call :npm_install_with_retry "%RUNNER_SCRIPTS_DIR%"
+        if !errorlevel! neq 0 (
+            echo [WARN] runner-scripts npm install failed after retries. Runtime will retry on first job.
+        ) else (
+            echo [OK] runner-scripts dependencies ready
+        )
+    ) else (
+        echo [OK] runner-scripts dependencies already present
+    )
+) else (
+    echo [INFO] runner-scripts package.json not found; skipping
 )
 
 echo [5/9] Checking portable pipeline files...
@@ -203,6 +223,30 @@ if /I "%SHOULD_OPEN_BROWSER%"=="0" (
 echo ========================================
 echo.
 exit /b 0
+
+:npm_install_with_retry
+REM %~1 = directory containing package.json
+setlocal
+set "TARGET_DIR=%~1"
+set "ATTEMPTS=0"
+set "MAX_ATTEMPTS=3"
+:npm_retry
+set /a ATTEMPTS+=1
+echo   npm install attempt !ATTEMPTS!/!MAX_ATTEMPTS! in "!TARGET_DIR!"
+pushd "!TARGET_DIR!" >nul
+call npm install --no-fund --no-audit --omit=dev --prefer-offline
+set "NPM_EXIT=!errorlevel!"
+popd >nul
+if "!NPM_EXIT!"=="0" (
+    endlocal & exit /b 0
+)
+if !ATTEMPTS! lss !MAX_ATTEMPTS! (
+    echo   npm install returned !NPM_EXIT!. Retrying in 3 seconds...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 3" >nul
+    goto :npm_retry
+)
+echo   npm install gave up after !MAX_ATTEMPTS! attempts (last exit code !NPM_EXIT!).
+endlocal & exit /b 1
 
 :check_node
 if exist "%NODE_EXE%" exit /b 0
