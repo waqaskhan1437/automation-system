@@ -1205,7 +1205,7 @@ async function runDubbingRunnerScriptsJob(job) {
 
   console.log(`[RUNNER] Executing dubbing engine for job ${job.id}`);
   try {
-    await runChildProcess(process.execPath, [path.join('dubbing-engine', 'cli.js'), '--manifest', manifestPath, '--dry-run'], {
+    await runChildProcess(process.execPath, [path.join('dubbing-engine', 'cli.js'), '--manifest', manifestPath], {
       cwd: RUNNER_SCRIPTS_DIR,
       env: buildRunnerScriptsEnv(job),
       timeoutMs: 3600000,
