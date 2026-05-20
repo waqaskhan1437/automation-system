@@ -146,7 +146,7 @@ export interface Automation {
   id?: number;
   user_id?: number;
   name: string;
-  type: "video" | "image" | "caption";
+  type: "dubbing" | "video" | "image" | "caption";
   status: "active" | "paused" | "completed" | "failed";
   config: string;
   schedule: string | null;

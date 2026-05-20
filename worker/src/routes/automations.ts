@@ -174,8 +174,8 @@ export async function handleAutomationsRoutes(
     if (!body.name || !body.type) {
       return jsonResponse({ success: false, error: "name and type are required" }, 400);
     }
-    if (!["video", "image", "caption"].includes(body.type)) {
-      return jsonResponse({ success: false, error: "type must be 'video', 'image', or 'caption'" }, 400);
+    if (!["dubbing", "video", "image", "caption"].includes(body.type)) {
+      return jsonResponse({ success: false, error: "type must be 'dubbing', 'video', 'image', or 'caption'" }, 400);
     }
 
     const status = body.status || "active";

@@ -185,7 +185,7 @@ export default function DubbingPage() {
     try {
       const response = await api.post<{ id: number }>("/api/automations", {
         name,
-        type: "video",
+        type: "dubbing",
         status: "paused",
         config: JSON.stringify(manifest),
         schedule: null,
