@@ -158,7 +158,21 @@ function resolveBrowserExecutable() {
 async function uploadFile(filePath) {
   const fileName = path.basename(filePath);
   const fileBlob = new Blob([fs.readFileSync(filePath)]);
+  const catboxUserhash = typeof process.env.CATBOX_USERHASH === "string" ? process.env.CATBOX_USERHASH.trim() : "";
   const targets = [
+    {
+      name: catboxUserhash ? "Catbox" : "Catbox Anonymous",
+      url: "https://catbox.moe/user/api.php",
+      buildForm() {
+        const form = new FormData();
+        form.append("reqtype", "fileupload");
+        if (catboxUserhash) {
+          form.append("userhash", catboxUserhash);
+        }
+        form.append("fileToUpload", fileBlob, fileName);
+        return form;
+      },
+    },
     {
       name: "Litterbox",
       url: "https://litterbox.catbox.moe/resources/internals/api.php",
@@ -171,37 +185,46 @@ async function uploadFile(filePath) {
       },
     },
     {
-      name: "Catbox",
-      url: "https://catbox.moe/user/api.php",
+      name: "0x0.st",
+      url: "https://0x0.st",
       buildForm() {
         const form = new FormData();
-        form.append("reqtype", "fileupload");
-        form.append("fileToUpload", fileBlob, fileName);
+        form.append("file", fileBlob, fileName);
+        form.append("expires", "24");
         return form;
       },
     },
   ];
 
   let lastError = "Image upload failed";
+  const browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
   for (const target of targets) {
-    try {
-      console.log(`[IMAGE][UPLOAD] ${target.name}...`);
-      const response = await fetch(target.url, {
-        method: "POST",
-        body: target.buildForm(),
-        headers: {
-          "User-Agent": "AutomationSystem/1.0",
-        },
-      });
-      const text = (await response.text()).trim();
-      if (response.ok && text.startsWith("https://")) {
-        console.log(`[IMAGE][UPLOAD] ${target.name} OK: ${text}`);
-        return text;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        console.log(`[IMAGE][UPLOAD] ${target.name} (attempt ${attempt}/2)...`);
+        const response = await fetch(target.url, {
+          method: "POST",
+          body: target.buildForm(),
+          headers: {
+            "User-Agent": browserUA,
+            "Accept": "*/*",
+          },
+        });
+        const text = (await response.text()).trim();
+        console.log(`[IMAGE][UPLOAD] ${target.name} HTTP ${response.status}: ${text.slice(0, 200)}`);
+        if (response.ok && text.startsWith("https://")) {
+          console.log(`[IMAGE][UPLOAD] ${target.name} OK: ${text}`);
+          return text;
+        }
+        lastError = `${target.name} failed [HTTP ${response.status}]: ${text || response.statusText}`;
+      } catch (error) {
+        lastError = `${target.name} failed: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(`[IMAGE][UPLOAD] ${lastError}`);
       }
-      lastError = `${target.name} failed: ${text || response.statusText}`;
-    } catch (error) {
-      lastError = `${target.name} failed: ${error instanceof Error ? error.message : String(error)}`;
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      }
     }
   }
 

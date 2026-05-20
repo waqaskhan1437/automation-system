@@ -9,7 +9,7 @@ function readTrimmedEnv(name) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function createMultipartBody(fileBuffer, fileName, extraFields) {
+function createMultipartBody(fileBuffer, fileName, extraFields, fileFieldName = 'fileToUpload') {
   const boundary = `----AutomationBoundary${Math.random().toString(36).slice(2)}`;
   const encoder = new TextEncoder();
   const parts = [];
@@ -27,7 +27,7 @@ function createMultipartBody(fileBuffer, fileName, extraFields) {
   parts.push(encoder.encode(`--${boundary}\r\n`));
   parts.push(
     encoder.encode(
-      `Content-Disposition: form-data; name="fileToUpload"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+      `Content-Disposition: form-data; name="${fileFieldName}"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`
     )
   );
   parts.push(fileBuffer);
@@ -48,45 +48,48 @@ function createMultipartBody(fileBuffer, fileName, extraFields) {
   };
 }
 
-async function uploadToService(name, url, file, extraFields) {
+async function uploadToService(name, url, file, extraFields, fileFieldName = 'fileToUpload') {
   console.log(`[UPLOAD] Uploading to ${name}...`);
   const fileBuffer = new Uint8Array(fs.readFileSync(file));
   const fileName = path.basename(file);
-  const { body, contentType } = createMultipartBody(fileBuffer, fileName, extraFields);
+  const { body, contentType } = createMultipartBody(fileBuffer, fileName, extraFields, fileFieldName);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120000);
+  const timeout = setTimeout(() => controller.abort(), 180000);
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': contentType,
-        'User-Agent': 'AutomationSystem/1.0',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
       },
       body,
       signal: controller.signal,
     });
 
     const text = (await response.text()).trim();
+    console.log(`[UPLOAD] ${name} HTTP ${response.status} response:`, text.slice(0, 200));
     if (response.ok && text.startsWith('https://')) {
       console.log(`[UPLOAD] ${name} OK:`, text);
       return text;
     }
-    throw new Error(`${name} returned: ${text || response.statusText}`);
+    throw new Error(`${name} returned [HTTP ${response.status}]: ${text || response.statusText}`);
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function uploadWithRetry(name, url, file, extraFields, attempts = 2) {
+async function uploadWithRetry(name, url, file, extraFields, attempts = 2, fileFieldName = 'fileToUpload') {
   let lastError = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       if (attempt > 1) {
         console.log(`[UPLOAD] Retrying ${name} (${attempt}/${attempts})...`);
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
       }
-      return await uploadToService(name, url, file, extraFields);
+      return await uploadToService(name, url, file, extraFields, fileFieldName);
     } catch (error) {
       lastError = error;
       console.error(`[UPLOAD] ${name} attempt ${attempt} failed:`, error.message);
@@ -112,6 +115,7 @@ module.exports = async function upload(filePath) {
         reqtype: 'fileupload',
         userhash: catboxUserhash,
       },
+      fileFieldName: 'fileToUpload',
       attempts: 2,
     },
     {
@@ -121,6 +125,16 @@ module.exports = async function upload(filePath) {
         reqtype: 'fileupload',
         time: readTrimmedEnv('LITTERBOX_EXPIRY') || '72h',
       },
+      fileFieldName: 'fileToUpload',
+      attempts: 2,
+    },
+    {
+      name: '0x0.st',
+      url: 'https://0x0.st',
+      fields: {
+        expires: readTrimmedEnv('NULLPOINTER_EXPIRES') || '24',
+      },
+      fileFieldName: 'file',
       attempts: 2,
     },
   ];
@@ -128,9 +142,18 @@ module.exports = async function upload(filePath) {
   let lastError = null;
   for (const target of uploadTargets) {
     try {
-      const uploadedUrl = await uploadWithRetry(target.name, target.url, file, target.fields, target.attempts);
+      const uploadedUrl = await uploadWithRetry(
+        target.name,
+        target.url,
+        file,
+        target.fields,
+        target.attempts,
+        target.fileFieldName
+      );
       if (target.name === 'Litterbox') {
         console.warn('[UPLOAD] Using temporary Litterbox URL fallback');
+      } else if (target.name === '0x0.st') {
+        console.warn('[UPLOAD] Using 0x0.st temporary URL fallback');
       }
       return uploadedUrl;
     } catch (error) {
