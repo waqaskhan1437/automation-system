@@ -536,6 +536,10 @@ async function main() {
             const postResult = readPostResult();
             if (postResult) {
               lastPostResult = postResult;
+              // Use PostForMe media URL if available (real HTTPS URL instead of local path)
+              if (postResult.media_url) {
+                uploadUrl = postResult.media_url;
+              }
             }
 
             lastUrl = uploadUrl;
@@ -577,6 +581,9 @@ async function main() {
             const mergedPostResult = readPostResult();
             if (mergedPostResult) {
               lastPostResult = mergedPostResult;
+              if (mergedPostResult.media_url) {
+                mergedUrl = mergedPostResult.media_url;
+              }
             }
           }
 
@@ -617,6 +624,10 @@ async function main() {
           const postResult = readPostResult();
           if (postResult) {
             lastPostResult = postResult;
+            // Use PostForMe media URL if available (real HTTPS URL instead of local path)
+            if (postResult.media_url) {
+              uploadUrl = postResult.media_url;
+            }
           }
 
           lastUrl = uploadUrl;
