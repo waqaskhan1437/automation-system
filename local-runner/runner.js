@@ -725,6 +725,7 @@ function buildRunnerScriptsEnv(job) {
     JOB_ID: String(job.id),
     AUTOMATION_ID: String(job.automation_id || ''),
     AUTOMATION_TYPE: String(job.automation_type || 'video'),
+    AUTOMATION_NAME: String(job.automation_name || ''),
     RUNNER_EXECUTION_MODE: 'local',
     WORKER_WEBHOOK_URL: `${config.serverUrl.replace(/\/$/, '')}/api/webhook/github`,
     LOCAL_OUTPUT_DIR: ensureLocalOutputDir(job),
@@ -764,6 +765,49 @@ function removeFileWithRetries(filePath, options = {}) {
 
   if (lastError) {
     throw lastError;
+  }
+}
+
+const MEDIA_RETENTION_DAYS = 7;
+const MEDIA_RETENTION_MS = MEDIA_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+function cleanupOldMediaFiles() {
+  const mediaDir = path.join(RUNNER_SCRIPTS_OUTPUT_DIR, 'media');
+  if (!fs.existsSync(mediaDir)) {
+    return;
+  }
+
+  const now = Date.now();
+  let removedCount = 0;
+  let totalSize = 0;
+
+  try {
+    const entries = fs.readdirSync(mediaDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const filePath = path.join(mediaDir, entry.name);
+      try {
+        const stats = fs.statSync(filePath);
+        const age = now - stats.mtimeMs;
+        if (age > MEDIA_RETENTION_MS) {
+          totalSize += stats.size;
+          fs.rmSync(filePath, { force: true });
+          removedCount++;
+        }
+      } catch (error) {
+        console.warn('[CLEANUP] Failed to process file:', entry.name, error.message);
+      }
+    }
+  } catch (error) {
+    console.warn('[CLEANUP] Failed to scan media directory:', error.message);
+  }
+
+  if (removedCount > 0) {
+    const freedMb = (totalSize / 1024 / 1024).toFixed(2);
+    console.log(`[CLEANUP] Removed ${removedCount} file(s) older than ${MEDIA_RETENTION_DAYS} days (freed ${freedMb} MB)`);
   }
 }
 
@@ -977,6 +1021,69 @@ function readImageResultFromRunnerScripts() {
   }
 }
 
+function readDubbingReportFromRunnerScripts() {
+  const reportPath = path.join(RUNNER_SCRIPTS_DIR, 'dubbing-engine', 'output', 'latest', 'dubbing-report.json');
+  try {
+    if (!fs.existsSync(reportPath)) {
+      return null;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDubbingSourceMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'url') return 'url';
+  if (mode === 'upload' || mode === 'local') return 'local';
+  return 'url';
+}
+
+function buildDubbingManifest(job) {
+  const mergedConfig = {
+    ...(job?.config || {}),
+    ...(job?.input_data || {}),
+  };
+  const sourceMode = normalizeDubbingSourceMode(mergedConfig.source_mode);
+  const sourceValue = String(mergedConfig.source_value || mergedConfig.video_url || '').trim();
+  const targetLanguage = String(mergedConfig.target_language || mergedConfig.dubbing?.target_language || 'ur').toLowerCase();
+  const translationEngine = String(mergedConfig.translation_engine || mergedConfig.dubbing?.translation_engine || 'llm').toLowerCase();
+  const voiceEngine = String(mergedConfig.voice_engine || mergedConfig.dubbing?.voice_engine || 'voxcpm2').toLowerCase();
+  const maxTempo = Number(mergedConfig.speedLimit || mergedConfig.max_tempo || mergedConfig.dubbing?.max_tempo || 1.2);
+  const voiceReferenceSeconds = Number(mergedConfig.voiceReferenceSeconds || mergedConfig.voice_reference_seconds || mergedConfig.dubbing?.voice_reference_seconds || 18);
+
+  if (!sourceValue) {
+    throw new Error('Dubbing job is missing a source value');
+  }
+
+  return {
+    workflow: 'dubbing',
+    type: 'video',
+    name: String(job?.automation_name || mergedConfig.name || `Dubbing Job ${job.id}`),
+    video_source: sourceMode === 'url' ? 'direct' : 'local_file',
+    source_mode: sourceMode,
+    source_value: sourceValue,
+    dubbing: {
+      source_language: String(mergedConfig.source_language || mergedConfig.dubbing?.source_language || 'en').toLowerCase(),
+      target_language: ['ur', 'hi'].includes(targetLanguage) ? targetLanguage : 'ur',
+      translation_engine: ['llm', 'nllb'].includes(translationEngine) ? translationEngine : 'llm',
+      voice_engine: ['voxcpm2', 'xtts', 'edge'].includes(voiceEngine) ? voiceEngine : 'voxcpm2',
+      voice_reference_seconds: Number.isFinite(voiceReferenceSeconds) ? Math.max(6, Math.min(45, Math.round(voiceReferenceSeconds))) : 18,
+      diarization_enabled: mergedConfig.diarization !== false && mergedConfig.diarization_enabled !== false,
+      mix_mode: String(mergedConfig.mixMode || mergedConfig.mix_mode || mergedConfig.dubbing?.mix_mode || 'bed'),
+      preserve_background: mergedConfig.preserveBackground !== false && mergedConfig.preserve_background !== false,
+      max_tempo: Number.isFinite(maxTempo) ? Math.max(1.05, Math.min(1.35, Number(maxTempo))) : 1.2,
+      lip_sync_enabled: mergedConfig.lipSync === true || mergedConfig.lip_sync_enabled === true,
+      stages: Array.isArray(mergedConfig.stages) && mergedConfig.stages.length > 0
+        ? mergedConfig.stages
+        : ["extract", "separate", "transcribe", "speakers", "translate", "clone", "align", "mix"],
+    },
+  };
+}
+
 function findLatestMediaFileInDirectory(directoryPath) {
   try {
     if (!directoryPath || !fs.existsSync(directoryPath)) {
@@ -1037,6 +1144,10 @@ async function runRunnerScriptsJob(job, sourceUrls) {
     throw new Error('Job cancelled by user');
   }
 
+  if (String(job?.config?.workflow || job?.input_data?.workflow || '').trim().toLowerCase() === 'dubbing') {
+    return runDubbingRunnerScriptsJob(job);
+  }
+
   await ensureRunnerScriptsDependency('playwright-core');
 
   const mergedConfig = {
@@ -1077,6 +1188,55 @@ async function runRunnerScriptsJob(job, sourceUrls) {
     processedCount: processedCount > 0 ? processedCount : 1,
     processedVideos,
     primaryVideoUrl,
+  };
+}
+
+async function runDubbingRunnerScriptsJob(job) {
+  const isCancelled = await checkJobCancelled(job.id);
+  if (isCancelled) {
+    throw new Error('Job cancelled by user');
+  }
+
+  const manifest = buildDubbingManifest(job);
+  const manifestDir = path.join(RUNNER_SCRIPTS_DIR, 'dubbing-engine', 'output', 'latest');
+  const manifestPath = path.join(manifestDir, 'manifest.json');
+  fs.mkdirSync(manifestDir, { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+  console.log(`[RUNNER] Executing dubbing engine for job ${job.id}`);
+  try {
+    await runChildProcess(process.execPath, [path.join('dubbing-engine', 'cli.js'), '--manifest', manifestPath, '--dry-run'], {
+      cwd: RUNNER_SCRIPTS_DIR,
+      env: buildRunnerScriptsEnv(job),
+      timeoutMs: 3600000,
+      jobId: job.id,
+    });
+  } catch (error) {
+    const report = readDubbingReportFromRunnerScripts();
+    const reportMessage = report && typeof report === 'object' && typeof report.last_error === 'string'
+      ? report.last_error
+      : '';
+    const enrichedMessage = reportMessage
+      ? reportMessage
+      : (error instanceof Error ? error.message : String(error));
+    throw new Error(enrichedMessage);
+  }
+
+  const report = readDubbingReportFromRunnerScripts();
+  if (!report) {
+    throw new Error('Dubbing engine finished but no report was produced');
+  }
+
+  return {
+    processedCount: 1,
+    processedVideos: [{
+      video_url: null,
+      original_url: manifest.source_value,
+      workflow: 'dubbing',
+      report,
+    }],
+    primaryVideoUrl: null,
+    dubbingReport: report,
   };
 }
 
@@ -1459,6 +1619,9 @@ async function mainLoop() {
   await sendHeartbeat();
   setInterval(sendHeartbeat, 30000);
 
+  // Clean up any stale media files from previous sessions
+  cleanupOldMediaFiles();
+
   while (true) {
     try {
       if (!isProcessing) {
@@ -1524,6 +1687,57 @@ async function mainLoop() {
               });
 
               console.log(`[JOB] Image job ${job.id} completed via image pipeline (${processedCount} output(s))`);
+              continue;
+            }
+
+            const workflow = String(job?.config?.workflow || job?.input_data?.workflow || '').trim().toLowerCase();
+            if (workflow === 'dubbing') {
+              const rawDubbingSource = String(
+                job?.input_data?.source_value
+                || job?.config?.source_value
+                || job?.input_data?.video_url
+                || job?.video_url
+                || ''
+              ).trim();
+
+              const sourceUrls = expandLocalDirectorySources([rawDubbingSource].filter(Boolean));
+              if (!sourceUrls.length) {
+                throw new Error('Dubbing job does not contain a usable source');
+              }
+
+              const runResult = await runRunnerScriptsJob(job, sourceUrls);
+              const processedCount = runResult.processedCount;
+              const localOutputMedia = findLatestLocalOutputMedia(job);
+              processedVideos += processedCount;
+              const dubbingReport = runResult.dubbingReport || readDubbingReportFromRunnerScripts();
+
+              await completeJob(job.id, {
+                token: getRunnerAuthToken(),
+                success: true,
+                result: {
+                  workflow: 'dubbing',
+                  processed_count: processedCount,
+                  processed_videos: Array.isArray(runResult.processedVideos) ? runResult.processedVideos : [],
+                  source_urls: sourceUrls,
+                  source_value: rawDubbingSource,
+                  local_output_media: localOutputMedia,
+                  dubbing_report: dubbingReport,
+                  skip_upload: true,
+                },
+                video_url: null,
+                source_video_url: sourceUrls[0] || null,
+                aspect_ratio: job?.config?.aspect_ratio || job?.input_data?.aspect_ratio || null,
+              });
+
+              writeRunnerState({
+                status: 'idle',
+                message: `Job ${job.id} completed`,
+                currentJobId: null,
+                processedVideos,
+                lastError: ''
+              });
+
+              console.log(`[JOB] Dubbing job ${job.id} completed via dubbing pipeline (${processedCount} output(s))`);
               continue;
             }
 
@@ -1606,6 +1820,7 @@ async function mainLoop() {
           } finally {
             isProcessing = false;
             currentJob = null;
+            cleanupOldMediaFiles();
           }
         } else {
           console.log('[WAIT] No pending jobs, waiting...');
