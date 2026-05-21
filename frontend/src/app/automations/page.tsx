@@ -63,6 +63,22 @@ function isDubbingAutomationConfig(config: Record<string, unknown>): boolean {
   return config.workflow === "dubbing" || (Boolean(dubbing) && typeof dubbing === "object");
 }
 
+type DubbingDoctorVerdict = "ready" | "degraded" | "blocked";
+interface DubbingDoctorReport {
+  ok: boolean;
+  verdict: DubbingDoctorVerdict;
+  missing: string[];
+  has_ffmpeg?: boolean;
+  has_yt_dlp?: boolean;
+  has_transcribe?: boolean;
+  has_translate?: boolean;
+  has_voice?: boolean;
+  ok_count?: number;
+  total?: number;
+  checked_at?: string;
+  error?: string;
+}
+
 function estimateProgress(status: string): number {
   if (status === "success" || status === "failed") return 100;
   if (status === "running") return 60;
@@ -152,6 +168,8 @@ export default function AutomationsPage() {
   const [logsRefreshing, setLogsRefreshing] = useState(false);
   const [pageVisible, setPageVisible] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [dubbingDoctor, setDubbingDoctor] = useState<DubbingDoctorReport | null>(null);
+  const [dubbingDoctorLoading, setDubbingDoctorLoading] = useState(false);
 
   const loadData = useCallback(async (options?: { showRefreshing?: boolean; syncScheduled?: boolean }) => {
     const showRefreshing = options?.showRefreshing ?? false;
@@ -306,6 +324,46 @@ export default function AutomationsPage() {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, []);
+
+  // Live dubbing-engine dependency check against local-runner /api/dubbing/doctor
+  const refreshDubbingDoctor = useCallback(async (force = false) => {
+    setDubbingDoctorLoading(true);
+    try {
+      const url = `http://127.0.0.1:3000/api/dubbing/doctor${force ? "?refresh=1" : ""}`;
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const payload = await response.json();
+      if (payload && payload.success && payload.data) {
+        setDubbingDoctor(payload.data as DubbingDoctorReport);
+      } else {
+        setDubbingDoctor({
+          ok: false,
+          verdict: "blocked",
+          missing: ["Local runner did not return doctor data"],
+          error: payload?.error || "Unknown response",
+        });
+      }
+    } catch (err) {
+      setDubbingDoctor({
+        ok: false,
+        verdict: "blocked",
+        missing: ["Local runner is not reachable"],
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setDubbingDoctorLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const hasDubbing = automations.some((auto) =>
+      isDubbingAutomationConfig(parseAutomationConfig(auto.config))
+    );
+    if (!hasDubbing) return;
+    void refreshDubbingDoctor(false);
+    const interval = window.setInterval(() => { void refreshDubbingDoctor(false); }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [automations, refreshDubbingDoctor]);
 
   useEffect(() => {
     if (!showLogs) {
@@ -569,11 +627,57 @@ export default function AutomationsPage() {
                     ) : auto.status === "active" && !isDubbing && <button onClick={() => void handleRun(auto.id)} className="glass-button-primary text-sm py-2 px-4">Run Now</button>}
                     {auto.status === "active" && !runningJob && !isDubbing && <button onClick={() => void handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">Pause</button>}
                     {auto.status !== "active" && !runningJob && !isDubbing && <button onClick={() => void handleAction(auto.id, "resume")} className="glass-button text-sm py-2 px-4">Resume</button>}
-                    {isDubbing && !runningJob && (
-                      <span className="rounded-xl bg-[rgba(20,184,166,0.12)] px-3 py-2 text-xs font-semibold text-teal-200">
-                        Engine setup pending
-                      </span>
-                    )}
+                    {isDubbing && !runningJob && (() => {
+                      const doc = dubbingDoctor;
+                      const verdict = doc?.verdict ?? (dubbingDoctorLoading ? "loading" : "blocked");
+                      const tooltip = doc?.missing?.length
+                        ? `Missing: ${doc.missing.join("; ")}`
+                        : (doc?.error || "See DUBBING_SETUP.md for install steps");
+                      let label = "Engine setup pending";
+                      let badgeClass = "rounded-xl px-3 py-2 text-xs font-semibold cursor-help";
+                      if (verdict === "loading") {
+                        label = "Checking engines…";
+                        badgeClass += " bg-[rgba(99,102,241,0.12)] text-indigo-200";
+                      } else if (verdict === "ready") {
+                        label = `Engine ready (${doc?.ok_count ?? 0}/${doc?.total ?? 0})`;
+                        badgeClass += " bg-[rgba(34,197,94,0.15)] text-emerald-200";
+                      } else if (verdict === "degraded") {
+                        label = "Engine partial — will fall back";
+                        badgeClass += " bg-[rgba(234,179,8,0.18)] text-yellow-200";
+                      } else {
+                        label = "Engine setup needed";
+                        badgeClass += " bg-[rgba(239,68,68,0.15)] text-red-200";
+                      }
+                      const canRun = auto.status === "active" && (verdict === "ready" || verdict === "degraded");
+                      return (
+                        <>
+                          <span className={badgeClass} title={tooltip}>{label}</span>
+                          {canRun && (
+                            <button
+                              onClick={() => void handleRun(auto.id)}
+                              className="glass-button-primary text-sm py-2 px-4"
+                              title={verdict === "degraded" ? "Engine partial — output may use placeholders" : "Run dubbing pipeline"}
+                            >
+                              Run Now
+                            </button>
+                          )}
+                          {auto.status === "active" && (
+                            <button onClick={() => void handleAction(auto.id, "pause")} className="glass-button text-sm py-2 px-4">Pause</button>
+                          )}
+                          {auto.status !== "active" && (
+                            <button onClick={() => void handleAction(auto.id, "resume")} className="glass-button text-sm py-2 px-4">Resume</button>
+                          )}
+                          <button
+                            onClick={() => void refreshDubbingDoctor(true)}
+                            className="glass-button text-xs py-2 px-3"
+                            title="Re-check engine availability"
+                            disabled={dubbingDoctorLoading}
+                          >
+                            {dubbingDoctorLoading ? "…" : "Recheck"}
+                          </button>
+                        </>
+                      );
+                    })()}
                     <button onClick={() => void handleAction(auto.id, "delete")} className="glass-button text-sm py-2 px-4 text-[#ef4444]">Delete</button>
                   </div>
                 </div>

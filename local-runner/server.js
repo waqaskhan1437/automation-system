@@ -697,6 +697,150 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+// ── Dubbing dependency doctor (cached) ───────────────────────────────────────
+let dubbingDoctorCache = null;
+let dubbingDoctorCacheAt = 0;
+const DUBBING_DOCTOR_CACHE_MS = 30_000;
+
+function getDoctorScriptPath() {
+  const candidates = [
+    path.resolve(__dirname, "..", "runner-scripts", "dubbing-engine", "doctor.js"),
+    path.resolve(__dirname, "runner-scripts", "dubbing-engine", "doctor.js"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function resolveDoctorNode() {
+  if (fs.existsSync(NODE_EXE)) return NODE_EXE;
+  return process.execPath || "node";
+}
+
+function summarizeDoctorRows(rows) {
+  const get = (name) => rows.find((row) => row.name === name);
+  const hasTranscribe = (get("whisperx")?.status) || (get("whisper")?.status);
+  const hasTranslate =
+    (get("transformers")?.status) ||
+    (get("env:OPENAI_API_KEY")?.status) ||
+    (get("env:OLLAMA_HOST")?.status);
+  const hasVoice = (get("edge_tts")?.status) || (get("TTS")?.status) || (get("voxcpm2")?.status);
+  const hasFfmpeg = (get("ffmpeg")?.status) && (get("ffprobe")?.status);
+  const hasYtdlp = get("yt-dlp")?.status;
+  const okCount = rows.filter((row) => row.status).length;
+
+  let verdict = "ready";
+  const missing = [];
+  if (!hasFfmpeg) { verdict = "blocked"; missing.push("ffmpeg"); }
+  if (!hasVoice) { verdict = "blocked"; missing.push("voice engine (install edge-tts)"); }
+  if (verdict !== "blocked") {
+    if (!hasTranscribe) { verdict = "degraded"; missing.push("transcription (install openai-whisper)"); }
+    if (!hasTranslate) { verdict = "degraded"; missing.push("translation (set OPENAI_API_KEY or install transformers)"); }
+  }
+
+  return {
+    verdict,
+    missing,
+    has_ffmpeg: !!hasFfmpeg,
+    has_yt_dlp: !!hasYtdlp,
+    has_transcribe: !!hasTranscribe,
+    has_translate: !!hasTranslate,
+    has_voice: !!hasVoice,
+    ok_count: okCount,
+    total: rows.length,
+  };
+}
+
+function runDubbingDoctor() {
+  return new Promise((resolve) => {
+    const scriptPath = getDoctorScriptPath();
+    if (!scriptPath) {
+      resolve({
+        ok: false,
+        error: "doctor.js not found",
+        verdict: "blocked",
+        missing: ["runner-scripts/dubbing-engine/doctor.js missing"],
+        rows: [],
+      });
+      return;
+    }
+
+    const nodeBin = resolveDoctorNode();
+    const child = spawn(nodeBin, [scriptPath, "--json"], {
+      cwd: path.dirname(scriptPath),
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    const killTimer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+    }, 60_000);
+
+    child.on("error", (err) => {
+      clearTimeout(killTimer);
+      resolve({
+        ok: false,
+        error: err.message || String(err),
+        verdict: "blocked",
+        missing: ["doctor.js failed to start"],
+        rows: [],
+      });
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(killTimer);
+      if (code !== 0 && !stdout.trim()) {
+        resolve({
+          ok: false,
+          error: stderr.trim() || `doctor exited with code ${code}`,
+          verdict: "blocked",
+          missing: ["doctor.js error"],
+          rows: [],
+        });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+        const summary = summarizeDoctorRows(rows);
+        resolve({
+          ok: true,
+          checked_at: new Date().toISOString(),
+          python: parsed.python || null,
+          rows,
+          ...summary,
+        });
+      } catch (parseErr) {
+        resolve({
+          ok: false,
+          error: `Failed to parse doctor output: ${parseErr.message}`,
+          stdout_excerpt: stdout.slice(0, 500),
+          verdict: "blocked",
+          missing: ["doctor.js JSON parse failure"],
+          rows: [],
+        });
+      }
+    });
+  });
+}
+
+async function getDubbingDoctorReport({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && dubbingDoctorCache && (now - dubbingDoctorCacheAt) < DUBBING_DOCTOR_CACHE_MS) {
+    return { ...dubbingDoctorCache, cached: true };
+  }
+  const fresh = await runDubbingDoctor();
+  dubbingDoctorCache = fresh;
+  dubbingDoctorCacheAt = now;
+  return { ...fresh, cached: false };
+}
+
 function extractBearerToken(req) {
   const headerValue = req.headers.authorization || "";
   const match = String(headerValue).match(/^Bearer\s+(.+)$/i);
@@ -2408,6 +2552,19 @@ const server = http.createServer((req, res) => {
         },
         error: workspaceBinding.ok ? null : workspaceBinding.error,
       });
+    }).catch((error) => {
+      sendJson(res, 500, {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/dubbing/doctor") {
+    const force = requestUrl.searchParams.get("refresh") === "1";
+    getDubbingDoctorReport({ force }).then((report) => {
+      sendJson(res, 200, { success: true, data: report });
     }).catch((error) => {
       sendJson(res, 500, {
         success: false,
