@@ -6,6 +6,7 @@ import {
   AudioWaveform,
   CheckCircle2,
   Clock3,
+  Cpu,
   FileVideo,
   Languages,
   Library,
@@ -17,10 +18,28 @@ import {
   Settings2,
   SlidersHorizontal,
   Upload,
+  WifiOff,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api";
+
+type DubbingDoctorVerdict = "ready" | "degraded" | "blocked";
+interface DubbingDoctorReport {
+  ok: boolean;
+  verdict: DubbingDoctorVerdict;
+  missing: string[];
+  has_ffmpeg?: boolean;
+  has_yt_dlp?: boolean;
+  has_transcribe?: boolean;
+  has_translate?: boolean;
+  has_voice?: boolean;
+  ok_count?: number;
+  total?: number;
+  checked_at?: string;
+  cached?: boolean;
+  error?: string;
+}
 
 type TargetLanguage = "ur" | "hi";
 type TranslationEngine = "llm" | "nllb";
@@ -56,6 +75,51 @@ const stages = [
   { label: "Clone", detail: "Speaker voice match", icon: Library },
   { label: "Align", detail: "Timing and speed fit", icon: SlidersHorizontal },
   { label: "Mix", detail: "Final dubbed video", icon: CheckCircle2 },
+];
+
+const dependencyHealthInfo = [
+  {
+    dep: "FFmpeg",
+    stage: "Extract, Align, Mix",
+    fallback: "Required — pipeline cannot run without FFmpeg",
+    critical: true,
+  },
+  {
+    dep: "Demucs",
+    stage: "Separate",
+    fallback: "Copies audio as-is — no vocal separation",
+    critical: false,
+  },
+  {
+    dep: "WhisperX / Whisper",
+    stage: "Transcribe",
+    fallback: "Placeholder transcription with no timestamps",
+    critical: false,
+  },
+  {
+    dep: "pyannote.audio",
+    stage: "Speakers",
+    fallback: "Single speaker assumed — no diarization",
+    critical: false,
+  },
+  {
+    dep: "LLM API key / NLLB",
+    stage: "Translate",
+    fallback: "Identity copy — source text used as-is",
+    critical: false,
+  },
+  {
+    dep: "VoxCPM2 / XTTS / edge-tts",
+    stage: "Clone",
+    fallback: "Edge TTS stock voices — no voice cloning",
+    critical: false,
+  },
+  {
+    dep: "PyTorch",
+    stage: "Separate, Transcribe, Speakers, Clone",
+    fallback: "Multiple stages degraded — ML unavailable",
+    critical: false,
+  },
 ];
 
 const voiceEngines: Record<VoiceEngine, { label: string; note: string }> = {
@@ -105,10 +169,39 @@ export default function DubbingPage() {
   const [saved, setSaved] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [doctorReport, setDoctorReport] = useState<DubbingDoctorReport | null>(null);
+  const [doctorLoading, setDoctorLoading] = useState(false);
+
+  // Live dubbing-engine dependency check against local-runner /api/dubbing/doctor
+  const refreshDoctor = useCallback(async (force = false) => {
+    setDoctorLoading(true);
+    try {
+      const url = `http://127.0.0.1:3000/api/dubbing/doctor${force ? "?refresh=1" : ""}`;
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const payload = await response.json();
+      if (payload?.success && payload.data) {
+        setDoctorReport(payload.data as DubbingDoctorReport);
+      } else {
+        setDoctorReport({
+          ok: false, verdict: "blocked", missing: ["Local runner did not return doctor data"], error: payload?.error || "Unknown",
+        });
+      }
+    } catch (err) {
+      setDoctorReport({
+        ok: false, verdict: "blocked", missing: ["Local runner is not reachable"], error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setDoctorLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     setDrafts(loadDrafts());
-  }, []);
+    void refreshDoctor(false);
+    const interval = window.setInterval(() => { void refreshDoctor(false); }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [refreshDoctor]);
 
   const sourceReady = sourceMode === "upload" ? Boolean(sourceValue) : sourceValue.trim().length > 5;
   const readyChecks = [
@@ -500,6 +593,118 @@ export default function DubbingPage() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+
+          <section className="glass-card no-hover p-6">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Cpu className="h-5 w-5 text-orange-300" />
+                <h3 className="text-lg font-semibold">Dependency Health</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                {doctorLoading && <span className="text-[10px] text-[#a1a1aa]">Scanning...</span>}
+                <button
+                  onClick={() => void refreshDoctor(true)}
+                  className="glass-button text-xs py-1 px-2"
+                  title="Re-check engine availability"
+                  disabled={doctorLoading}
+                >
+                  <RefreshCw className={`h-3 w-3 ${doctorLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Live verdict badge */}
+            {doctorReport && (
+              <div className={`mb-4 rounded-xl border p-3 text-xs ${
+                doctorReport.verdict === 'ready'
+                  ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+                  : doctorReport.verdict === 'degraded'
+                  ? 'border-amber-500/25 bg-amber-500/10 text-amber-200'
+                  : 'border-red-500/25 bg-red-500/10 text-red-200'
+              }`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">
+                    {doctorReport.verdict === 'ready' ? '✓ All systems ready'
+                      : doctorReport.verdict === 'degraded' ? '⚠ Running in degraded mode'
+                      : '✗ Engine setup required'}
+                  </span>
+                  <span className="text-[10px] opacity-70">
+                    {doctorReport.ok_count ?? 0}/{doctorReport.total ?? 0} checks passed
+                  </span>
+                </div>
+                {doctorReport.missing && doctorReport.missing.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {doctorReport.missing.map((item) => (
+                      <div key={item} className="flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                        <span>{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {doctorReport.error && !doctorReport.missing?.length && (
+                  <p className="mt-1 text-[10px] opacity-60">{doctorReport.error}</p>
+                )}
+                {doctorReport.checked_at && (
+                  <p className="mt-1.5 text-[10px] opacity-40">
+                    Checked: {new Date(doctorReport.checked_at).toLocaleTimeString()}
+                    {doctorReport.cached ? ' (cached)' : ''}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {!doctorReport && !doctorLoading && (
+              <div className="mb-4 rounded-xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] p-3">
+                <div className="flex items-center gap-2 text-xs text-[#a1a1aa]">
+                  <WifiOff className="h-3.5 w-3.5" />
+                  <span>Local runner not reachable — run the local dashboard to see live health</span>
+                </div>
+              </div>
+            )}
+
+            <p className="mb-4 text-xs text-[#a1a1aa]">
+              These packages are auto-detected by the runner. Missing dependencies trigger graceful fallbacks —
+              the pipeline still completes, but output quality may be reduced.
+            </p>
+            <div className="space-y-2">
+              {dependencyHealthInfo.map((item) => {
+                return (
+                  <div
+                    key={item.dep}
+                    className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] p-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-[#d4d4d8]">{item.dep}</span>
+                      {item.critical ? (
+                        <span className="rounded-full bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-300">
+                          Required
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                          Optional
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#a1a1aa]">
+                      <span>Stage: <span className="text-[#d4d4d8]">{item.stage}</span></span>
+                    </div>
+                    <p className="mt-1 text-[11px] italic text-[#71717a]">
+                      {item.fallback}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-4 rounded-xl border border-[rgba(99,102,241,0.15)] bg-[rgba(99,102,241,0.06)] p-3">
+              <p className="text-xs text-indigo-200">
+                Run <code className="rounded bg-black/25 px-1.5 py-0.5 font-mono text-indigo-100">node doctor.js</code>{' '}
+                on the runner to check installed packages. Or use the{' '}
+                <code className="rounded bg-black/25 px-1.5 py-0.5 font-mono text-indigo-100">install-dubbing-deps.ps1</code>{' '}
+                script for the minimal viable setup.
+              </p>
             </div>
           </section>
 

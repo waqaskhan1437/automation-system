@@ -5,6 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "check": "node cli.js --self-test",
-    "dry-run": "node cli.js --manifest sample-manifest.json --dry-run"
+    "dry-run": "node cli.js --manifest sample-manifest.json --dry-run",
+    "test": "node --test __tests__/*.js",
+    "test:verbose": "node --test --test-reporter spec __tests__/*.js"
   }
 }

@@ -61,7 +61,11 @@ async function speakers(workDir, manifest) {
   if (result && !result.skipped) {
     console.log(`[SPEAKERS] ✅ Done – ${result.speakers?.length || 0} speakers identified`);
   } else {
-    console.log(`[SPEAKERS] ⏭️ Skipped (pyannote not available or disabled)`);
+    // Mark as fallback if it was skipped due to missing pyannote (not user-disabled)
+    if (result && diarizeEnabled && result.skipped) {
+      result.fallback = true;
+    }
+    console.log(`[SPEAKERS] ⏭️ Skipped (pyannote not available or disabled)${result?.fallback ? ' ⚠️ (fallback)' : ''}`);
   }
   return result;
 }

@@ -3,6 +3,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync, spawn } = require('child_process');
 
 // ── FFmpeg / FFprobe resolution ────────────────────────────────────────────
@@ -39,28 +40,130 @@ function getFFmpeg() { return FFMPEG; }
 function getFFprobe() { return FFPROBE; }
 
 // ── Python resolution ──────────────────────────────────────────────────────
-function resolvePython() {
-  const candidates = ['python3', 'python', 'py'];
-  for (const c of candidates) {
+// Dubbing engine packages that count toward "richest venv" ranking.
+const DUBBING_PYTHON_PACKAGES = [
+  'voxcpm', 'voxcpm2', 'TTS', 'edge_tts', 'whisperx', 'whisper',
+  'demucs', 'pyannote', 'transformers', 'torch', 'speechbrain',
+];
+
+function listPythonCandidates() {
+  const candidates = [];
+  const seen = new Set();
+  const push = (p) => {
+    if (!p) return;
+    const norm = String(p).replace(/\\/g, '/').toLowerCase();
+    if (seen.has(norm)) return;
+    seen.add(norm);
+    candidates.push(p);
+  };
+
+  // 1. Pre-existing venvs the user is known to have created for dubbing/voice work.
+  //    Highest priority because they almost always contain heavy ML packages.
+  const userHome = process.env.USERPROFILE || process.env.HOME || '';
+  if (userHome) {
+    const knownVenvLocations = [
+      // VoxCPM repo's venv (common — the upstream README tells users to create it here)
+      path.join(userHome, 'VoxCPM', 'venv', 'Scripts', 'python.exe'),
+      path.join(userHome, 'VoxCPM', '.venv', 'Scripts', 'python.exe'),
+      // Generic whisper venvs people make
+      path.join(userHome, 'whisper-env', 'Scripts', 'python.exe'),
+      path.join(userHome, 'whisperx-env', 'Scripts', 'python.exe'),
+      // Catch-all "dubbing" venv
+      path.join(userHome, 'dubbing-env', 'Scripts', 'python.exe'),
+      path.join(userHome, 'dubbing', 'venv', 'Scripts', 'python.exe'),
+    ];
+    for (const p of knownVenvLocations) {
+      if (fs.existsSync(p)) push(p);
+    }
+  }
+
+  // 2. Env override
+  if (process.env.DUBBING_PYTHON && fs.existsSync(process.env.DUBBING_PYTHON)) {
+    push(process.env.DUBBING_PYTHON);
+  }
+
+  // 3. PATH-resolved python launchers (python3 / python / py)
+  for (const c of ['python3', 'python', 'py']) {
     try {
       const out = execSync(`${c} --version 2>&1`, { encoding: 'utf8', timeout: 5000 });
-      if (out.toLowerCase().includes('python')) return c;
+      if (out.toLowerCase().includes('python')) push(c);
     } catch {}
   }
-  // Common Windows locations
+
+  // 4. Common Windows install locations
   const winCandidates = [
-    'C:\\Python311\\python.exe',
-    'C:\\Python312\\python.exe',
-    'C:\\Python313\\python.exe',
-    'C:\\Program Files\\Python311\\python.exe',
-    'C:\\Program Files\\Python312\\python.exe',
+    'C:\\Python311\\python.exe', 'C:\\Python312\\python.exe', 'C:\\Python313\\python.exe',
+    'C:\\Python314\\python.exe',
+    'C:\\Program Files\\Python311\\python.exe', 'C:\\Program Files\\Python312\\python.exe',
+    'C:\\Program Files\\Python313\\python.exe',
     path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
     path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python313', 'python.exe'),
   ];
   for (const c of winCandidates) {
-    if (fs.existsSync(c)) return c;
+    if (fs.existsSync(c)) push(c);
   }
-  return 'python'; // fallback
+
+  return candidates;
+}
+
+function scoreDubbingPython(pythonExe) {
+  // Returns number of DUBBING_PYTHON_PACKAGES that can be imported by this interpreter.
+  // We write a temp probe script so multi-line Python (try/except) works correctly —
+  // semicolons cannot substitute for newlines around compound statements.
+  const tmpDir = os.tmpdir();
+  const probePath = path.join(tmpDir, `dubbing-probe-${process.pid}-${Date.now()}.py`);
+  const probeSource = [
+    'import importlib, json, sys',
+    `mods = ${JSON.stringify(DUBBING_PYTHON_PACKAGES)}`,
+    'found = []',
+    'for name in mods:',
+    '    try:',
+    '        importlib.import_module(name)',
+    '        found.append(name)',
+    '    except Exception:',
+    '        pass',
+    'sys.stdout.write(json.dumps(found))',
+  ].join('\n');
+
+  try {
+    fs.writeFileSync(probePath, probeSource, 'utf8');
+    const out = execSync(`"${pythonExe}" "${probePath}"`, {
+      encoding: 'utf8',
+      timeout: 60000,
+      windowsHide: true,
+    });
+    const lastLine = out.trim().split(/\r?\n/).pop();
+    const parsed = JSON.parse(lastLine);
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  } finally {
+    try { fs.unlinkSync(probePath); } catch {}
+  }
+}
+
+function resolvePython() {
+  const allCandidates = listPythonCandidates();
+  if (allCandidates.length === 0) return 'python';
+
+  // Don't bother scoring if there's only one candidate.
+  if (allCandidates.length === 1) return allCandidates[0];
+
+  // Cache scoring results on the module to avoid re-running heavy imports
+  // when other helpers also call resolvePython() in the same process.
+  let best = allCandidates[0];
+  let bestScore = -1;
+  for (const candidate of allCandidates) {
+    const score = scoreDubbingPython(candidate);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+    // Short-circuit: if we already found a venv with most packages, stop.
+    if (bestScore >= 5) break;
+  }
+  return best;
 }
 
 const PYTHON_EXE = resolvePython();
@@ -179,6 +282,9 @@ module.exports = {
   getFFprobe,
   getPython,
   resolvePython,
+  listPythonCandidates,
+  scoreDubbingPython,
+  DUBBING_PYTHON_PACKAGES,
   getVideoDuration,
   hasAudioTrack,
   getAudioSampleRate,

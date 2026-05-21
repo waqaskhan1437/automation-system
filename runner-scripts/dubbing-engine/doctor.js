@@ -29,13 +29,31 @@ function probeBinary(name, exePath) {
 }
 
 function probePython() {
-  for (const candidate of ['python3', 'python', 'py']) {
-    try {
-      const out = execSync(`${candidate} --version 2>&1`, { encoding: 'utf8', timeout: 5000 }).trim();
-      if (out.toLowerCase().includes('python')) return { ok: true, location: candidate, version: out };
-    } catch {}
-  }
-  return { ok: false, location: null, version: null };
+  // Use the same resolver the pipeline uses so doctor reports the actual venv
+  // the runner will execute against.
+  let chosen = null;
+  let candidates = [];
+  try {
+    chosen = utils.getPython();
+    candidates = utils.listPythonCandidates ? utils.listPythonCandidates() : [];
+  } catch {}
+
+  if (!chosen) return { ok: false, location: null, version: null, candidates: [] };
+
+  try {
+    const out = execSync(`"${chosen}" --version 2>&1`, { encoding: 'utf8', timeout: 5000 }).trim();
+    if (out.toLowerCase().includes('python')) {
+      return {
+        ok: true,
+        location: chosen,
+        version: out,
+        candidates,
+        scanned: candidates.length,
+      };
+    }
+  } catch {}
+
+  return { ok: false, location: chosen, version: null, candidates };
 }
 
 function probePyModule(python, moduleName, importName) {
@@ -93,7 +111,10 @@ async function main() {
   rows.push({ name: 'ffmpeg',  status: ffmpegProbe.ok,  detail: ffmpegProbe.location || 'install FFmpeg or run setup.bat' });
   rows.push({ name: 'ffprobe', status: ffprobeProbe.ok, detail: ffprobeProbe.location || 'ships with FFmpeg' });
   rows.push({ name: 'yt-dlp',  status: ytdlpProbe.ok,   detail: ytdlpProbe.location || 'install yt-dlp or run setup.bat' });
-  rows.push({ name: 'python',  status: py.ok,           detail: py.version || 'install Python 3.11/3.12  (see DUBBING_SETUP.md)' });
+  const pyDetail = py.ok
+    ? `${py.version}   @ ${py.location}`
+    : 'install Python 3.11/3.12  (see DUBBING_SETUP.md)';
+  rows.push({ name: 'python',  status: py.ok,           detail: pyDetail });
 
   for (const c of pyChecks) {
     if (!py.ok) {

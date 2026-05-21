@@ -93,8 +93,10 @@ async function separate(workDir, manifest) {
   const result = {
     vocals_exist: fs.existsSync(path.join(outputDir, 'vocals.wav')),
     no_vocals_exist: fs.existsSync(path.join(outputDir, 'no_vocals.wav')),
+    fallback: !demucsAvailable,
   };
-  console.log(`[SEPARATE] ✅ Done – Vocals: ${result.vocals_exist}, Background: ${result.no_vocals_exist}`);
+  const flag = !demucsAvailable ? ' ⚠️ (fallback – Demucs not installed)' : '';
+  console.log(`[SEPARATE] ✅ Done – Vocals: ${result.vocals_exist}, Background: ${result.no_vocals_exist}${flag}`);
   return result;
 }
 

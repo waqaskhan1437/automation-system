@@ -64,24 +64,39 @@ async function runPipeline(manifest, options = {}) {
   }
 
   // Build final report
+  const stageEntries = stages.map((name, i) => ({
+    index: i + 1,
+    stage: name,
+    status: stageResults[name]?.error ? 'failed' : stageResults[name]?.skipped ? 'skipped' : 'completed',
+    duration_seconds: stageDurations[name] || null,
+    error: stageResults[name]?.error || null,
+    fallback: stageResults[name]?.fallback === true || false,
+  }));
+
+  // Detect degraded mode — any stage that used a fallback or was skipped due to missing dependency
+  const fallbackStages = stageEntries
+    .filter(s => s.fallback)
+    .map(s => s.stage);
+
   const report = {
     ok,
+    degraded: fallbackStages.length > 0,
+    fallback_stages: fallbackStages,
     created_at: new Date().toISOString(),
     name: manifest.name,
     source_mode: manifest.source_mode,
     target_language: manifest.dubbing?.target_language,
     voice_engine: manifest.dubbing?.voice_engine,
     work_dir: workDir,
-    stages: stages.map((name, i) => ({
-      index: i + 1,
-      stage: name,
-      status: stageResults[name]?.error ? 'failed' : stageResults[name]?.skipped ? 'skipped' : 'completed',
-      duration_seconds: stageDurations[name] || null,
-      error: stageResults[name]?.error || null,
-    })),
+    stages: stageEntries,
     final_video: stageResults.mix?.final_video || null,
     last_error: lastError,
   };
+
+  if (report.degraded) {
+    console.log(`\n⚠️  PIPELINE DEGRADED — ${fallbackStages.length} stage(s) used fallback: ${fallbackStages.join(', ')}`);
+    console.log(`   Install the recommended packages to avoid degraded output.`);
+  }
 
   return report;
 }

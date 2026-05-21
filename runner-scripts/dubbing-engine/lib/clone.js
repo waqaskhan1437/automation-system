@@ -116,9 +116,14 @@ async function cloneStage(workDir, manifest) {
   const result = fs.existsSync(outputManifest) ? utils.readJson(outputManifest) : null;
   if (!result) throw new Error('[CLONE] Failed to produce cloned audio segments');
 
+  // Tag as fallback if engine is a fallback variant
+  if (result.engine === 'edge_tts_fallback' || result.engine === 'silent_fallback') {
+    result.fallback = true;
+  }
+
   const segCount = result.segments?.length || 0;
   const audioFiles = (result.segments || []).filter(s => s.audio_file).length;
-  console.log(`[CLONE] ✅ Done – ${audioFiles}/${segCount} segments with audio (engine: ${result.engine || voiceEngine})`);
+  console.log(`[CLONE] ✅ Done – ${audioFiles}/${segCount} segments with audio (engine: ${result.engine || voiceEngine})${result.fallback ? ' ⚠️ (fallback – ' + result.engine + ')' : ''}`);
   return result;
 }
 

@@ -93,8 +93,13 @@ async function translateStage(workDir, manifest) {
   const result = fs.existsSync(outputFile) ? utils.readJson(outputFile) : null;
   if (!result) throw new Error('[TRANSLATE] Failed to produce translation');
 
+  // Mark as fallback if identity placeholder was used
+  if (result.engine === 'identity_placeholder') {
+    result.fallback = true;
+  }
+
   const segCount = result.segments?.length || 0;
-  console.log(`[TRANSLATE] ✅ Done – ${segCount} segment(s) translated`);
+  console.log(`[TRANSLATE] ✅ Done – ${segCount} segment(s) translated${result.fallback ? ' ⚠️ (fallback – translation engine unavailable)' : ''}`);
   return result;
 }
 

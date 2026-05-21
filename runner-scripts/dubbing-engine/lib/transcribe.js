@@ -74,7 +74,13 @@ async function transcribe(workDir, manifest) {
 
   const result = fs.existsSync(outputFile) ? utils.readJson(outputFile) : null;
   if (!result) throw new Error('[TRANSCRIBE] Failed to produce transcription');
-  console.log(`[TRANSCRIBE] ✅ Done – ${result.segments?.length || 0} segments`);
+  
+  // Tag with fallback info if placeholder was used
+  if (result.engine === 'placeholder') {
+    result.fallback = true;
+  }
+  
+  console.log(`[TRANSCRIBE] ✅ Done – ${result.segments?.length || 0} segments${result.fallback ? ' ⚠️ (fallback – WhisperX not installed)' : ''}`);
   return result;
 }
 
