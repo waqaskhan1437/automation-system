@@ -719,8 +719,33 @@ function buildRunnerScriptsEnv(job) {
     process.env.PATH || '',
   ].filter(Boolean).join(path.delimiter);
 
+  // Inject AI API keys from worker settings so the dubbing pipeline
+  // can use whichever provider the user selected.
+  const aiEnv = {};
+  if (job && job.ai_settings && typeof job.ai_settings === 'object') {
+    const keyMap = {
+      openai_key: { normalized: 'OPENAI_KEY', standard: 'OPENAI_API_KEY' },
+      gemini_key: { normalized: 'GEMINI_KEY', standard: 'GEMINI_API_KEY' },
+      grok_key: { normalized: 'GROK_KEY', standard: 'XAI_API_KEY' },
+      cohere_key: { normalized: 'COHERE_KEY', standard: 'CO_API_KEY' },
+      openrouter_key: { normalized: 'OPENROUTER_KEY', standard: 'OPENROUTER_API_KEY' },
+      groq_key: { normalized: 'GROQ_KEY', standard: 'GROQ_API_KEY' },
+    };
+    for (const [sourceKey, mapping] of Object.entries(keyMap)) {
+      const raw = String(job.ai_settings[sourceKey] || '').trim();
+      if (raw) {
+        aiEnv[mapping.normalized] = raw;
+        aiEnv[mapping.standard] = raw;
+      }
+    }
+    if (job.ai_settings.default_provider) {
+      aiEnv.AI_DEFAULT_PROVIDER = String(job.ai_settings.default_provider).trim();
+    }
+  }
+
   return {
     ...process.env,
+    ...aiEnv,
     PATH: toolPathEntries,
     JOB_ID: String(job.id),
     AUTOMATION_ID: String(job.automation_id || ''),
@@ -1054,6 +1079,8 @@ function buildDubbingManifest(job) {
   const voiceEngine = String(mergedConfig.voice_engine || mergedConfig.dubbing?.voice_engine || 'voxcpm2').toLowerCase();
   const maxTempo = Number(mergedConfig.speedLimit || mergedConfig.max_tempo || mergedConfig.dubbing?.max_tempo || 1.2);
   const voiceReferenceSeconds = Number(mergedConfig.voiceReferenceSeconds || mergedConfig.voice_reference_seconds || mergedConfig.dubbing?.voice_reference_seconds || 18);
+  // AI provider for LLM translation – e.g. 'openai', 'gemini', 'grok', 'openrouter', 'groq'
+  const aiProvider = String(mergedConfig.ai_provider || mergedConfig.dubbing?.ai_provider || job?.ai_settings?.default_provider || 'openai').toLowerCase();
 
   if (!sourceValue) {
     throw new Error('Dubbing job is missing a source value');
@@ -1077,6 +1104,7 @@ function buildDubbingManifest(job) {
       preserve_background: mergedConfig.preserveBackground !== false && mergedConfig.preserve_background !== false,
       max_tempo: Number.isFinite(maxTempo) ? Math.max(1.05, Math.min(1.35, Number(maxTempo))) : 1.2,
       lip_sync_enabled: mergedConfig.lipSync === true || mergedConfig.lip_sync_enabled === true,
+      ai_provider: aiProvider,
       stages: Array.isArray(mergedConfig.stages) && mergedConfig.stages.length > 0
         ? mergedConfig.stages
         : ["extract", "separate", "transcribe", "speakers", "translate", "clone", "align", "mix"],
@@ -1335,10 +1363,13 @@ async function getJob() {
         configData = typeof configData === 'string' ? JSON.parse(configData) : configData;
       } catch {}
 
+      const aiSettings = rawJob.ai_settings || null;
+
       return {
         ...rawJob,
         input_data: inputData,
-        config: configData
+        config: configData,
+        ai_settings: aiSettings,
       };
     }
     return null;

@@ -998,6 +998,25 @@ export async function handleRunnerRoutes(
       parsedConfig = pendingJob.automation_config ? JSON.parse(pendingJob.automation_config) : {};
     } catch {}
 
+    // Fetch AI settings (API keys) so the runner can pass them to the dubbing pipeline
+    let aiSettings: Record<string, string | null> | null = null;
+    try {
+      const settings = await getScopedSettings<AISettings>(env.DB, "ai", user.id);
+      if (settings) {
+        aiSettings = {
+          openai_key: settings.openai_key || null,
+          gemini_key: settings.gemini_key || null,
+          grok_key: settings.grok_key || null,
+          cohere_key: settings.cohere_key || null,
+          openrouter_key: settings.openrouter_key || null,
+          groq_key: settings.groq_key || null,
+          default_provider: settings.default_provider || "openai",
+        };
+      }
+    } catch {
+      // Non-critical — runner falls back to env vars or placeholders
+    }
+
     return jsonResponse({
       success: true,
       data: {
@@ -1006,6 +1025,7 @@ export async function handleRunnerRoutes(
         automation_type: pendingJob.automation_type || "video",
         input_data: parsedInputData,
         config: parsedConfig,
+        ai_settings: aiSettings,
       },
     });
   }

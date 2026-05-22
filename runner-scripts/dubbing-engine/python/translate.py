@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--source-lang", default="en", help="Source language code")
     parser.add_argument("--target-lang", default="ur", help="Target language code")
     parser.add_argument("--engine", default="llm", help="Translation engine (llm or nllb)")
+    parser.add_argument("--ai-provider", default="", help="AI provider for LLM translation (openai, gemini, grok, cohere, openrouter, groq)")
     args = parser.parse_args()
 
     input_file = args.input
@@ -31,6 +32,7 @@ def main():
     source_lang = args.source_lang
     target_lang = args.target_lang
     engine = args.engine
+    ai_provider = args.ai_provider.lower() if args.ai_provider else ""
 
     if not os.path.exists(input_file):
         print(f"[TRANSLATE] Error: Input not found: {input_file}", file=sys.stderr)
@@ -56,7 +58,7 @@ def main():
     if engine == "nllb":
         result = translate_nllb(segments, source_lang, target_lang)
     else:
-        result = translate_llm(segments, source_lang, target_lang)
+        result = translate_llm(segments, source_lang, target_lang, ai_provider)
 
     # Attach original text and speaker info
     translated_segments = []
@@ -87,24 +89,82 @@ def main():
     sys.stdout.flush()
 
 
-def translate_llm(segments, source_lang, target_lang):
-    """Translate using OpenAI-compatible API or Ollama."""
+def translate_llm(segments, source_lang, target_lang, ai_provider=""):
+    """Translate using a configured AI provider API."""
     texts = [s.get("text", "").strip() for s in segments if s.get("text", "").strip()]
     full_text = " ".join(texts)
 
     if not full_text:
         return {"engine": "llm", "segments": segments}
 
-    try:
-        # Try OpenAI API
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        ollama_host = os.environ.get("OLLAMA_HOST", "")
+    # Resolve API key based on provider
+    provider_api_keys = {
+        "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
+        "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"),
+        "grok": ("XAI_API_KEY", "https://api.x.ai/v1"),
+        "cohere": ("CO_API_KEY", "https://api.cohere.com/v2"),
+        "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+        "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1"),
+    }
 
-        if api_key:
+    provider = ai_provider.lower() if ai_provider else "openai"
+    if provider not in provider_api_keys:
+        provider = "openai"
+
+    env_key, base_url = provider_api_keys[provider]
+    api_key = os.environ.get(env_key, "")
+    ollama_host = os.environ.get("OLLAMA_HOST", "")
+
+    print(f"[TRANSLATE] Using provider: {provider} (env: {env_key})")
+    sys.stdout.flush()
+
+    try:
+        if api_key and provider == "gemini":
+            # Use Gemini's dedicated API format
+            import requests as req_lib
+            model = "gemini-2.5-flash"
+            url = f"{base_url}/models/{model}:generateContent?key={api_key}"
+            response = req_lib.post(url, json={
+                "contents": [{
+                    "role": "user",
+                    "parts": [{
+                        "text": f"You are a professional translator. Translate the following text from {source_lang} to {target_lang}. Return ONLY the translation, no explanations.\n\n{full_text}"
+                    }]
+                }],
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": 4096,
+                }
+            }, timeout=120)
+            if response.ok:
+                data = response.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    translated = " ".join(p.get("text", "") for p in parts)
+                else:
+                    translated = ""
+            else:
+                print(f"[TRANSLATE] Gemini error: {response.status} {response.text}", file=sys.stderr)
+                return {"engine": "llm_placeholder", "segments": [{"text": s.get("text", "")} for s in segments]}
+
+        elif api_key:
+            # OpenAI-compatible API (openai, grok, openrouter, groq, cohere)
             import openai
-            client = openai.OpenAI(api_key=api_key)
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+            # Map provider to model
+            model_map = {
+                "openai": "gpt-4o-mini",
+                "grok": "grok-4-fast-reasoning",
+                "openrouter": "google/gemini-2.5-flash",
+                "groq": "llama-3.1-8b-instant",
+                "cohere": "command-a-03-2025",
+            }
+            model = model_map.get(provider, "gpt-4o-mini")
+
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model,
                 messages=[
                     {"role": "system", "content": f"You are a professional translator. Translate the following text from {source_lang} to {target_lang}. Return ONLY the translation, no explanations."},
                     {"role": "user", "content": full_text},
@@ -130,7 +190,7 @@ def translate_llm(segments, source_lang, target_lang):
             data = response.json()
             translated = data.get("message", {}).get("content", "").strip()
         else:
-            print("[TRANSLATE] No LLM API key or Ollama host found")
+            print(f"[TRANSLATE] No API key found for {provider} (env: {env_key})")
             return {"engine": "llm_placeholder", "segments": [{"text": s.get("text", "")} for s in segments]}
 
         # Map back to segments approximately
@@ -150,12 +210,12 @@ def translate_llm(segments, source_lang, target_lang):
                 else:
                     seg_text = ""
                 new_segments.append({"text": seg_text})
-            return {"engine": "llm", "segments": new_segments}
+            return {"engine": f"llm_{provider}", "segments": new_segments}
         else:
-            return {"engine": "llm", "segments": [{"text": translated or s.get("text", "")} for s in segments]}
+            return {"engine": f"llm_{provider}", "segments": [{"text": translated or s.get("text", "")} for s in segments]}
 
     except Exception as e:
-        print(f"[TRANSLATE] LLM translation error: {e}", file=sys.stderr)
+        print(f"[TRANSLATE] LLM translation error ({provider}): {e}", file=sys.stderr)
         return {"engine": "llm_placeholder", "segments": [{"text": s.get("text", "")} for s in segments]}
 
 

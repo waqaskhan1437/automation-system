@@ -25,10 +25,27 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 
 type DubbingDoctorVerdict = "ready" | "degraded" | "blocked";
+interface DoctorRow {
+  name: string;
+  status: boolean;
+  detail: string;
+}
+
+interface AISettingsData {
+  gemini_key: string | null;
+  openai_key: string | null;
+  grok_key: string | null;
+  cohere_key: string | null;
+  openrouter_key: string | null;
+  groq_key: string | null;
+  default_provider: string | null;
+}
+
 interface DubbingDoctorReport {
   ok: boolean;
   verdict: DubbingDoctorVerdict;
   missing: string[];
+  rows?: DoctorRow[];
   has_ffmpeg?: boolean;
   has_yt_dlp?: boolean;
   has_transcribe?: boolean;
@@ -83,42 +100,64 @@ const dependencyHealthInfo = [
     stage: "Extract, Align, Mix",
     fallback: "Required — pipeline cannot run without FFmpeg",
     critical: true,
+    checkRows: (rows: DoctorRow[]) => {
+      const ffmpeg = rows.find(r => r.name === 'ffmpeg')?.status ?? false;
+      const ffprobe = rows.find(r => r.name === 'ffprobe')?.status ?? false;
+      return ffmpeg && ffprobe;
+    },
   },
   {
     dep: "Demucs",
     stage: "Separate",
     fallback: "Copies audio as-is — no vocal separation",
     critical: false,
+    checkRows: (rows: DoctorRow[]) => rows.find(r => r.name === 'demucs')?.status ?? false,
   },
   {
     dep: "WhisperX / Whisper",
     stage: "Transcribe",
     fallback: "Placeholder transcription with no timestamps",
     critical: false,
+    checkRows: (rows: DoctorRow[]) => {
+      return (rows.find(r => r.name === 'whisperx')?.status ?? false)
+          || (rows.find(r => r.name === 'whisper')?.status ?? false);
+    },
   },
   {
     dep: "pyannote.audio",
     stage: "Speakers",
     fallback: "Single speaker assumed — no diarization",
     critical: false,
+    checkRows: (rows: DoctorRow[]) => rows.find(r => r.name === 'pyannote.audio')?.status ?? false,
   },
   {
     dep: "LLM API key / NLLB",
     stage: "Translate",
     fallback: "Identity copy — source text used as-is",
     critical: false,
+    checkRows: (rows: DoctorRow[]) => {
+      return (rows.find(r => r.name === 'transformers')?.status ?? false)
+          || (rows.find(r => r.name === 'env:OPENAI_API_KEY')?.status ?? false)
+          || (rows.find(r => r.name === 'env:OLLAMA_HOST')?.status ?? false);
+    },
   },
   {
     dep: "VoxCPM2 / XTTS / edge-tts",
     stage: "Clone",
     fallback: "Edge TTS stock voices — no voice cloning",
     critical: false,
+    checkRows: (rows: DoctorRow[]) => {
+      return (rows.find(r => r.name === 'edge_tts')?.status ?? false)
+          || (rows.find(r => r.name === 'TTS')?.status ?? false)
+          || (rows.find(r => r.name === 'voxcpm2')?.status ?? false);
+    },
   },
   {
     dep: "PyTorch",
     stage: "Separate, Transcribe, Speakers, Clone",
     fallback: "Multiple stages degraded — ML unavailable",
     critical: false,
+    checkRows: (rows: DoctorRow[]) => rows.find(r => r.name === 'torch')?.status ?? false,
   },
 ];
 
@@ -135,6 +174,15 @@ const voiceEngines: Record<VoiceEngine, { label: string; note: string }> = {
     label: "Edge TTS fallback",
     note: "Fast stock Urdu/Hindi voice when cloning fails.",
   },
+};
+
+const AI_PROVIDERS: Record<string, { label: string; apiKeyField: keyof AISettingsData }> = {
+  openai: { label: "OpenAI", apiKeyField: "openai_key" },
+  gemini: { label: "Google Gemini", apiKeyField: "gemini_key" },
+  grok: { label: "xAI Grok", apiKeyField: "grok_key" },
+  cohere: { label: "Cohere", apiKeyField: "cohere_key" },
+  openrouter: { label: "OpenRouter", apiKeyField: "openrouter_key" },
+  groq: { label: "Groq", apiKeyField: "groq_key" },
 };
 
 function loadDrafts(): DubbingDraft[] {
@@ -171,6 +219,9 @@ export default function DubbingPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [doctorReport, setDoctorReport] = useState<DubbingDoctorReport | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
+  const [aiProvider, setAiProvider] = useState("openai");
+  const [availableAiProviders, setAvailableAiProviders] = useState<string[]>([]);
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(true);
 
   // Live dubbing-engine dependency check against local-runner /api/dubbing/doctor
   const refreshDoctor = useCallback(async (force = false) => {
@@ -194,6 +245,43 @@ export default function DubbingPage() {
     } finally {
       setDoctorLoading(false);
     }
+  }, []);
+
+  // Fetch AI settings to determine available providers
+  useEffect(() => {
+    async function loadAiSettings() {
+      setAiSettingsLoading(true);
+      try {
+        const response = await api.get<AISettingsData>("/api/settings/ai");
+        if (response.success && response.data) {
+          const settings = response.data;
+          const available: string[] = [];
+          for (const [provider, info] of Object.entries(AI_PROVIDERS)) {
+            if (settings[info.apiKeyField]) {
+              available.push(provider);
+            }
+          }
+          setAvailableAiProviders(available);
+          // Default to the user's preferred default_provider, or first available, or 'openai'
+          const defaultP = settings.default_provider || available[0] || "openai";
+          if (available.includes(defaultP)) {
+            setAiProvider(defaultP);
+          } else if (available.length > 0) {
+            setAiProvider(available[0]);
+          } else {
+            setAiProvider("openai");
+          }
+        } else {
+          setAiProvider("openai");
+        }
+      } catch {
+        // Silently fall back to openai if settings API is unreachable
+        setAiProvider("openai");
+      } finally {
+        setAiSettingsLoading(false);
+      }
+    }
+    void loadAiSettings();
   }, []);
 
   useEffect(() => {
@@ -225,6 +313,7 @@ export default function DubbingPage() {
       translation_engine: translationEngine,
       voice_engine: voiceEngine,
       voice_reference_seconds: voiceReferenceSeconds,
+      ai_provider: aiProvider,
       diarization_enabled: diarization,
       mix_mode: mixMode,
       preserve_background: preserveBackground,
@@ -238,6 +327,7 @@ export default function DubbingPage() {
     sourceValue,
     targetLanguage,
     translationEngine,
+    aiProvider,
     voiceEngine,
     voiceReferenceSeconds,
     diarization,
@@ -456,6 +546,50 @@ export default function DubbingPage() {
                   <option value="nllb">NLLB offline fallback</option>
                 </select>
               </div>
+
+              {translationEngine === "llm" && (
+                <div className="mt-4">
+                  <label className="mb-2 block text-sm font-medium">
+                    AI Provider
+                    {aiSettingsLoading && <span className="ml-2 text-xs text-[#a1a1aa]">Loading...</span>}
+                  </label>
+                  <select
+                    value={aiProvider}
+                    onChange={(event) => setAiProvider(event.target.value)}
+                    className="glass-select"
+                    disabled={aiSettingsLoading}
+                  >
+                    {availableAiProviders.length === 0 ? (
+                      <option value="openai">OpenAI (default)</option>
+                    ) : (
+                      availableAiProviders.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {AI_PROVIDERS[provider]?.label || provider}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  {availableAiProviders.length === 0 && !aiSettingsLoading && (
+                    <p className="mt-2 text-xs text-amber-300">
+                      No AI API keys configured. Set one in{' '}
+                      <button
+                        onClick={() => router.push("/settings")}
+                        className="underline hover:text-amber-200"
+                      >
+                        Settings
+                      </button>.
+                    </p>
+                  )}
+                  {availableAiProviders.length > 0 && (
+                    <p className="mt-2 text-xs text-[#a1a1aa]">
+                      Uses the API key saved in Settings for{' '}
+                      <span className="font-semibold text-[#d4d4d8]">
+                        {AI_PROVIDERS[aiProvider]?.label || aiProvider}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="glass-card no-hover p-6">
@@ -671,19 +805,44 @@ export default function DubbingPage() {
             </p>
             <div className="space-y-2">
               {dependencyHealthInfo.map((item) => {
+                const installed = doctorReport?.rows && doctorReport.rows.length > 0
+                  ? item.checkRows(doctorReport.rows)
+                  : null;
                 return (
                   <div
                     key={item.dep}
-                    className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] p-3"
+                    className={`rounded-xl border p-3 ${
+                      installed === true
+                        ? 'border-emerald-500/15 bg-emerald-500/05'
+                        : installed === false
+                        ? 'border-red-500/10 bg-red-500/05'
+                        : 'border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)]'
+                    }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold text-[#d4d4d8]">{item.dep}</span>
-                      {item.critical ? (
-                        <span className="rounded-full bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-300">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {installed === true && (
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        )}
+                        {installed === false && (
+                          <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-red-400/30" />
+                        )}
+                        <span className="text-sm font-semibold text-[#d4d4d8]">{item.dep}</span>
+                      </div>
+                      {installed === true ? (
+                        <span className="rounded-full bg-emerald-400/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 whitespace-nowrap">
+                          Installed
+                        </span>
+                      ) : installed === false ? (
+                        <span className="rounded-full bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-300 whitespace-nowrap">
+                          Missing
+                        </span>
+                      ) : item.critical ? (
+                        <span className="rounded-full bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-300 whitespace-nowrap">
                           Required
                         </span>
                       ) : (
-                        <span className="rounded-full bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                        <span className="rounded-full bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-300 whitespace-nowrap">
                           Optional
                         </span>
                       )}
