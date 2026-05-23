@@ -26,7 +26,13 @@ async function cloneStage(workDir, manifest) {
   const voiceMode = dubbing.voice_mode || 'ultimate';
   const voiceStyle = dubbing.voice_style || '';
 
+  // User-specified reference audio path (e.g. uploaded file or built-in sample)
+  const userReferencePath = dubbing.reference_audio_path || '';
+
   utils.logStep('CLONE', `Voice engine: ${voiceEngine}  Mode: ${voiceMode}  Reference: ${voiceRefSeconds}s`);
+  if (userReferencePath && fs.existsSync(userReferencePath)) {
+    utils.logStep('CLONE', `User reference audio: ${userReferencePath}`);
+  }
 
   if (!fs.existsSync(translationFile)) {
     throw new Error('[CLONE] Translation not found – did translate stage run?');
@@ -102,7 +108,7 @@ async function cloneStage(workDir, manifest) {
       '--output-dir', outputDir,
       '--output-manifest', outputManifest,
       '--voice-engine', voiceEngine,
-      '--reference', (voiceEngine !== 'edge' && fs.existsSync(vocalsFile)) ? vocalsFile : '',
+      '--reference', resolveReferenceAudio(vocalsFile, userReferencePath),
       '--ref-seconds', String(voiceRefSeconds),
       '--source-language', dubbing.source_language || 'en',
       '--target-language', dubbing.target_language || 'ur',
@@ -172,6 +178,26 @@ async function fallbackToEdgeTTS(segments, outputDir, outputManifest, targetLang
   }
 
   utils.writeJson(outputManifest, { engine: 'edge_tts_fallback', segments: clonedSegments });
+}
+
+/**
+ * Resolve which reference audio to use for cloning.
+ * Priority: user-specified path > separated vocals > none
+ */
+function resolveReferenceAudio(vocalsFile, userReferencePath) {
+  // If user uploaded/selected a custom reference, use that
+  if (userReferencePath && fs.existsSync(userReferencePath)) {
+    console.log(`[CLONE] Using user reference audio: ${userReferencePath}`);
+    return userReferencePath;
+  }
+  // Fall back to separated vocals from Demucs stage
+  if (vocalsFile && fs.existsSync(vocalsFile)) {
+    console.log(`[CLONE] Using separated vocals reference: ${vocalsFile}`);
+    return vocalsFile;
+  }
+  // No reference available
+  console.log('[CLONE] No reference audio available — using voice design / zero-shot mode');
+  return '';
 }
 
 function getEdgeVoice(lang) {

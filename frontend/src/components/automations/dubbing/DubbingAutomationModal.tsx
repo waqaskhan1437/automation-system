@@ -18,6 +18,15 @@ type VoiceEngine = "voxcpm2" | "xtts" | "edge";
 type VoiceMode = "ultimate" | "controllable" | "design";
 type MixMode = "replace" | "bed";
 
+type ReferenceAudioSource = "upload" | "builtin" | "none";
+
+const BUILTIN_SAMPLES = [
+  { id: "urdu-male", label: "Urdu Male", path: "C:\\dubbing-samples\\urdu-male.wav" },
+  { id: "urdu-female", label: "Urdu Female", path: "C:\\dubbing-samples\\urdu-female.wav" },
+  { id: "hindi-male", label: "Hindi Male", path: "C:\\dubbing-samples\\hindi-male.wav" },
+  { id: "hindi-female", label: "Hindi Female", path: "C:\\dubbing-samples\\hindi-female.wav" },
+];
+
 interface DubbingConfig {
   sourceMode: SourceMode;
   sourceValue: string;
@@ -33,6 +42,8 @@ interface DubbingConfig {
   speedLimit: number;
   voiceReferenceSeconds: number;
   aiProvider: string;
+  referenceAudioSource: ReferenceAudioSource;
+  referenceAudioPath: string;
 }
 
 interface AISettingsData {
@@ -153,6 +164,8 @@ function parseDubbingConfig(config: string | null): DubbingConfig | null {
       speedLimit: Number(dubbing.max_tempo) || 1.2,
       voiceReferenceSeconds: Number(dubbing.voice_reference_seconds) || 18,
       aiProvider: dubbing.ai_provider || "openai",
+      referenceAudioSource: (dubbing.reference_audio_source as ReferenceAudioSource) || "none",
+      referenceAudioPath: dubbing.reference_audio_path || "",
     };
   } catch {
     return null;
@@ -175,6 +188,8 @@ function buildManifest(config: DubbingConfig, name: string) {
       voice_mode: config.voiceEngine === "voxcpm2" ? config.voiceMode : undefined,
       voice_style: config.voiceEngine === "voxcpm2" ? config.voiceStyle : undefined,
       voice_reference_seconds: config.voiceReferenceSeconds,
+      reference_audio_source: config.referenceAudioSource,
+      reference_audio_path: config.referenceAudioPath || undefined,
       ai_provider: config.aiProvider,
       diarization_enabled: config.diarization,
       mix_mode: config.mixMode,
@@ -213,6 +228,8 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [referenceAudioSource, setReferenceAudioSource] = useState<ReferenceAudioSource>("none");
+  const [referenceAudioPath, setReferenceAudioPath] = useState("");
 
   // Load edit data
   useEffect(() => {
@@ -234,6 +251,8 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
         setSpeedLimit(parsed.speedLimit);
         setVoiceReferenceSeconds(parsed.voiceReferenceSeconds);
         setAiProvider(parsed.aiProvider);
+        setReferenceAudioSource(parsed.referenceAudioSource);
+        setReferenceAudioPath(parsed.referenceAudioPath);
       }
     }
     setInitializing(false);
@@ -275,9 +294,10 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
 
   const config: DubbingConfig = useMemo(() => ({
     sourceMode, sourceValue, targetLanguage, translationEngine, voiceEngine,
-    voiceMode, voiceStyle,
+    voiceMode, voiceStyle, referenceAudioSource, referenceAudioPath,
     mixMode, preserveBackground, diarization, lipSync, speedLimit, voiceReferenceSeconds, aiProvider,
   }), [sourceMode, sourceValue, targetLanguage, translationEngine, voiceEngine, voiceMode, voiceStyle,
+      referenceAudioSource, referenceAudioPath,
       mixMode, preserveBackground, diarization, lipSync, speedLimit, voiceReferenceSeconds, aiProvider]);
 
   const handleSave = useCallback(async (runNow = false) => {
@@ -605,6 +625,58 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
                             Style: <span className="italic">"{voiceStyle}"</span>
                           </p>
                         )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Reference audio source selector (for ultimate/controllable) */}
+                {voiceEngine === "voxcpm2" && voiceMode !== "design" && (
+                  <div className="mt-3 mb-3 p-3 rounded-lg border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)]">
+                    <label className="mb-2 block text-xs font-medium">Reference Audio Source</label>
+                    <div className="grid grid-cols-3 gap-1.5 mb-2">
+                      {([{ v: "none", l: "None" }, { v: "upload", l: "Upload" }, { v: "builtin", l: "Built-in" }] as { v: ReferenceAudioSource; l: string }[]).map((opt) => (
+                        <button key={opt.v}
+                          onClick={() => { setReferenceAudioSource(opt.v); if (opt.v !== "builtin") setReferenceAudioPath(""); }}
+                          className={`rounded-lg px-2 py-1.5 text-[10px] font-medium transition-colors ${
+                            referenceAudioSource === opt.v
+                              ? "bg-emerald-400/15 text-emerald-200 border border-emerald-400/25"
+                              : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                          }`}
+                        >
+                          {opt.l}
+                        </button>
+                      ))}
+                    </div>
+
+                    {referenceAudioSource === "upload" && (
+                      <div className="space-y-1.5">
+                        <label className="flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-[rgba(20,184,166,0.3)] bg-[rgba(20,184,166,0.05)] p-2 text-center">
+                          <span className="text-[10px] font-medium">{referenceAudioPath || "Choose .wav/.mp3"}</span>
+                          <input type="file" accept="audio/*" className="hidden"
+                            onChange={(e) => setReferenceAudioPath(e.target.files?.[0]?.name || "")} />
+                        </label>
+                        <p className="text-[9px] text-[#71717a]">Upload a clean voice sample (6-45s)</p>
+                      </div>
+                    )}
+
+                    {referenceAudioSource === "builtin" && (
+                      <div className="space-y-1.5">
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {BUILTIN_SAMPLES.map((sample) => (
+                            <button key={sample.id}
+                              onClick={() => setReferenceAudioPath(referenceAudioPath === sample.path ? "" : sample.path)}
+                              className={`rounded-lg px-2 py-1.5 text-[10px] text-left transition-colors ${
+                                referenceAudioPath === sample.path
+                                  ? "bg-indigo-500/20 text-indigo-200 border border-indigo-500/30"
+                                  : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                              }`}
+                            >
+                              <span className="block font-semibold">{sample.label}</span>
+                              <span className="block mt-0.5 opacity-60">Built-in</span>
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
