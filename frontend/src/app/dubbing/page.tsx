@@ -72,6 +72,7 @@ type VoiceMode = "ultimate" | "controllable" | "design";
 type MixMode = "replace" | "bed";
 type SourceMode = "upload" | "local" | "url";
 type ReferenceAudioSource = "upload" | "builtin" | "none";
+type ScriptMode = "nastaliq" | "devanagari-urdu";
 
 interface DubbingDraft {
   id: string;
@@ -91,6 +92,7 @@ interface DubbingDraft {
   voiceReferenceSeconds: number;
   referenceAudioSource: ReferenceAudioSource;
   referenceAudioPath: string;
+  scriptMode: ScriptMode;
   createdAt: string;
 }
 
@@ -308,6 +310,7 @@ export default function DubbingPage() {
   const [aiSettingsLoading, setAiSettingsLoading] = useState(true);
   const [referenceAudioSource, setReferenceAudioSource] = useState<ReferenceAudioSource>("none");
   const [referenceAudioPath, setReferenceAudioPath] = useState("");
+  const [scriptMode, setScriptMode] = useState<ScriptMode>("nastaliq");
 
   // Live dubbing-engine dependency check against local-runner /api/dubbing/doctor
   const refreshDoctor = useCallback(async (force = false) => {
@@ -409,6 +412,7 @@ export default function DubbingPage() {
       preserve_background: preserveBackground,
       max_tempo: speedLimit,
       lip_sync_enabled: lipSync,
+      script: targetLanguage === "ur" ? scriptMode : '',
       stages: stages.map((stage) => stage.label.toLowerCase()),
     },
   }), [
@@ -424,6 +428,7 @@ export default function DubbingPage() {
     voiceReferenceSeconds,
     referenceAudioSource,
     referenceAudioPath,
+    scriptMode,
     diarization,
     mixMode,
     preserveBackground,
@@ -450,6 +455,7 @@ export default function DubbingPage() {
       voiceReferenceSeconds,
       referenceAudioSource,
       referenceAudioPath,
+      scriptMode,
       createdAt: new Date().toISOString(),
     };
     const next = [nextDraft, ...drafts.filter((draft) => draft.name !== name)];
@@ -489,6 +495,7 @@ export default function DubbingPage() {
         voiceStyle,
         referenceAudioSource,
         referenceAudioPath,
+        scriptMode,
         mixMode,
         preserveBackground,
         diarization,
@@ -532,6 +539,7 @@ export default function DubbingPage() {
     setVoiceReferenceSeconds(draft.voiceReferenceSeconds);
     setReferenceAudioSource(draft.referenceAudioSource || "none");
     setReferenceAudioPath(draft.referenceAudioPath || "");
+    setScriptMode(draft.scriptMode || "nastaliq");
   };
 
   return (
@@ -686,6 +694,43 @@ export default function DubbingPage() {
                   <option value="nllb">NLLB offline fallback</option>
                 </select>
               </div>
+
+              {/* Script toggle — only show when Urdu is selected */}
+              {targetLanguage === "ur" && (
+                <div className="mt-4 rounded-xl border border-[rgba(99,102,241,0.15)] bg-[rgba(99,102,241,0.06)] p-3">
+                  <label className="mb-2 block text-xs font-medium">Output Script</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setScriptMode("nastaliq")}
+                      className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                        scriptMode === "nastaliq"
+                          ? "bg-indigo-500/20 text-indigo-200 border border-indigo-500/30"
+                          : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                      }`}
+                    >
+                      <span className="block font-semibold">𑊚𑈬𑊘𑊚𑊒 (Nastaliq)</span>
+                      <span className="block mt-0.5 text-[10px] opacity-60">Urdu script — traditional</span>
+                    </button>
+                    <button
+                      onClick={() => setScriptMode("devanagari-urdu")}
+                      className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                        scriptMode === "devanagari-urdu"
+                          ? "bg-indigo-500/20 text-indigo-200 border border-indigo-500/30"
+                          : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                      }`}
+                    >
+                      <span className="block font-semibold">हिंदुस्तानी (देवनागरी)</span>
+                      <span className="block mt-0.5 text-[10px] opacity-60">Urdu vocab in Devanagari — better quality</span>
+                    </button>
+                  </div>
+                  {scriptMode === "devanagari-urdu" && (
+                    <div className="mt-2 text-[11px] text-indigo-300/70 leading-relaxed">
+                      ✨ Translates to Hindustani using <strong>Urdu vocabulary</strong> but written in <strong>Devanagari script</strong>.
+                      Full Urdu talaffuz bana rahega — sirf script badlegi. Better quality with Hindi voice models.
+                    </div>
+                  )}
+                </div>
+              )}
 
               {translationEngine === "llm" && (
                 <div className="mt-4">

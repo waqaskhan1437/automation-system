@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--target-lang", default="ur", help="Target language code")
     parser.add_argument("--engine", default="llm", help="Translation engine (llm or nllb)")
     parser.add_argument("--ai-provider", default="", help="AI provider for LLM translation (openai, gemini, grok, cohere, openrouter, groq)")
+    parser.add_argument("--script", default="", help="Script mode: 'devanagari-urdu' for Urdu vocabulary in Devanagari")
     args = parser.parse_args()
 
     input_file = args.input
@@ -33,6 +34,7 @@ def main():
     target_lang = args.target_lang
     engine = args.engine
     ai_provider = args.ai_provider.lower() if args.ai_provider else ""
+    script_mode = args.script
 
     if not os.path.exists(input_file):
         print(f"[TRANSLATE] Error: Input not found: {input_file}", file=sys.stderr)
@@ -44,7 +46,8 @@ def main():
         transcription = json.load(f)
 
     segments = transcription.get("segments", [])
-    print(f"[TRANSLATE] Translating {len(segments)} segment(s): {source_lang} -> {target_lang} (engine: {engine})")
+    script_info = f" script={script_mode}" if script_mode else ""
+    print(f"[TRANSLATE] Translating {len(segments)} segment(s): {source_lang} -> {target_lang} (engine: {engine}){script_info}")
     sys.stdout.flush()
 
     result = {
@@ -58,7 +61,7 @@ def main():
     if engine == "nllb":
         result = translate_nllb(segments, source_lang, target_lang)
     else:
-        result = translate_llm(segments, source_lang, target_lang, ai_provider)
+        result = translate_llm(segments, source_lang, target_lang, ai_provider, script_mode)
 
     # Attach original text and speaker info
     translated_segments = []
@@ -89,10 +92,25 @@ def main():
     sys.stdout.flush()
 
 
-def translate_llm(segments, source_lang, target_lang, ai_provider=""):
+def translate_llm(segments, source_lang, target_lang, ai_provider="", script_mode=""):
     """Translate using a configured AI provider API."""
     texts = [s.get("text", "").strip() for s in segments if s.get("text", "").strip()]
     full_text = " ".join(texts)
+
+    # Build system prompt based on script mode
+    if script_mode == "devanagari-urdu":
+        system_prompt = (
+            f"You are a Hindustani-to-Devanagari converter. Convert the following English text to Hindustani "
+            f"(Hindi-Urdu mixed language) written in Devanagari script (देवनागरी लिपि). "
+            f"CRITICAL: Use the EXACT SAME Urdu vocabulary, words, and phrasing — only change the script "
+            f"from Nastaliq (Arabic) to Devanagari. Keep all Persian/Arabic loanwords intact. "
+            f"Do NOT replace Urdu words with Sanskritized Hindi words. "
+            f"For example: 'kya' (क्या), 'accha' (अच्छा), 'zindagi' (ज़िंदगी), 'shukriya' (शुक्रिया), "
+            f"'tamasha' (तमाशा), 'duniya' (दुनिया) — same words, just Devanagari script. "
+            f"Return ONLY the Devanagari Hindustani text, no explanations."
+        )
+    else:
+        system_prompt = f"You are a professional translator. Translate the following text from {source_lang} to {target_lang}. Return ONLY the translation, no explanations."
 
     if not full_text:
         return {"engine": "llm", "segments": segments}
@@ -128,7 +146,7 @@ def translate_llm(segments, source_lang, target_lang, ai_provider=""):
                 "contents": [{
                     "role": "user",
                     "parts": [{
-                        "text": f"You are a professional translator. Translate the following text from {source_lang} to {target_lang}. Return ONLY the translation, no explanations.\n\n{full_text}"
+                        "text": f"{system_prompt}\n\n{full_text}"
                     }]
                 }],
                 "generationConfig": {
@@ -166,7 +184,7 @@ def translate_llm(segments, source_lang, target_lang, ai_provider=""):
             response = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": f"You are a professional translator. Translate the following text from {source_lang} to {target_lang}. Return ONLY the translation, no explanations."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": full_text},
                 ],
                 temperature=0.3,
@@ -180,7 +198,7 @@ def translate_llm(segments, source_lang, target_lang, ai_provider=""):
                 json={
                     "model": "llama3",
                     "messages": [
-                        {"role": "system", "content": f"Translate from {source_lang} to {target_lang}. Return only translation."},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": full_text},
                     ],
                     "stream": False,

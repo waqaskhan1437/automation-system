@@ -51,6 +51,8 @@ def main():
                         help="VoxCPM2 mode: design, controllable, or ultimate")
     parser.add_argument("--voice-style", default="",
                         help="Optional style instruction e.g. '(slightly faster, cheerful tone)'")
+    parser.add_argument("--script", default="",
+                        help="Script mode: 'devanagari-urdu' for Urdu vocabulary in Devanagari")
     args = parser.parse_args()
 
     input_file = args.input
@@ -62,6 +64,7 @@ def main():
     target_lang = args.target_language
     voice_mode = args.voice_mode
     voice_style = args.voice_style
+    script_mode = args.script
 
     if not os.path.exists(input_file):
         print(f"[CLONE] Error: Input not found: {input_file}", file=sys.stderr)
@@ -102,7 +105,7 @@ def main():
     print(f"[CLONE] Done - {audio_count}/{len(cloned_segments)} segment(s) with audio")
 
 
-def get_edge_voice(target_lang):
+def get_edge_voice(target_lang, script_mode=""):
     """Get the best Edge TTS voice for the target language.
 
     Supports 30+ languages covering VoxCPM2's full language list plus more.
@@ -145,6 +148,9 @@ def get_edge_voice(target_lang):
         "lo": "lo-LA-KeomanyNeural",
         "he": "he-IL-AvriNeural",
     }
+    # If Urdu target with Devanagari script, use Hindi voice (better quality, reads Devanagari)
+    if target_lang == "ur" and script_mode == "devanagari-urdu":
+        return "hi-IN-MadhurNeural"
     return voice_map.get(target_lang, "en-US-JennyNeural")
 
 
@@ -163,7 +169,7 @@ def synthesize_edge(segments, output_dir, target_lang):
             continue
 
         seg_file = os.path.join(output_dir, f"segment_{str(i).zfill(4)}.wav")
-        voice = get_edge_voice(target_lang)
+        voice = get_edge_voice(target_lang, script_mode)
         print(f"[CLONE] edge-tts segment {i}: '{text[:50]}...' ({voice})")
         sys.stdout.flush()
 

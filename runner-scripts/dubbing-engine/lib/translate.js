@@ -23,8 +23,9 @@ async function translateStage(workDir, manifest) {
   const targetLang = dubbing.target_language || 'ur';
   const engine = dubbing.translation_engine || 'llm';
   const aiProvider = dubbing.ai_provider || 'openai';
+  const scriptMode = dubbing.script || '';
 
-  utils.logStep('TRANSLATE', `Source: ${sourceLang} → Target: ${targetLang}  Engine: ${engine}  AI Provider: ${aiProvider}`);
+  utils.logStep('TRANSLATE', `Source: ${sourceLang} → Target: ${targetLang}  Engine: ${engine}  AI Provider: ${aiProvider}  Script: ${scriptMode || 'default'}`);
 
   if (!fs.existsSync(transcriptionFile)) {
     throw new Error('[TRANSLATE] Transcription not found – did transcribe stage run?');
@@ -79,6 +80,9 @@ async function translateStage(workDir, manifest) {
     ];
     if (engine === 'llm' && aiProvider) {
       pythonArgs.push('--ai-provider', aiProvider);
+    }
+    if (scriptMode) {
+      pythonArgs.push('--script', scriptMode);
     }
     await utils.runPython(pythonScript, pythonArgs, { logLabel: 'TRANSLATE', timeoutMs: 600000 });
   } else {

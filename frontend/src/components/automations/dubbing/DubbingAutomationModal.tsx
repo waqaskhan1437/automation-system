@@ -19,6 +19,7 @@ type VoiceMode = "ultimate" | "controllable" | "design";
 type MixMode = "replace" | "bed";
 
 type ReferenceAudioSource = "upload" | "builtin" | "none";
+type ScriptMode = "nastaliq" | "devanagari-urdu";
 
 const BUILTIN_SAMPLES = [
   { id: "urdu-male", label: "Urdu Male", path: "C:\\dubbing-samples\\urdu-male.wav" },
@@ -44,6 +45,7 @@ interface DubbingConfig {
   aiProvider: string;
   referenceAudioSource: ReferenceAudioSource;
   referenceAudioPath: string;
+  scriptMode: ScriptMode;
 }
 
 interface AISettingsData {
@@ -166,6 +168,7 @@ function parseDubbingConfig(config: string | null): DubbingConfig | null {
       aiProvider: dubbing.ai_provider || "openai",
       referenceAudioSource: (dubbing.reference_audio_source as ReferenceAudioSource) || "none",
       referenceAudioPath: dubbing.reference_audio_path || "",
+      scriptMode: (dubbing.script as ScriptMode) || "nastaliq",
     };
   } catch {
     return null;
@@ -190,6 +193,7 @@ function buildManifest(config: DubbingConfig, name: string) {
       voice_reference_seconds: config.voiceReferenceSeconds,
       reference_audio_source: config.referenceAudioSource,
       reference_audio_path: config.referenceAudioPath || undefined,
+      script: config.targetLanguage === "ur" ? config.scriptMode : '',
       ai_provider: config.aiProvider,
       diarization_enabled: config.diarization,
       mix_mode: config.mixMode,
@@ -230,6 +234,7 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
   const [initializing, setInitializing] = useState(true);
   const [referenceAudioSource, setReferenceAudioSource] = useState<ReferenceAudioSource>("none");
   const [referenceAudioPath, setReferenceAudioPath] = useState("");
+  const [scriptMode, setScriptMode] = useState<ScriptMode>("nastaliq");
 
   // Load edit data
   useEffect(() => {
@@ -253,6 +258,7 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
         setAiProvider(parsed.aiProvider);
         setReferenceAudioSource(parsed.referenceAudioSource);
         setReferenceAudioPath(parsed.referenceAudioPath);
+        setScriptMode(parsed.scriptMode || "nastaliq");
       }
     }
     setInitializing(false);
@@ -294,10 +300,10 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
 
   const config: DubbingConfig = useMemo(() => ({
     sourceMode, sourceValue, targetLanguage, translationEngine, voiceEngine,
-    voiceMode, voiceStyle, referenceAudioSource, referenceAudioPath,
+    voiceMode, voiceStyle, referenceAudioSource, referenceAudioPath, scriptMode,
     mixMode, preserveBackground, diarization, lipSync, speedLimit, voiceReferenceSeconds, aiProvider,
   }), [sourceMode, sourceValue, targetLanguage, translationEngine, voiceEngine, voiceMode, voiceStyle,
-      referenceAudioSource, referenceAudioPath,
+      referenceAudioSource, referenceAudioPath, scriptMode,
       mixMode, preserveBackground, diarization, lipSync, speedLimit, voiceReferenceSeconds, aiProvider]);
 
   const handleSave = useCallback(async (runNow = false) => {
@@ -485,6 +491,42 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
                     );
                   })}
                 </div>
+                {/* Script toggle — only show when Urdu is selected */}
+                {targetLanguage === "ur" && (
+                  <div className="mb-4 rounded-lg border border-[rgba(99,102,241,0.15)] bg-[rgba(99,102,241,0.06)] p-2.5">
+                    <label className="mb-1.5 block text-[10px] font-medium">Output Script</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        onClick={() => setScriptMode("nastaliq")}
+                        className={`rounded-lg px-2 py-1.5 text-[10px] font-medium transition-colors ${
+                          scriptMode === "nastaliq"
+                            ? "bg-indigo-500/20 text-indigo-200 border border-indigo-500/30"
+                            : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                        }`}
+                      >
+                        <span className="block font-semibold">Nastaliq (اُردو)</span>
+                        <span className="block mt-0.5 opacity-60">Script — traditional</span>
+                      </button>
+                      <button
+                        onClick={() => setScriptMode("devanagari-urdu")}
+                        className={`rounded-lg px-2 py-1.5 text-[10px] font-medium transition-colors ${
+                          scriptMode === "devanagari-urdu"
+                            ? "bg-indigo-500/20 text-indigo-200 border border-indigo-500/30"
+                            : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                        }`}
+                      >
+                        <span className="block font-semibold">देवनागरी हिंदुस्तानी</span>
+                        <span className="block mt-0.5 opacity-60">Urdu vocab — better quality</span>
+                      </button>
+                    </div>
+                    {scriptMode === "devanagari-urdu" && (
+                      <p className="mt-1.5 text-[10px] text-indigo-300/70 leading-relaxed">
+                        Urdu vocabulary in Devanagari script. Full talaffuz remains — better voice quality.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-3">
                   <div>
                     <label className="mb-1.5 block text-xs font-medium">Translation</label>

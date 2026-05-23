@@ -25,6 +25,7 @@ async function cloneStage(workDir, manifest) {
   const voiceRefSeconds = dubbing.voice_reference_seconds || 18;
   const voiceMode = dubbing.voice_mode || 'ultimate';
   const voiceStyle = dubbing.voice_style || '';
+  const scriptMode = dubbing.script || '';
 
   // User-specified reference audio path (e.g. uploaded file or built-in sample)
   const userReferencePath = dubbing.reference_audio_path || '';
@@ -114,6 +115,7 @@ async function cloneStage(workDir, manifest) {
       '--target-language', dubbing.target_language || 'ur',
       '--voice-mode', voiceMode,
       '--voice-style', voiceStyle,
+      '--script', scriptMode,
     ], { logLabel: 'CLONE', timeoutMs: 600000 });
   }
 
