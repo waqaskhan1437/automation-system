@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import AutomationModal from "@/components/automations/AutomationModal";
 import ImageAutomationModal from "@/components/automations/image/ImageAutomationModal";
+import DubbingAutomationModal from "@/components/automations/dubbing/DubbingAutomationModal";
 import ScheduledPostsModal from "@/components/ui/ScheduledPostsModal";
 import { Automation } from "@/components/automations/types";
 import { api, ApiError } from "@/lib/api";
@@ -154,7 +155,7 @@ export default function AutomationsPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [showModal, setShowModal] = useState(false);
-  const [modalType, setModalType] = useState<"video" | "image">("video");
+  const [modalType, setModalType] = useState<"video" | "image" | "dubbing">("video");
   const [editData, setEditData] = useState<Automation | null>(null);
   const [runningJobs, setRunningJobs] = useState<Record<number, RunningJob>>({});
   const [automationStats, setAutomationStats] = useState<Record<number, AutomationPostStats>>({});
@@ -492,8 +493,19 @@ export default function AutomationsPage() {
     }
   };
 
-  const openCreate = (type: "video" | "image") => { setEditData(null); setModalType(type); setShowModal(true); };
-  const openEdit = (auto: Automation) => { setEditData(auto); setModalType(auto.type as "video" | "image"); setShowModal(true); };
+  const openCreate = (type: "video" | "image" | "dubbing") => { setEditData(null); setModalType(type); setShowModal(true); };
+  const openEdit = (auto: Automation) => {
+    const config = parseAutomationConfig(auto.config);
+    if (isDubbingAutomationConfig(config)) {
+      setEditData(auto);
+      setModalType("dubbing");
+      setShowModal(true);
+    } else {
+      setEditData(auto);
+      setModalType(auto.type as "video" | "image");
+      setShowModal(true);
+    }
+  };
 
   const sc = (status: string) => status === "success" ? "#10b981" : status === "failed" ? "#ef4444" : status === "running" || status === "in_progress" ? "#6366f1" : "#f59e0b";
   const si = (step: StepInfo) => step.conclusion === "success" ? "\u2713" : step.conclusion === "failure" ? "\u2717" : step.status === "in_progress" ? "\u27F3" : "\u25CB";
@@ -522,7 +534,7 @@ export default function AutomationsPage() {
           </button>
           <button onClick={() => openCreate("video")} className="glass-button-primary">+ Video</button>
           <button onClick={() => openCreate("image")} className="glass-button-primary">+ Image</button>
-          <a href="/dubbing" className="glass-button-primary">+ Dubbing</a>
+          <button onClick={() => openCreate("dubbing")} className="glass-button-primary">+ Dubbing</button>
         </div>
       </div>
 
@@ -591,11 +603,7 @@ export default function AutomationsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {isDubbing ? (
-                      <a href="/dubbing" className="glass-button text-sm py-2 px-4">Edit</a>
-                    ) : (
-                      <button onClick={() => openEdit(auto)} className="glass-button text-sm py-2 px-4">Edit</button>
-                    )}
+                    <button onClick={() => openEdit(auto)} className="glass-button text-sm py-2 px-4">Edit</button>
                     {runningJob ? (
                       <>
                         <button onClick={() => setShowLogs({ autoId: auto.id, job: runningJob })} className="glass-button-primary text-sm py-2 px-4 flex items-center gap-2">
@@ -894,6 +902,15 @@ export default function AutomationsPage() {
       {showModal && (
         modalType === "image" ? (
           <ImageAutomationModal
+            editData={editData}
+            onClose={() => setShowModal(false)}
+            onSaved={() => {
+              setShowModal(false);
+              void loadData({ syncScheduled: true });
+            }}
+          />
+        ) : modalType === "dubbing" ? (
+          <DubbingAutomationModal
             editData={editData}
             onClose={() => setShowModal(false)}
             onSaved={() => {
