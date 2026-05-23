@@ -58,7 +58,14 @@ interface DubbingDoctorReport {
   error?: string;
 }
 
-type TargetLanguage = "ur" | "hi";
+type TargetLanguage =
+  | "ur" | "hi" | "ar" | "bn" | "tr"
+  | "es" | "fr" | "de" | "pt" | "it"
+  | "ru" | "ja" | "ko" | "zh" | "id"
+  | "vi" | "th" | "nl" | "pl" | "sv"
+  | "el" | "ro" | "hu" | "cs" | "uk"
+  | "fi" | "da" | "ms" | "no" | "sw"
+  | "tl" | "my" | "km" | "lo" | "he";
 type TranslationEngine = "llm" | "nllb";
 type VoiceEngine = "voxcpm2" | "xtts" | "edge";
 type VoiceMode = "ultimate" | "controllable" | "design";
@@ -91,7 +98,7 @@ const stages = [
   { label: "Separate", detail: "Demucs vocal bed", icon: Music2 },
   { label: "Transcribe", detail: "WhisperX timestamps", icon: AudioWaveform },
   { label: "Speakers", detail: "pyannote diarization", icon: Mic2 },
-  { label: "Translate", detail: "Urdu/Hindi dialogue", icon: Languages },
+  { label: "Translate", detail: "Target language dialogue", icon: Languages },
   { label: "Clone", detail: "Speaker voice match", icon: Library },
   { label: "Align", detail: "Timing and speed fit", icon: SlidersHorizontal },
   { label: "Mix", detail: "Final dubbed video", icon: CheckCircle2 },
@@ -193,6 +200,53 @@ const voiceEngines: Record<VoiceEngine, { label: string; note: string }> = {
     note: "Fast stock Urdu/Hindi voice when cloning fails.",
   },
 };
+
+const LANGUAGES: Record<string, { label: string; script: string; category: string; edgeVoice: string }> = {
+  ur: { label: "Urdu", script: "Nastaliq", category: "South Asian", edgeVoice: "ur-PK-AsadNeural" },
+  hi: { label: "Hindi", script: "Devanagari", category: "South Asian", edgeVoice: "hi-IN-MadhurNeural" },
+  bn: { label: "Bengali", script: "Bangla", category: "South Asian", edgeVoice: "bn-BD-PradeepNeural" },
+  ar: { label: "Arabic", script: "Arabic", category: "Middle Eastern", edgeVoice: "ar-SA-HamedNeural" },
+  tr: { label: "Turkish", script: "Latin", category: "European", edgeVoice: "tr-TR-AhmetNeural" },
+  he: { label: "Hebrew", script: "Hebrew", category: "Middle Eastern", edgeVoice: "he-IL-AvriNeural" },
+  es: { label: "Spanish", script: "Latin", category: "European", edgeVoice: "es-ES-AlvaroNeural" },
+  fr: { label: "French", script: "Latin", category: "European", edgeVoice: "fr-FR-DeniseNeural" },
+  de: { label: "German", script: "Latin", category: "European", edgeVoice: "de-DE-KatjaNeural" },
+  pt: { label: "Portuguese", script: "Latin", category: "European", edgeVoice: "pt-BR-AntonioNeural" },
+  it: { label: "Italian", script: "Latin", category: "European", edgeVoice: "it-IT-DiegoNeural" },
+  ru: { label: "Russian", script: "Cyrillic", category: "European", edgeVoice: "ru-RU-SvetlanaNeural" },
+  nl: { label: "Dutch", script: "Latin", category: "European", edgeVoice: "nl-NL-MaartenNeural" },
+  pl: { label: "Polish", script: "Latin", category: "European", edgeVoice: "pl-PL-MarekNeural" },
+  sv: { label: "Swedish", script: "Latin", category: "European", edgeVoice: "sv-SE-MattiasNeural" },
+  el: { label: "Greek", script: "Greek", category: "European", edgeVoice: "el-GR-NestorasNeural" },
+  ro: { label: "Romanian", script: "Latin", category: "European", edgeVoice: "ro-RO-EmilNeural" },
+  hu: { label: "Hungarian", script: "Latin", category: "European", edgeVoice: "hu-HU-TamasNeural" },
+  cs: { label: "Czech", script: "Latin", category: "European", edgeVoice: "cs-CZ-AntoninNeural" },
+  uk: { label: "Ukrainian", script: "Cyrillic", category: "European", edgeVoice: "uk-UA-OstapNeural" },
+  fi: { label: "Finnish", script: "Latin", category: "European", edgeVoice: "fi-FI-HarriNeural" },
+  da: { label: "Danish", script: "Latin", category: "European", edgeVoice: "da-DK-JeppeNeural" },
+  no: { label: "Norwegian", script: "Latin", category: "European", edgeVoice: "nb-NO-FinnNeural" },
+  ms: { label: "Malay", script: "Latin", category: "Southeast Asian", edgeVoice: "ms-MY-OsmanNeural" },
+  id: { label: "Indonesian", script: "Latin", category: "Southeast Asian", edgeVoice: "id-ID-ArdiNeural" },
+  vi: { label: "Vietnamese", script: "Latin", category: "Southeast Asian", edgeVoice: "vi-VN-NamMinhNeural" },
+  th: { label: "Thai", script: "Thai", category: "Southeast Asian", edgeVoice: "th-TH-NiwatNeural" },
+  tl: { label: "Tagalog", script: "Latin", category: "Southeast Asian", edgeVoice: "fil-PH-AngeloNeural" },
+  my: { label: "Burmese", script: "Burmese", category: "Southeast Asian", edgeVoice: "my-MM-NilarNeural" },
+  km: { label: "Khmer", script: "Khmer", category: "Southeast Asian", edgeVoice: "km-KH-PisethNeural" },
+  lo: { label: "Lao", script: "Lao", category: "Southeast Asian", edgeVoice: "lo-LA-KeomanyNeural" },
+  sw: { label: "Swahili", script: "Latin", category: "African", edgeVoice: "sw-KE-RafikiNeural" },
+  ja: { label: "Japanese", script: "Kana", category: "East Asian", edgeVoice: "ja-JP-KeitaNeural" },
+  ko: { label: "Korean", script: "Hangul", category: "East Asian", edgeVoice: "ko-KR-SunHiNeural" },
+  zh: { label: "Chinese", script: "Han", category: "East Asian", edgeVoice: "zh-CN-XiaoxiaoNeural" },
+};
+
+const LANG_CATEGORIES = [
+  { id: "South Asian", label: "South Asia" },
+  { id: "Middle Eastern", label: "Middle East" },
+  { id: "European", label: "Europe" },
+  { id: "Southeast Asian", label: "Southeast Asia" },
+  { id: "East Asian", label: "East Asia" },
+  { id: "African", label: "Africa" },
+];
 
 const AI_PROVIDERS: Record<string, { label: string; apiKeyField: keyof AISettingsData }> = {
   openai: { label: "OpenAI", apiKeyField: "openai_key" },
@@ -567,24 +621,37 @@ export default function DubbingPage() {
                 <Languages className="h-5 w-5 text-cyan-300" />
                 <h3 className="text-lg font-semibold">Language</h3>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  { value: "ur", label: "Urdu", script: "Nastaliq" },
-                  { value: "hi", label: "Hindi", script: "Devanagari" },
-                ].map((item) => (
-                  <button
-                    key={item.value}
-                    onClick={() => setTargetLanguage(item.value as TargetLanguage)}
-                    className={`rounded-xl border px-4 py-4 text-left transition-colors ${
-                      targetLanguage === item.value
-                        ? "border-cyan-400/35 bg-cyan-400/12 text-cyan-100"
-                        : "border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] text-[#d4d4d8]"
-                    }`}
-                  >
-                    <span className="block text-base font-semibold">{item.label}</span>
-                    <span className="mt-1 block text-xs text-[#a1a1aa]">{item.script}</span>
-                  </button>
-                ))}
+              {/* Language category selector */}
+              <div className="space-y-4">
+                {LANG_CATEGORIES.map((cat) => {
+                  const langsInCat = Object.entries(LANGUAGES)
+                    .filter(([, info]) => info.category === cat.id);
+                  if (langsInCat.length === 0) return null;
+                  const expanded = targetLanguage === cat.id ? null : langsInCat.find(([code]) => code === targetLanguage) ? cat.id : null;
+                  return (
+                    <div key={cat.id}>
+                      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#71717a]">
+                        {cat.label}
+                      </p>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {langsInCat.map(([code, info]) => (
+                          <button
+                            key={code}
+                            onClick={() => setTargetLanguage(code as TargetLanguage)}
+                            className={`rounded-lg border px-2.5 py-2 text-left transition-all ${
+                              targetLanguage === code
+                                ? "border-cyan-400/35 bg-cyan-400/12 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.08)]"
+                                : "border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] text-[#d4d4d8] hover:bg-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.12)]"
+                            }`}
+                          >
+                            <span className="block text-sm font-semibold leading-tight">{info.label}</span>
+                            <span className="mt-0.5 block text-[10px] text-[#71717a]">{info.script}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               <div className="mt-4">
                 <label className="mb-2 block text-sm font-medium">Translation engine</label>
@@ -681,7 +748,52 @@ export default function DubbingPage() {
                   </div>
 
                   {/* Style presets (for controllable/design modes) */}
-                  {(voiceMode === "controllable" || voiceMode === "design") && (
+                  {/* Voice Design: custom textarea for full voice description */}
+                  {voiceMode === "design" && (
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium">
+                          🎨 Describe the voice you want
+                        </label>
+                        <textarea
+                          value={voiceStyle}
+                          onChange={(e) => setVoiceStyle(e.target.value)}
+                          placeholder="e.g. A calm middle-aged man with a deep, authoritative tone, speaking slowly and clearly in Urdu with a slight regional accent"
+                          className="glass-input w-full resize-none min-h-[80px] text-sm leading-relaxed"
+                          rows={3}
+                        />
+                        {voiceStyle && (
+                          <p className="mt-1 text-[11px] text-indigo-300/70">
+                            ✨ Zero-shot — VoxCPM2 will create a voice matching this description
+                          </p>
+                        )}
+                      </div>
+                      {/* Quick preset picker as fallback */}
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium text-[#a1a1aa]">
+                          Or pick a quick preset
+                        </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {voiceStylePresets.filter(p => p.value).map((preset) => (
+                            <button
+                              key={preset.value}
+                              onClick={() => setVoiceStyle(preset.value)}
+                              className={`rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
+                                voiceStyle === preset.value
+                                  ? "bg-indigo-500/20 text-indigo-200 border border-indigo-500/30"
+                                  : "bg-[rgba(255,255,255,0.04)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.08)]"
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Controllable mode: dropdown presets */}
+                  {voiceMode === "controllable" && (
                     <div className="mt-3">
                       <label className="mb-2 block text-sm font-medium">Voice style hint</label>
                       <select
@@ -698,14 +810,6 @@ export default function DubbingPage() {
                           Style: <span className="italic">"{voiceStyle}"</span>
                         </p>
                       )}
-                    </div>
-                  )}
-
-                  {voiceMode === "design" && (
-                    <div className="mt-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 p-3">
-                      <p className="text-xs text-indigo-200">
-                        ✨ No reference audio needed — describe the voice you want
-                      </p>
                     </div>
                   )}
                 </div>
