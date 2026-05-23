@@ -1258,12 +1258,12 @@ async function runDubbingRunnerScriptsJob(job) {
   return {
     processedCount: 1,
     processedVideos: [{
-      video_url: null,
+      video_url: report?.final_video || null,
       original_url: manifest.source_value,
       workflow: 'dubbing',
       report,
     }],
-    primaryVideoUrl: null,
+    primaryVideoUrl: report?.final_video || null,
     dubbingReport: report,
   };
 }
@@ -1741,6 +1741,7 @@ async function mainLoop() {
               const localOutputMedia = findLatestLocalOutputMedia(job);
               processedVideos += processedCount;
               const dubbingReport = runResult.dubbingReport || readDubbingReportFromRunnerScripts();
+              const finalVideoPath = dubbingReport?.final_video || null;
 
               await completeJob(job.id, {
                 token: getRunnerAuthToken(),
@@ -1751,11 +1752,11 @@ async function mainLoop() {
                   processed_videos: Array.isArray(runResult.processedVideos) ? runResult.processedVideos : [],
                   source_urls: sourceUrls,
                   source_value: rawDubbingSource,
-                  local_output_media: localOutputMedia,
+                  local_output_media: finalVideoPath || localOutputMedia,
                   dubbing_report: dubbingReport,
                   skip_upload: true,
                 },
-                video_url: null,
+                video_url: finalVideoPath || null,
                 source_video_url: sourceUrls[0] || null,
                 aspect_ratio: job?.config?.aspect_ratio || job?.input_data?.aspect_ratio || null,
               });

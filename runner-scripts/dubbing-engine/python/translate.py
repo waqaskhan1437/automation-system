@@ -85,7 +85,7 @@ def main():
         json.dump(final_result, f, indent=2, ensure_ascii=False)
 
     seg_count = len(final_result.get("segments", []))
-    print(f"[TRANSLATE] ✅ Done - {seg_count} segment(s) translated")
+    print(f"[TRANSLATE] Done - {seg_count} segment(s) translated")
     sys.stdout.flush()
 
 

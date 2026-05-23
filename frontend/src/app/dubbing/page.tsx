@@ -61,6 +61,7 @@ interface DubbingDoctorReport {
 type TargetLanguage = "ur" | "hi";
 type TranslationEngine = "llm" | "nllb";
 type VoiceEngine = "voxcpm2" | "xtts" | "edge";
+type VoiceMode = "ultimate" | "controllable" | "design";
 type MixMode = "replace" | "bed";
 type SourceMode = "upload" | "local" | "url";
 
@@ -72,6 +73,8 @@ interface DubbingDraft {
   targetLanguage: TargetLanguage;
   translationEngine: TranslationEngine;
   voiceEngine: VoiceEngine;
+  voiceMode: VoiceMode;
+  voiceStyle: string;
   mixMode: MixMode;
   preserveBackground: boolean;
   diarization: boolean;
@@ -149,7 +152,7 @@ const dependencyHealthInfo = [
     checkRows: (rows: DoctorRow[]) => {
       return (rows.find(r => r.name === 'edge_tts')?.status ?? false)
           || (rows.find(r => r.name === 'TTS')?.status ?? false)
-          || (rows.find(r => r.name === 'voxcpm2')?.status ?? false);
+          || (rows.find(r => r.name === 'voxcpm')?.status ?? false);
     },
   },
   {
@@ -159,6 +162,21 @@ const dependencyHealthInfo = [
     critical: false,
     checkRows: (rows: DoctorRow[]) => rows.find(r => r.name === 'torch')?.status ?? false,
   },
+];
+
+const voiceModes: Record<VoiceMode, { label: string; desc: string }> = {
+  ultimate: { label: "Ultimate Cloning", desc: "Reference audio + original transcript — best fidelity" },
+  controllable: { label: "Controllable Cloning", desc: "Reference audio + optional style instructions" },
+  design: { label: "Voice Design", desc: "Zero-shot — describe voice in text, no reference needed" },
+};
+
+const voiceStylePresets = [
+  { value: "", label: "No style hint" },
+  { value: "neutral, conversational tone", label: "Neutral conversation" },
+  { value: "slightly faster, cheerful tone", label: "Cheerful & faster" },
+  { value: "slow, calm, soothing voice", label: "Calm & soothing" },
+  { value: "authoritative, deep voice", label: "Authoritative" },
+  { value: "soft, gentle, warm voice", label: "Gentle & warm" },
 ];
 
 const voiceEngines: Record<VoiceEngine, { label: string; note: string }> = {
@@ -207,6 +225,8 @@ export default function DubbingPage() {
   const [targetLanguage, setTargetLanguage] = useState<TargetLanguage>("ur");
   const [translationEngine, setTranslationEngine] = useState<TranslationEngine>("llm");
   const [voiceEngine, setVoiceEngine] = useState<VoiceEngine>("voxcpm2");
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>("ultimate");
+  const [voiceStyle, setVoiceStyle] = useState("");
   const [mixMode, setMixMode] = useState<MixMode>("bed");
   const [preserveBackground, setPreserveBackground] = useState(true);
   const [diarization, setDiarization] = useState(true);
@@ -312,6 +332,8 @@ export default function DubbingPage() {
       target_language: targetLanguage,
       translation_engine: translationEngine,
       voice_engine: voiceEngine,
+      voice_mode: voiceEngine === "voxcpm2" ? voiceMode : undefined,
+      voice_style: voiceEngine === "voxcpm2" ? voiceStyle : undefined,
       voice_reference_seconds: voiceReferenceSeconds,
       ai_provider: aiProvider,
       diarization_enabled: diarization,
@@ -329,6 +351,8 @@ export default function DubbingPage() {
     translationEngine,
     aiProvider,
     voiceEngine,
+    voiceMode,
+    voiceStyle,
     voiceReferenceSeconds,
     diarization,
     mixMode,
@@ -346,6 +370,8 @@ export default function DubbingPage() {
       targetLanguage,
       translationEngine,
       voiceEngine,
+      voiceMode,
+      voiceStyle,
       mixMode,
       preserveBackground,
       diarization,
@@ -361,7 +387,7 @@ export default function DubbingPage() {
     window.setTimeout(() => setSaved(false), 1800);
   };
 
-  const handleCreateAutomation = async () => {
+  const handleCreateAutomation = async (runNow = false) => {
     if (!isReady || creating) return;
     setCreating(true);
     setCreateError(null);
@@ -369,7 +395,7 @@ export default function DubbingPage() {
       const response = await api.post<{ id: number }>("/api/automations", {
         name,
         type: "dubbing",
-        status: "paused",
+        status: runNow ? "active" : "paused",
         config: JSON.stringify(manifest),
         schedule: null,
       });
@@ -377,6 +403,8 @@ export default function DubbingPage() {
         setCreateError(response.error || "Failed to create dubbing automation");
         return;
       }
+
+      const newAutoId = response.data?.id;
       saveDrafts([{
         id: `${Date.now()}`,
         name,
@@ -385,6 +413,8 @@ export default function DubbingPage() {
         targetLanguage,
         translationEngine,
         voiceEngine,
+        voiceMode,
+        voiceStyle,
         mixMode,
         preserveBackground,
         diarization,
@@ -393,6 +423,16 @@ export default function DubbingPage() {
         voiceReferenceSeconds,
         createdAt: new Date().toISOString(),
       }, ...drafts]);
+
+      if (runNow && newAutoId) {
+        // Trigger the run immediately
+        try {
+          await api.post(`/api/automations/${newAutoId}/run`, {});
+        } catch (runError) {
+          console.warn("Auto-run triggered but run API call had an issue", runError);
+        }
+      }
+
       router.push("/automations");
     } catch (error) {
       setCreateError(error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Failed to create dubbing automation");
@@ -408,6 +448,8 @@ export default function DubbingPage() {
     setTargetLanguage(draft.targetLanguage);
     setTranslationEngine(draft.translationEngine);
     setVoiceEngine(draft.voiceEngine);
+    setVoiceMode(draft.voiceMode);
+    setVoiceStyle(draft.voiceStyle);
     setMixMode(draft.mixMode);
     setPreserveBackground(draft.preserveBackground);
     setDiarization(draft.diarization);
@@ -436,13 +478,22 @@ export default function DubbingPage() {
             {saved ? "Saved" : "Save Draft"}
           </button>
           <button
-            onClick={handleCreateAutomation}
+            onClick={() => handleCreateAutomation(false)}
+            disabled={!isReady}
+            className={`glass-button flex items-center gap-2 ${!isReady ? "cursor-not-allowed opacity-50" : ""}`}
+            title={isReady ? "Create paused automation" : "Complete required fields first"}
+          >
+            <Save className="h-4 w-4" />
+            {creating ? "Creating..." : "Save Only"}
+          </button>
+          <button
+            onClick={() => handleCreateAutomation(true)}
             disabled={!isReady}
             className={`glass-button-primary flex items-center gap-2 ${!isReady ? "cursor-not-allowed opacity-50 hover:translate-y-0 hover:shadow-none" : ""}`}
-            title={isReady ? "Ready for backend integration" : "Complete required fields first"}
+            title={isReady ? "Create active automation and run immediately" : "Complete required fields first"}
           >
             <Play className="h-4 w-4" />
-            {creating ? "Creating..." : "Create Automation"}
+            {creating ? "Creating..." : "Create & Run Now"}
           </button>
         </div>
       </div>
@@ -607,6 +658,59 @@ export default function DubbingPage() {
                 ))}
               </select>
               <p className="mt-3 text-sm text-[#a1a1aa]">{voiceEngines[voiceEngine].note}</p>
+
+              {/* Voice mode selector (only for VoxCPM2) */}
+              {voiceEngine === "voxcpm2" && (
+                <div className="mt-4">
+                  <label className="mb-2 block text-sm font-medium">Clone mode</label>
+                  <div className="space-y-2">
+                    {(["ultimate", "controllable", "design"] as VoiceMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => setVoiceMode(mode)}
+                        className={`w-full rounded-xl px-4 py-3 text-left text-sm transition-colors ${
+                          voiceMode === mode
+                            ? "bg-emerald-400/15 text-emerald-200 border border-emerald-400/25"
+                            : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                        }`}
+                      >
+                        <span className="font-semibold">{voiceModes[mode].label}</span>
+                        <span className="block mt-0.5 text-xs opacity-70">{voiceModes[mode].desc}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Style presets (for controllable/design modes) */}
+                  {(voiceMode === "controllable" || voiceMode === "design") && (
+                    <div className="mt-3">
+                      <label className="mb-2 block text-sm font-medium">Voice style hint</label>
+                      <select
+                        value={voiceStyle}
+                        onChange={(e) => setVoiceStyle(e.target.value)}
+                        className="glass-select"
+                      >
+                        {voiceStylePresets.map((preset) => (
+                          <option key={preset.value} value={preset.value}>{preset.label}</option>
+                        ))}
+                      </select>
+                      {voiceStyle && (
+                        <p className="mt-1.5 text-xs text-emerald-300/60">
+                          Style: <span className="italic">"{voiceStyle}"</span>
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {voiceMode === "design" && (
+                    <div className="mt-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 p-3">
+                      <p className="text-xs text-indigo-200">
+                        ✨ No reference audio needed — describe the voice you want
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="mt-5 grid grid-cols-2 gap-4">
                 <label className="block">
                   <span className="mb-2 block text-sm font-medium">Reference seconds</span>

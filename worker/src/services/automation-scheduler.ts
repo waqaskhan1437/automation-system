@@ -1334,6 +1334,16 @@ export async function triggerAutomationRun(
       break;
     }
 
+    case "local_file": {
+      const raw = readString(config.source_value);
+      if (raw) {
+        videoUrls = [raw];
+        console.log(`[TRIGGER] local_file: ${raw}`);
+        fetchStats = { total: 1, unprocessed: 1, to_process: 1, processed_already: 0 };
+      }
+      break;
+    }
+
     case "youtube_channel": {
       const channelUrl = readString(config.youtube_channel_url);
       if (channelUrl) {
@@ -1420,7 +1430,7 @@ export async function triggerAutomationRun(
   }
 
   // Filter out already processed videos (for supported sources)
-  if (["manual_links", "direct", "youtube", "ftp", "youtube_channel", "google_photos", "prompt_local_file"].includes(videoSource || "")) {
+  if (["manual_links", "direct", "youtube", "ftp", "youtube_channel", "google_photos", "prompt_local_file", "local_file"].includes(videoSource || "")) {
     const rotationEnabled = config.rotation_enabled !== false;
     const rotationShuffle = config.rotation_shuffle === true;
     const rotationAutoReset = config.rotation_auto_reset === true;

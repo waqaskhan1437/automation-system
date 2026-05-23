@@ -6,18 +6,35 @@ Usage:
     python clone.py --input translation.json --output-dir /path/to/audio \\
         --output-manifest manifest.json --voice-engine voxcpm2 \\
         --reference /path/to/vocals.wav --ref-seconds 18 \\
-        --source-language en --target-language ur
+        --source-language en --target-language ur \\
+        --voice-mode ultimate --voice-style "(neutral, clear)"
 
-Supports:
-  - voxcpm2: Voice cloning via VoxCeleb-based models
-  - xtts:    Coqui XTTS voice cloning
-  - edge:    Microsoft Edge TTS (no voice cloning, uses standard voices)
+Modes (voice-engine=voxcpm2):
+  - design:      Zero-shot Voice Design — describe voice in text, no reference needed
+  - controllable: Reference audio + optional style instructions
+  - ultimate:     Reference audio + original transcript = best fidelity
+
+Engine fallback chain:
+  voxcpm2 -> xtts -> edge-tts -> silent placeholder
 """
 import argparse
 import json
 import os
 import sys
 import time
+
+
+# Fix Windows console encoding for Unicode output
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except AttributeError:
+    try:
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    except Exception:
+        pass
 
 
 def main():
@@ -30,6 +47,10 @@ def main():
     parser.add_argument("--ref-seconds", type=int, default=18, help="Reference audio duration in seconds")
     parser.add_argument("--source-language", default="en", help="Source language code")
     parser.add_argument("--target-language", default="ur", help="Target language code")
+    parser.add_argument("--voice-mode", default="ultimate",
+                        help="VoxCPM2 mode: design, controllable, or ultimate")
+    parser.add_argument("--voice-style", default="",
+                        help="Optional style instruction e.g. '(slightly faster, cheerful tone)'")
     args = parser.parse_args()
 
     input_file = args.input
@@ -39,6 +60,8 @@ def main():
     reference_file = args.reference
     ref_seconds = args.ref_seconds
     target_lang = args.target_language
+    voice_mode = args.voice_mode
+    voice_style = args.voice_style
 
     if not os.path.exists(input_file):
         print(f"[CLONE] Error: Input not found: {input_file}", file=sys.stderr)
@@ -60,11 +83,15 @@ def main():
     elif voice_engine == "xtts":
         cloned_segments = synthesize_xtts(segments, output_dir, reference_file, target_lang)
     else:
-        # voxcpm2 or fallback
-        cloned_segments = synthesize_voxcpm2(segments, output_dir, reference_file, ref_seconds, target_lang)
+        # voxcpm2 — try primary path, fallback to xtts, then edge
+        cloned_segments = synthesize_voxcpm2(
+            segments, output_dir, reference_file, ref_seconds,
+            target_lang, voice_mode, voice_style
+        )
 
     result = {
         "engine": voice_engine,
+        "voice_mode": voice_mode if voice_engine == "voxcpm2" else None,
         "segments": cloned_segments,
     }
 
@@ -72,7 +99,7 @@ def main():
         json.dump(result, f, indent=2, ensure_ascii=False)
 
     audio_count = sum(1 for s in cloned_segments if s.get("audio_file"))
-    print(f"[CLONE] ✅ Done - {audio_count}/{len(cloned_segments)} segment(s) with audio")
+    print(f"[CLONE] Done - {audio_count}/{len(cloned_segments)} segment(s) with audio")
 
 
 def get_edge_voice(target_lang):
@@ -105,12 +132,9 @@ def synthesize_edge(segments, output_dir, target_lang):
         text = seg.get("translated_text", "").strip()
         if not text:
             cloned_segments.append({
-                "index": i,
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 1),
+                "index": i, "start": seg.get("start", 0), "end": seg.get("end", 1),
                 "original_text": seg.get("original_text", ""),
-                "translated_text": "",
-                "audio_file": None,
+                "translated_text": "", "audio_file": None,
             })
             continue
 
@@ -128,45 +152,19 @@ def synthesize_edge(segments, output_dir, target_lang):
                 await communicate.save(seg_file)
 
             asyncio.run(_synth())
-
-            if os.path.exists(seg_file):
-                cloned_segments.append({
-                    "index": i,
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 1),
-                    "original_text": seg.get("original_text", ""),
-                    "translated_text": text,
-                    "audio_file": seg_file,
-                })
-            else:
-                cloned_segments.append({
-                    "index": i,
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 1),
-                    "original_text": seg.get("original_text", ""),
-                    "translated_text": text,
-                    "audio_file": None,
-                })
+            audio_file = seg_file if os.path.exists(seg_file) else None
         except ImportError:
             print(f"[CLONE] edge-tts not installed, segment {i} skipped")
-            cloned_segments.append({
-                "index": i,
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 1),
-                "original_text": seg.get("original_text", ""),
-                "translated_text": text,
-                "audio_file": None,
-            })
+            audio_file = None
         except Exception as e:
             print(f"[CLONE] edge-tts error for segment {i}: {e}", file=sys.stderr)
-            cloned_segments.append({
-                "index": i,
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 1),
-                "original_text": seg.get("original_text", ""),
-                "translated_text": text,
-                "audio_file": None,
-            })
+            audio_file = None
+
+        cloned_segments.append({
+            "index": i, "start": seg.get("start", 0), "end": seg.get("end", 1),
+            "original_text": seg.get("original_text", ""),
+            "translated_text": text, "audio_file": audio_file,
+        })
 
     return cloned_segments
 
@@ -183,12 +181,9 @@ def synthesize_xtts(segments, output_dir, reference_file, target_lang):
             text = seg.get("translated_text", "").strip()
             if not text:
                 cloned_segments.append({
-                    "index": i,
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 1),
+                    "index": i, "start": seg.get("start", 0), "end": seg.get("end", 1),
                     "original_text": seg.get("original_text", ""),
-                    "translated_text": "",
-                    "audio_file": None,
+                    "translated_text": "", "audio_file": None,
                 })
                 continue
 
@@ -203,9 +198,7 @@ def synthesize_xtts(segments, output_dir, reference_file, target_lang):
                 tts.tts_to_file(text=text, file_path=seg_file)
 
             cloned_segments.append({
-                "index": i,
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 1),
+                "index": i, "start": seg.get("start", 0), "end": seg.get("end", 1),
                 "original_text": seg.get("original_text", ""),
                 "translated_text": text,
                 "audio_file": seg_file if os.path.exists(seg_file) else None,
@@ -213,7 +206,6 @@ def synthesize_xtts(segments, output_dir, reference_file, target_lang):
 
     except ImportError as e:
         print(f"[CLONE] XTTS not available: {e}")
-        # Fallback: try edge-tts
         print("[CLONE] Falling back to edge-tts")
         return synthesize_edge(segments, output_dir, target_lang)
     except Exception as e:
@@ -222,83 +214,164 @@ def synthesize_xtts(segments, output_dir, reference_file, target_lang):
     return cloned_segments
 
 
-def synthesize_voxcpm2(segments, output_dir, reference_file, ref_seconds, target_lang):
-    """Use VoxCPM2 (or any available voice cloning model) for synthesis."""
-    cloned_segments = []
-    voxcpm2_available = False
+def synthesize_voxcpm2(segments, output_dir, reference_file, ref_seconds,
+                       target_lang, voice_mode, voice_style):
+    """
+    VoxCPM2 voice synthesis with three modes:
+      - design:      Zero-shot — describe voice in text
+      - controllable: Reference audio + optional style
+      - ultimate:     Reference audio + transcript (best fidelity)
+    """
+    VOXCPM_AVAILABLE = False
+    model = None
 
-    # Check for VoxCPM2 or similar
+    # Try to load VoxCPM2
     try:
-        # Try various voice cloning model imports
-        import torch
-        print(f"[CLONE] PyTorch available: {torch.__version__}")
+        from voxcpm import VoxCPM
+        print(f"[CLONE] Loading VoxCPM2 model ('openbmb/VoxCPM2')...")
+        sys.stdout.flush()
+        model = VoxCPM.from_pretrained("openbmb/VoxCPM2")
+        VOXCPM_AVAILABLE = True
+        print(f"[CLONE] VoxCPM2 loaded successfully (2B params)")
+        sys.stdout.flush()
+    except ImportError:
+        print("[CLONE] voxcpm package not installed (pip install voxcpm)")
+    except Exception as e:
+        print(f"[CLONE] VoxCPM2 load error: {e}", file=sys.stderr)
+
+    if not VOXCPM_AVAILABLE:
+        # Fallback chain: xtts -> edge
+        print("[CLONE] VoxCPM2 not available — trying XTTS fallback")
+        xtts_result = synthesize_xtts(segments, output_dir, reference_file, target_lang)
+        # If xtts returned edge fallback, check if we should try edge directly
+        if all(s.get("audio_file") is None for s in xtts_result):
+            print("[CLONE] XTTS produced no audio — falling back to edge-tts")
+            return synthesize_edge(segments, output_dir, target_lang)
+        return xtts_result
+
+    # Determine if reference audio exists
+    has_reference = reference_file and os.path.exists(reference_file)
+    reference_for_clone = reference_file if has_reference else None
+
+    cloned_segments = []
+
+    for i, seg in enumerate(segments):
+        text = seg.get("translated_text", "").strip()
+        if not text:
+            cloned_segments.append({
+                "index": i, "start": seg.get("start", 0), "end": seg.get("end", 1),
+                "original_text": seg.get("original_text", ""),
+                "translated_text": "", "audio_file": None,
+            })
+            continue
+
+        seg_file = os.path.join(output_dir, f"segment_{str(i).zfill(4)}.wav")
+        original_text = seg.get("original_text", "").strip()
+        print(f"[CLONE] VoxCPM2 segment {i} (mode={voice_mode}): '{text[:50]}...'")
         sys.stdout.flush()
 
-        # Try VoxCPM2 specific import
         try:
-            import voxcpm2
-            voxcpm2_available = True
-            print("[CLONE] VoxCPM2 detected")
-        except ImportError:
+            # Build generation parameters
+            gen_kwargs = {
+                "text": text,
+                "cfg_value": 2.0,
+                "inference_timesteps": 10,
+            }
+
+            if voice_mode == "design" or (voice_mode != "design" and not has_reference):
+                # === VOICE DESIGN MODE (zero-shot) ===
+                # Build a voice description prompt based on target language
+                lang_hint = {
+                    "ur": "Urdu, clear and natural voice",
+                    "hi": "Hindi, clear and natural voice",
+                    "en": "English, clear and natural voice",
+                    "ar": "Arabic, clear and natural voice",
+                    "bn": "Bengali, clear and natural voice",
+                    "tr": "Turkish, clear and natural voice",
+                }.get(target_lang, "clear and natural voice")
+
+                style_hint = voice_style if voice_style else "(neutral, conversational tone)"
+                voice_prompt = f"({lang_hint}, {style_hint}) {text}"
+
+                # If we have reference audio but user selected design mode, also pass reference
+                if reference_for_clone:
+                    gen_kwargs["reference_wav_path"] = reference_for_clone
+
+                gen_kwargs["text"] = voice_prompt
+                print(f"[CLONE] Voice Design mode — using style prompt")
+                sys.stdout.flush()
+
+            elif voice_mode == "ultimate" and original_text and reference_for_clone:
+                # === ULTIMATE CLONING (reference + transcript) ===
+                gen_kwargs["prompt_wav_path"] = reference_for_clone
+                gen_kwargs["prompt_text"] = original_text
+                gen_kwargs["reference_wav_path"] = reference_for_clone
+                print(f"[CLONE] Ultimate Cloning — ref + transcript ({len(original_text)} chars)")
+                sys.stdout.flush()
+
+            else:
+                # === CONTROLLABLE CLONING (reference + optional style) ===
+                gen_kwargs["reference_wav_path"] = reference_for_clone
+
+                if voice_style:
+                    # Inject style into the text (VoxCPM2 supports inline style hints)
+                    gen_kwargs["text"] = f"({voice_style}) {text}"
+
+                print(f"[CLONE] Controllable Cloning — ref audio{ ' + style' if voice_style else ''}")
+                sys.stdout.flush()
+
+            # Run generation
+            wav = model.generate(**gen_kwargs)
+
+            # Save to file
+            import torch
+            if isinstance(wav, torch.Tensor):
+                wav_np = wav.cpu().numpy()
+            else:
+                wav_np = wav
+
+            # Write as WAV using scipy or soundfile
             try:
-                from speechbrain.inference import SpeakerRecognition
-                print("[CLONE] SpeechBrain detected (VoxCeleb-based)")
+                import soundfile as sf
+                sf.write(seg_file, wav_np, samplerate=48000)
             except ImportError:
-                pass
-    except ImportError:
-        print("[CLONE] PyTorch not available")
+                try:
+                    from scipy.io import wavfile
+                    wavfile.write(seg_file, 48000, wav_np)
+                except ImportError:
+                    # Last resort: write raw using struct
+                    import struct
+                    import numpy as np
+                    wav_int16 = np.clip(wav_np * 32767, -32768, 32767).astype(np.int16)
+                    with open(seg_file, "wb") as f:
+                        # Write minimal WAV header (mono, 48kHz, 16-bit)
+                        data_len = len(wav_int16) * 2
+                        f.write(b"RIFF")
+                        f.write(struct.pack("<I", 36 + data_len))
+                        f.write(b"WAVE")
+                        f.write(b"fmt ")
+                        f.write(struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16))
+                        f.write(b"data")
+                        f.write(struct.pack("<I", data_len))
+                        wav_int16.tofile(f)
 
-    if voxcpm2_available and reference_file and os.path.exists(reference_file):
-        # Use actual VoxCPM2 model
-        for i, seg in enumerate(segments):
-            text = seg.get("translated_text", "").strip()
-            if not text:
-                cloned_segments.append({
-                    "index": i,
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 1),
-                    "original_text": seg.get("original_text", ""),
-                    "translated_text": "",
-                    "audio_file": None,
-                })
-                continue
+            audio_file = seg_file if os.path.exists(seg_file) and os.path.getsize(seg_file) > 100 else None
+            if not audio_file:
+                print(f"[CLONE] VoxCPM2 output too small or missing for segment {i}", file=sys.stderr)
 
-            seg_file = os.path.join(output_dir, f"segment_{str(i).zfill(4)}.wav")
-            print(f"[CLONE] VoxCPM2 segment {i}: '{text[:50]}...'")
-            sys.stdout.flush()
+        except Exception as e:
+            print(f"[CLONE] VoxCPM2 error segment {i}: {e}", file=sys.stderr)
+            audio_file = None
 
-            try:
-                # Call VoxCPM2 synthesis
-                from voxcpm2 import VoiceClone
-                cloner = VoiceClone()
-                cloner.clone(
-                    source_audio=reference_file,
-                    source_text=seg.get("original_text", ""),
-                    target_text=text,
-                    output_path=seg_file,
-                )
-                cloned_segments.append({
-                    "index": i,
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 1),
-                    "original_text": seg.get("original_text", ""),
-                    "translated_text": text,
-                    "audio_file": seg_file if os.path.exists(seg_file) else None,
-                })
-            except Exception as e:
-                print(f"[CLONE] VoxCPM2 error segment {i}: {e}", file=sys.stderr)
-                cloned_segments.append({
-                    "index": i,
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 1),
-                    "original_text": seg.get("original_text", ""),
-                    "translated_text": text,
-                    "audio_file": None,
-                })
-    else:
-        # Fallback: edge-tts
-        print(f"[CLONE] VoxCPM2 not ready (reference: {bool(reference_file)}, available: {voxcpm2_available})")
-        print("[CLONE] Falling back to edge-tts")
+        cloned_segments.append({
+            "index": i, "start": seg.get("start", 0), "end": seg.get("end", 1),
+            "original_text": original_text,
+            "translated_text": text, "audio_file": audio_file,
+        })
+
+    # If all segments failed, fallback
+    if all(s.get("audio_file") is None for s in cloned_segments):
+        print("[CLONE] VoxCPM2 produced no usable audio — falling back to edge-tts")
         return synthesize_edge(segments, output_dir, target_lang)
 
     return cloned_segments

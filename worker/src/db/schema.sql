@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS automations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
   name TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('video','image','caption')),
+  type TEXT NOT NULL CHECK(type IN ('video','image','caption','dubbing')),
   status TEXT DEFAULT 'active' CHECK(status IN ('active','paused','completed','failed')),
   config TEXT NOT NULL DEFAULT '{}',
   schedule TEXT,

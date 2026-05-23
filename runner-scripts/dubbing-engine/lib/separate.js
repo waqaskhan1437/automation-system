@@ -44,7 +44,7 @@ async function separate(workDir, manifest) {
     await utils.runPython(pythonScript, [
       '--input', inputStereo,
       '--output', outputDir,
-    ], { logLabel: 'SEPARATE', timeoutMs: 600000 });
+    ], { logLabel: 'SEPARATE', timeoutMs: 3600000 });
 
     // Verify outputs – Demucs may use subdir like "htdemucs"
     const vocals    = path.join(outputDir, 'vocals.wav');

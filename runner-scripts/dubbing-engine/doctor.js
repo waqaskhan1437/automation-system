@@ -97,7 +97,7 @@ async function main() {
     { key: 'transformers', hint: 'pip install --user transformers sentencepiece',  stage: 'translate (NLLB)' },
     { key: 'edge_tts',     hint: 'pip install --user edge-tts',          stage: 'clone (edge fallback)' },
     { key: 'TTS',          hint: 'pip install --user TTS',               stage: 'clone (Coqui XTTS)' },
-    { key: 'voxcpm2',      hint: 'pip install --user voxcpm2 speechbrain', stage: 'clone (VoxCPM2)' },
+    { key: 'voxcpm',       hint: 'pip install --user voxcpm', stage: 'clone (VoxCPM2)' },
     { key: 'torch',        hint: 'pip install --user torch',             stage: 'shared GPU base' },
   ];
 
@@ -161,7 +161,7 @@ async function main() {
                     || rows.find(r => r.name === 'env:OLLAMA_HOST')?.status;
   const hasVoice = rows.find(r => r.name === 'edge_tts')?.status
                  || rows.find(r => r.name === 'TTS')?.status
-                 || rows.find(r => r.name === 'voxcpm2')?.status;
+                 || rows.find(r => r.name === 'voxcpm')?.status;
 
   console.log(`\n  Will the pipeline produce a real dubbed MP4?`);
   console.log(`    Transcription (Stage 3): ${hasTranscribe ? GREEN('YES') : YEL('placeholder')}`);

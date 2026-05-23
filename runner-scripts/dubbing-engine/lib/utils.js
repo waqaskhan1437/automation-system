@@ -42,7 +42,7 @@ function getFFprobe() { return FFPROBE; }
 // ── Python resolution ──────────────────────────────────────────────────────
 // Dubbing engine packages that count toward "richest venv" ranking.
 const DUBBING_PYTHON_PACKAGES = [
-  'voxcpm', 'voxcpm2', 'TTS', 'edge_tts', 'whisperx', 'whisper',
+  'voxcpm', 'TTS', 'edge_tts', 'whisperx', 'whisper',
   'demucs', 'pyannote', 'transformers', 'torch', 'speechbrain',
 ];
 

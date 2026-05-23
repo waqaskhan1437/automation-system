@@ -96,7 +96,7 @@ def main():
         json.dump(result, f, indent=2, ensure_ascii=False)
 
     if not result.get("skipped", True):
-        print(f"[SPEAKERS] ✅ Done - {len(result.get('speakers', []))} speaker(s)")
+        print(f"[SPEAKERS] Done - {len(result.get('speakers', []))} speaker(s)")
 
 
 if __name__ == "__main__":

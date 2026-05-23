@@ -113,10 +113,15 @@ function extractOutputItems(jobs: Array<Record<string, unknown>>): OutputMediaIt
       ? output.media_url
       : (typeof output.video_url === "string" ? output.video_url : "");
     const fallbackJobUrl = typeof job.video_url === "string" ? job.video_url : "";
+    // Check dubbing report for final video path
+    const dubbingFinalVideo = output.dubbing_report && typeof output.dubbing_report === "object"
+      ? asRecord(output.dubbing_report).final_video
+      : null;
     const localOutputUrl = localMediaUrlFromPath(output.local_output_media)
       || localMediaUrlFromPath(output.media_url)
       || localMediaUrlFromPath(output.video_url)
-      || localMediaUrlFromPath(job.video_url);
+      || localMediaUrlFromPath(job.video_url)
+      || localMediaUrlFromPath(dubbingFinalVideo);
     const outputMode = typeof output.render_mode === "string"
       ? output.render_mode
       : (typeof output.mode === "string" ? output.mode : "standard");
@@ -157,10 +162,15 @@ function extractOutputItems(jobs: Array<Record<string, unknown>>): OutputMediaIt
       for (let index = 0; index < processedVideos.length; index += 1) {
         const record = asRecord(processedVideos[index]);
         const videoUrl = typeof record.video_url === "string" ? record.video_url : "";
+        // Check for dubbing report final video in processed_videos
+        const finalVideoFromReport = record.report && typeof record.report === "object"
+          ? asRecord(record.report).final_video
+          : null;
+        const effectiveUrl = videoUrl || localMediaUrlFromPath(finalVideoFromReport) || "";
         if (
-          !videoUrl.startsWith("https://")
-          && !videoUrl.startsWith("http://")
-          && !videoUrl.startsWith("/api/local-media?")
+          !effectiveUrl.startsWith("https://")
+          && !effectiveUrl.startsWith("http://")
+          && !effectiveUrl.startsWith("/api/local-media?")
         ) {
           continue;
         }
@@ -168,8 +178,8 @@ function extractOutputItems(jobs: Array<Record<string, unknown>>): OutputMediaIt
         items.push({
           id: `video-${job.id || items.length}-${index}`,
           kind: "video",
-          primaryUrl: videoUrl,
-          urls: [videoUrl],
+          primaryUrl: effectiveUrl,
+          urls: [effectiveUrl],
           date,
           mode: "video",
           resolution,

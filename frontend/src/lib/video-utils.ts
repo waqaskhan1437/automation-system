@@ -8,7 +8,8 @@ interface OutputData {
   media_url?: string;
   video_url?: string;
   local_output_media?: string;
-  processed_videos?: Array<{ video_url: string }>;
+  processed_videos?: Array<{ video_url: string; report?: { final_video?: string } }>;
+  dubbing_report?: { final_video?: string };
 }
 
 interface InputData {
@@ -59,6 +60,21 @@ export function getVideoUrl(job: Job): string | null {
       if (isPlayableVideoUrl(output.local_output_media)) {
         return output.local_output_media.trim();
       }
+      // Check dubbing report for final video path
+      if (output.dubbing_report?.final_video) {
+        const localUrl = toLocalMediaUrl(output.dubbing_report.final_video);
+        if (localUrl) return localUrl;
+      }
+      // Check processed_videos report.final_video fallback
+      if (output.processed_videos && Array.isArray(output.processed_videos)) {
+        for (const v of output.processed_videos) {
+          const finalVideo = v.report?.final_video;
+          if (finalVideo) {
+            const localUrl = toLocalMediaUrl(finalVideo);
+            if (localUrl) return localUrl;
+          }
+        }
+      }
     } catch {}
   }
   return null;
@@ -80,6 +96,18 @@ export function getLocalVideoPath(job: Job): string | null {
       }
       if (isWindowsFilePath(output.video_url)) {
         return output.video_url.trim();
+      }
+      // Check dubbing report for final video path
+      if (output.dubbing_report?.final_video && isWindowsFilePath(output.dubbing_report.final_video)) {
+        return output.dubbing_report.final_video.trim();
+      }
+      // Check processed_videos report.final_video
+      if (output.processed_videos && Array.isArray(output.processed_videos)) {
+        for (const v of output.processed_videos) {
+          if (v.report?.final_video && isWindowsFilePath(v.report.final_video)) {
+            return v.report.final_video.trim();
+          }
+        }
       }
     } catch {}
   }
@@ -113,7 +141,17 @@ export function getAllVideoUrls(job: Job): string[] {
         for (const v of output.processed_videos) {
           if (isPlayableVideoUrl(v.video_url)) {
             urls.push(v.video_url.trim());
+          } else if (v.report?.final_video) {
+            const localUrl = toLocalMediaUrl(v.report.final_video);
+            if (localUrl) urls.push(localUrl);
           }
+        }
+      }
+      // Also check dubbing_report.final_video
+      if (output.dubbing_report?.final_video) {
+        const localUrl = toLocalMediaUrl(output.dubbing_report.final_video);
+        if (localUrl && !urls.includes(localUrl)) {
+          urls.push(localUrl);
         }
       }
     } catch {}
@@ -154,6 +192,8 @@ export function hasVideoUrl(job: Job): boolean {
         || isPlayableVideoUrl(output.video_url)
         || isPlayableVideoUrl(output.local_output_media)
         || isWindowsFilePath(output.local_output_media)
+        || (output.dubbing_report?.final_video ? isWindowsFilePath(output.dubbing_report.final_video) || isPlayableVideoUrl(output.dubbing_report.final_video) : false)
+        || (Array.isArray(output.processed_videos) && output.processed_videos.some(v => v.report?.final_video))
       ) ?? false;
     } catch { return false; }
   }

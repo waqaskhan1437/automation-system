@@ -8,6 +8,7 @@ type SourceMode = "upload" | "local" | "url";
 type TargetLanguage = "ur" | "hi";
 type TranslationEngine = "llm" | "nllb";
 type VoiceEngine = "voxcpm2" | "xtts" | "edge";
+type VoiceMode = "ultimate" | "controllable" | "design";
 type MixMode = "replace" | "bed";
 
 interface DubbingConfig {
@@ -16,6 +17,8 @@ interface DubbingConfig {
   targetLanguage: TargetLanguage;
   translationEngine: TranslationEngine;
   voiceEngine: VoiceEngine;
+  voiceMode: VoiceMode;
+  voiceStyle: string;
   mixMode: MixMode;
   preserveBackground: boolean;
   diarization: boolean;
@@ -61,6 +64,21 @@ const voiceEngines: Record<VoiceEngine, { label: string; note: string }> = {
   edge: { label: "Edge TTS fallback", note: "Fast stock Urdu/Hindi voice." },
 };
 
+const voiceModes: Record<VoiceMode, { label: string; desc: string }> = {
+  ultimate: { label: "Ultimate Cloning", desc: "Reference audio + original transcript — best fidelity" },
+  controllable: { label: "Controllable Cloning", desc: "Reference audio + optional style instructions" },
+  design: { label: "Voice Design", desc: "Zero-shot — describe voice in text, no reference needed" },
+};
+
+const voiceStylePresets = [
+  { value: "", label: "No style hint" },
+  { value: "neutral, conversational tone", label: "Neutral conversation" },
+  { value: "slightly faster, cheerful tone", label: "Cheerful & faster" },
+  { value: "slow, calm, soothing voice", label: "Calm & soothing" },
+  { value: "authoritative, deep voice", label: "Authoritative" },
+  { value: "soft, gentle, warm voice", label: "Gentle & warm" },
+];
+
 function parseDubbingConfig(config: string | null): DubbingConfig | null {
   if (!config) return null;
   try {
@@ -72,6 +90,8 @@ function parseDubbingConfig(config: string | null): DubbingConfig | null {
       targetLanguage: (dubbing.target_language as TargetLanguage) || "ur",
       translationEngine: (dubbing.translation_engine as TranslationEngine) || "llm",
       voiceEngine: (dubbing.voice_engine as VoiceEngine) || "voxcpm2",
+      voiceMode: (dubbing.voice_mode as VoiceMode) || "ultimate",
+      voiceStyle: dubbing.voice_style || "",
       mixMode: (dubbing.mix_mode as MixMode) || "bed",
       preserveBackground: dubbing.preserve_background !== false,
       diarization: dubbing.diarization_enabled !== false,
@@ -98,6 +118,8 @@ function buildManifest(config: DubbingConfig, name: string) {
       target_language: config.targetLanguage,
       translation_engine: config.translationEngine,
       voice_engine: config.voiceEngine,
+      voice_mode: config.voiceEngine === "voxcpm2" ? config.voiceMode : undefined,
+      voice_style: config.voiceEngine === "voxcpm2" ? config.voiceStyle : undefined,
       voice_reference_seconds: config.voiceReferenceSeconds,
       ai_provider: config.aiProvider,
       diarization_enabled: config.diarization,
@@ -123,6 +145,8 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
   const [targetLanguage, setTargetLanguage] = useState<TargetLanguage>("ur");
   const [translationEngine, setTranslationEngine] = useState<TranslationEngine>("llm");
   const [voiceEngine, setVoiceEngine] = useState<VoiceEngine>("voxcpm2");
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>("ultimate");
+  const [voiceStyle, setVoiceStyle] = useState("");
   const [mixMode, setMixMode] = useState<MixMode>("bed");
   const [preserveBackground, setPreserveBackground] = useState(true);
   const [diarization, setDiarization] = useState(true);
@@ -147,6 +171,8 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
         setTargetLanguage(parsed.targetLanguage);
         setTranslationEngine(parsed.translationEngine);
         setVoiceEngine(parsed.voiceEngine);
+        setVoiceMode(parsed.voiceMode);
+        setVoiceStyle(parsed.voiceStyle);
         setMixMode(parsed.mixMode);
         setPreserveBackground(parsed.preserveBackground);
         setDiarization(parsed.diarization);
@@ -195,9 +221,10 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
 
   const config: DubbingConfig = useMemo(() => ({
     sourceMode, sourceValue, targetLanguage, translationEngine, voiceEngine,
+    voiceMode, voiceStyle,
     mixMode, preserveBackground, diarization, lipSync, speedLimit, voiceReferenceSeconds, aiProvider,
-  }), [sourceMode, sourceValue, targetLanguage, translationEngine, voiceEngine, mixMode,
-      preserveBackground, diarization, lipSync, speedLimit, voiceReferenceSeconds, aiProvider]);
+  }), [sourceMode, sourceValue, targetLanguage, translationEngine, voiceEngine, voiceMode, voiceStyle,
+      mixMode, preserveBackground, diarization, lipSync, speedLimit, voiceReferenceSeconds, aiProvider]);
 
   const handleSave = useCallback(async (runNow = false) => {
     if (!isReady || saving) return;
@@ -226,7 +253,6 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
           setSaveError(response.error || "Failed to save automation");
           return;
         }
-        // If runNow, trigger the run immediately
         if (runNow && response.data?.id) {
           try {
             await api.post(`/api/automations/${response.data.id}/run`, {});
@@ -426,6 +452,59 @@ export default function DubbingAutomationModal({ editData, onClose, onSaved }: P
                   ))}
                 </select>
                 <p className="text-xs text-[#a1a1aa] mb-3">{voiceEngines[voiceEngine].note}</p>
+
+                {/* Voice mode selector (only for VoxCPM2) */}
+                {voiceEngine === "voxcpm2" && (
+                  <div className="mb-4">
+                    <label className="mb-1.5 block text-xs font-medium">Clone mode</label>
+                    <div className="space-y-1.5">
+                      {(["ultimate", "controllable", "design"] as VoiceMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setVoiceMode(mode)}
+                          className={`w-full rounded-lg px-3 py-2 text-left text-xs transition-colors ${
+                            voiceMode === mode
+                              ? "bg-emerald-400/15 text-emerald-200 border border-emerald-400/25"
+                              : "bg-[rgba(255,255,255,0.03)] text-[#a1a1aa] border border-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.06)]"
+                          }`}
+                        >
+                          <span className="font-semibold">{voiceModes[mode].label}</span>
+                          <span className="block mt-0.5 opacity-70">{voiceModes[mode].desc}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Style presets (for controllable/design modes) */}
+                    {(voiceMode === "controllable" || voiceMode === "design") && (
+                      <div className="mt-3">
+                        <label className="mb-1.5 block text-xs font-medium">Voice style hint</label>
+                        <select
+                          value={voiceStyle}
+                          onChange={(e) => setVoiceStyle(e.target.value)}
+                          className="glass-select text-sm w-full"
+                        >
+                          {voiceStylePresets.map((preset) => (
+                            <option key={preset.value} value={preset.value}>{preset.label}</option>
+                          ))}
+                        </select>
+                        {voiceStyle && (
+                          <p className="mt-1 text-[10px] text-emerald-300/60">
+                            Style: <span className="italic">"{voiceStyle}"</span>
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {voiceMode === "design" && (
+                      <div className="mt-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 p-2">
+                        <p className="text-[10px] text-indigo-200">
+                          ✨ No reference audio needed — describe the voice you want
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium">Reference (sec)</span>

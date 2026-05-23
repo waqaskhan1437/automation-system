@@ -41,18 +41,32 @@ def main():
         "text": "",
     }
 
+    transcription_attempted = False
+
     try:
         # Try WhisperX first (has word-level timestamps)
         try:
             import whisperx
             print("[TRANSCRIBE] Using WhisperX with word timestamps")
 
-            device = "cuda" if whisperx.utils.is_cuda_available() else "cpu"
+            # Check CUDA via torch instead of whisperx.utils (not always available)
+            try:
+                import torch
+                has_cuda = torch.cuda.is_available()
+            except ImportError:
+                has_cuda = False
+
+            device = "cuda" if has_cuda else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
 
-            model = whisperx.load_model("large-v3", device=device, compute_type=compute_type, language=language)
+            # Use smaller model on CPU for speed and reliability
+            model_name = "large-v3" if device == "cuda" else "base"
+            print(f"[TRANSCRIBE] Loading model '{model_name}' on {device} ({compute_type})...")
+            sys.stdout.flush()
+            model = whisperx.load_model(model_name, device=device, compute_type=compute_type, language=language)
             audio = whisperx.load_audio(input_file)
             transcribe_result = model.transcribe(audio, batch_size=16)
+            transcription_attempted = True
 
             # Align whisper output to get word-level timestamps
             try:
@@ -95,41 +109,52 @@ def main():
             }
 
         except ImportError:
-            # Fallback to whisper
-            import whisper
-            print("[TRANSCRIBE] Using Whisper (base)")
+            print("[TRANSCRIBE] WhisperX not available, trying whisper...")
 
-            model = whisper.load_model("base")
-            whisper_result = model.transcribe(input_file, language=language, word_timestamps=True)
+        if not transcription_attempted:
+            # Fallback to whisper (base)
+            try:
+                import whisper
+                print("[TRANSCRIBE] Using Whisper (base)")
 
-            segments = []
-            for seg in whisper_result.get("segments", []):
-                words = []
-                for w in seg.get("words", []):
-                    words.append({
-                        "text": w.get("word", ""),
-                        "start": round(w.get("start", seg["start"]), 3),
-                        "end": round(w.get("end", seg["end"]), 3),
-                        "confidence": round(w.get("confidence", 1.0), 4),
+                model = whisper.load_model("base")
+                whisper_result = model.transcribe(input_file, language=language, word_timestamps=True)
+                transcription_attempted = True
+
+                segments = []
+                for seg in whisper_result.get("segments", []):
+                    words = []
+                    for w in seg.get("words", []):
+                        words.append({
+                            "text": w.get("word", ""),
+                            "start": round(w.get("start", seg["start"]), 3),
+                            "end": round(w.get("end", seg["end"]), 3),
+                            "confidence": round(w.get("confidence", 1.0), 4),
+                        })
+
+                    segments.append({
+                        "start": round(seg["start"], 3),
+                        "end": round(seg["end"], 3),
+                        "text": seg.get("text", "").strip(),
+                        "words": words,
+                        "confidence": round(seg.get("confidence", 1.0), 4),
                     })
 
-                segments.append({
-                    "start": round(seg["start"], 3),
-                    "end": round(seg["end"], 3),
-                    "text": seg.get("text", "").strip(),
-                    "words": words,
-                    "confidence": round(seg.get("confidence", 1.0), 4),
-                })
+                result = {
+                    "engine": "whisper",
+                    "language": language,
+                    "segments": segments,
+                    "text": " ".join(s["text"] for s in segments),
+                }
 
-            result = {
-                "engine": "whisper",
-                "language": language,
-                "segments": segments,
-                "text": " ".join(s["text"] for s in segments),
-            }
+            except Exception as e:
+                print(f"[TRANSCRIBE] Whisper also failed: {e}")
 
-    except ImportError as e:
-        print(f"[TRANSCRIBE] Warning: whisper/whisperx not available: {e}")
+    except Exception as e:
+        print(f"[TRANSCRIBE] Unexpected error: {e}")
+
+    if not transcription_attempted:
+        print("[TRANSCRIBE] No transcription engine available - generating placeholder")
         # Placeholder: single segment with entire duration
         try:
             import subprocess
@@ -156,15 +181,11 @@ def main():
             "text": segments[0]["text"],
         }
 
-    except Exception as e:
-        print(f"[TRANSCRIBE] Error during transcription: {e}", file=sys.stderr)
-        sys.exit(1)
-
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
 
     seg_count = len(result.get("segments", []))
-    print(f"[TRANSCRIBE] ✅ Done - {seg_count} segment(s), text length: {len(result.get('text', ''))}")
+    print(f"[TRANSCRIBE] Done - {seg_count} segment(s), text length: {len(result.get('text', ''))}")
 
 
 if __name__ == "__main__":

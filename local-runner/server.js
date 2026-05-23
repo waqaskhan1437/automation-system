@@ -12,8 +12,11 @@ const BACKGROUND_SUPERVISOR_PATH = path.join(__dirname, "supervisor.js");
 const NODE_EXE = path.join(__dirname, "tools", "node", "node.exe");
 const LOCAL_BASE_URL = "http://127.0.0.1:3000";
 const RUNNER_SCRIPTS_OUTPUT_DIR = path.resolve(__dirname, "..", "runner-scripts", "output");
+const DUBBING_ENGINE_OUTPUT_DIR = path.resolve(__dirname, "..", "runner-scripts", "dubbing-engine", "output");
+
 const DEFAULT_LOCAL_MEDIA_ROOTS = [
   RUNNER_SCRIPTS_OUTPUT_DIR,
+  DUBBING_ENGINE_OUTPUT_DIR,
   path.join(__dirname, "processed"),
   path.join(__dirname, "downloads"),
 ].map((rootPath) => path.resolve(rootPath));
@@ -436,8 +439,27 @@ function rewriteLocalMediaFields(job, req) {
             if (videoUrl && resolveSafeLocalMediaPath(videoUrl)) {
               nextItem.video_url = buildLocalMediaUrl(videoUrl, req);
             }
+            // Also rewrite report.final_video in processed_videos
+            if (nextItem.report && typeof nextItem.report === "object" && !Array.isArray(nextItem.report)) {
+              const report = { ...nextItem.report };
+              const reportFinalVideo = typeof report.final_video === "string" ? report.final_video.trim() : "";
+              if (reportFinalVideo && resolveSafeLocalMediaPath(reportFinalVideo)) {
+                report.final_video = buildLocalMediaUrl(reportFinalVideo, req);
+              }
+              nextItem.report = report;
+            }
             return nextItem;
           });
+        }
+
+        // Rewrite dubbing_report.final_video
+        if (output.dubbing_report && typeof output.dubbing_report === "object" && !Array.isArray(output.dubbing_report)) {
+          const dubbingReport = { ...output.dubbing_report };
+          const dubbingFinalVideo = typeof dubbingReport.final_video === "string" ? dubbingReport.final_video.trim() : "";
+          if (dubbingFinalVideo && resolveSafeLocalMediaPath(dubbingFinalVideo)) {
+            dubbingReport.final_video = buildLocalMediaUrl(dubbingFinalVideo, req);
+          }
+          output.dubbing_report = dubbingReport;
         }
 
         if (!output.video_url && typeof output.local_output_media === "string") {
@@ -2130,8 +2152,25 @@ function injectLocalApiRewriteScript(html, req, config) {
               if (isLocalMediaPath(nextItem.video_url)) {
                 nextItem.video_url = toLocalMediaUrl(nextItem.video_url);
               }
+              // Also rewrite report.final_video in processed_videos
+              if (nextItem.report && typeof nextItem.report === "object" && !Array.isArray(nextItem.report)) {
+                const report = { ...nextItem.report };
+                if (isLocalMediaPath(report.final_video)) {
+                  report.final_video = toLocalMediaUrl(report.final_video);
+                }
+                nextItem.report = report;
+              }
               return nextItem;
             });
+          }
+
+          // Rewrite dubbing_report.final_video
+          if (output.dubbing_report && typeof output.dubbing_report === "object" && !Array.isArray(output.dubbing_report)) {
+            const dubbingReport = { ...output.dubbing_report };
+            if (isLocalMediaPath(dubbingReport.final_video)) {
+              dubbingReport.final_video = toLocalMediaUrl(dubbingReport.final_video);
+            }
+            output.dubbing_report = dubbingReport;
           }
 
           if (!output.video_url && typeof output.local_output_media === "string") {

@@ -23,8 +23,10 @@ async function cloneStage(workDir, manifest) {
   const dubbing = manifest.dubbing || {};
   const voiceEngine = dubbing.voice_engine || 'voxcpm2';
   const voiceRefSeconds = dubbing.voice_reference_seconds || 18;
+  const voiceMode = dubbing.voice_mode || 'ultimate';
+  const voiceStyle = dubbing.voice_style || '';
 
-  utils.logStep('CLONE', `Voice engine: ${voiceEngine}  Reference: ${voiceRefSeconds}s`);
+  utils.logStep('CLONE', `Voice engine: ${voiceEngine}  Mode: ${voiceMode}  Reference: ${voiceRefSeconds}s`);
 
   if (!fs.existsSync(translationFile)) {
     throw new Error('[CLONE] Translation not found – did translate stage run?');
@@ -65,30 +67,30 @@ async function cloneStage(workDir, manifest) {
       console.log('[CLONE] Coqui XTTS not installed');
     }
   } else {
-    // voxcpm2 (VoxCeleb-based voice cloning)
-    let hasVoxcpm2 = false;
+    // voxcpm (VoxCPM2 - correct package name)
+    let hasVoxcpm = false;
     try {
       await utils.runProcess(utils.getPython(), [
-        '-c', 'import voxcpm2; print("voxcpm2_ok")'
-      ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
-      hasVoxcpm2 = true;
-      console.log('[CLONE] VoxCPM2 detected');
+        '-c', 'from voxcpm import VoxCPM; print("voxcpm_ok")'
+      ], { stdio: 'pipe', timeoutMs: 15000, logLabel: 'CLONE' });
+      hasVoxcpm = true;
+      console.log('[CLONE] VoxCPM2 detected (voxcpm package)');
     } catch {
       console.log('[CLONE] VoxCPM2 not installed – checking for PyTorch fallback');
     }
 
-    if (hasVoxcpm2) {
+    if (hasVoxcpm) {
       engineAvailable = true;
     } else {
-      // Even without VoxCPM2, check if PyTorch is available for other models
+      // Even without VoxCPM2, check if PyTorch is available for XTTS fallback
       try {
         await utils.runProcess(utils.getPython(), [
           '-c', 'import torch; print("torch_ok")'
         ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
         engineAvailable = true;
-        console.log('[CLONE] PyTorch detected – will let Python script try available models');
+        console.log('[CLONE] PyTorch detected – will try XTTS fallback');
       } catch {
-        console.log('[CLONE] Neither VoxCPM2 nor PyTorch available');
+        console.log('[CLONE] Neither VoxCPM2 nor PyTorch available – falling back to edge-tts');
       }
     }
   }
@@ -104,6 +106,8 @@ async function cloneStage(workDir, manifest) {
       '--ref-seconds', String(voiceRefSeconds),
       '--source-language', dubbing.source_language || 'en',
       '--target-language', dubbing.target_language || 'ur',
+      '--voice-mode', voiceMode,
+      '--voice-style', voiceStyle,
     ], { logLabel: 'CLONE', timeoutMs: 600000 });
   }
 
