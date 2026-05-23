@@ -6,6 +6,9 @@
  *   - voxcpm2: Voice Cloning Toolkit (VoxCPM2 / VoxCeleb)
  *   - xtts:    Coqui XTTS (voice cloning)
  *   - edge:    Microsoft Edge TTS (no cloning, but high quality)
+ *
+ * ⚡ Speed Benchmark: For voxcpm2, runs a 1-segment benchmark first.
+ *   If > 30s/segment or estimated total > 5 min, auto-falls back to edge-tts.
  */
 const path = require('path');
 const fs = require('fs');
@@ -26,6 +29,7 @@ async function cloneStage(workDir, manifest) {
   const voiceMode = dubbing.voice_mode || 'ultimate';
   const voiceStyle = dubbing.voice_style || '';
   const scriptMode = dubbing.script || '';
+  const targetLang = dubbing.target_language || 'ur';
 
   // User-specified reference audio path (e.g. uploaded file or built-in sample)
   const userReferencePath = dubbing.reference_audio_path || '';
@@ -51,80 +55,43 @@ async function cloneStage(workDir, manifest) {
 
   utils.ensureDir(outputDir);
 
-  // Check voice engine availability
-  let engineAvailable = false;
-  if (voiceEngine === 'edge') {
-    try {
-      await utils.runProcess(utils.getPython(), [
-        '-c', 'import edge_tts; print("edge_ok")'
-      ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
-      engineAvailable = true;
-      console.log('[CLONE] edge-tts detected');
-    } catch {
-      console.log('[CLONE] edge-tts not installed');
-    }
-  } else if (voiceEngine === 'xtts') {
-    try {
-      await utils.runProcess(utils.getPython(), [
-        '-c', 'import TTS; print("xtts_ok")'
-      ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
-      engineAvailable = true;
-      console.log('[CLONE] Coqui XTTS detected');
-    } catch {
-      console.log('[CLONE] Coqui XTTS not installed');
-    }
-  } else {
-    // voxcpm (VoxCPM2 - correct package name)
-    let hasVoxcpm = false;
-    try {
-      await utils.runProcess(utils.getPython(), [
-        '-c', 'from voxcpm import VoxCPM; print("voxcpm_ok")'
-      ], { stdio: 'pipe', timeoutMs: 15000, logLabel: 'CLONE' });
-      hasVoxcpm = true;
-      console.log('[CLONE] VoxCPM2 detected (voxcpm package)');
-    } catch {
-      console.log('[CLONE] VoxCPM2 not installed – checking for PyTorch fallback');
-    }
+  // ── 1. Check voice engine availability ────────────────────────────────
+  const engineAvailable = await checkEngineAvailability(voiceEngine);
+  const pythonScript = getPythonScriptPath();
+  const commonArgs = buildCommonArgs(translationFile, outputDir, outputManifest,
+    voiceEngine, vocalsFile, userReferencePath, voiceRefSeconds, dubbing, voiceMode, voiceStyle, scriptMode);
 
-    if (hasVoxcpm) {
-      engineAvailable = true;
+  // ── 2. Run engine with pre-flight speed benchmark (for voxcpm2) ───────
+  if (engineAvailable && voiceEngine === 'voxcpm2') {
+    const benchmark = await runVoxCPM2Benchmark(translationFile, workDir, outputDir,
+      vocalsFile, userReferencePath, voiceRefSeconds, dubbing, voiceMode, voiceStyle, scriptMode, segments);
+
+    if (benchmark.tooSlow) {
+      console.log(`[CLONE] ⚠️ VoxCPM2 benchmark: ${benchmark.perSegment.toFixed(1)}s/segment → est. ${benchmark.estimatedTotal.toFixed(0)}s total. TOO SLOW!`);
+      console.log('[CLONE] ℹ️ Auto-switching to edge-tts for faster results.');
+      console.log('[CLONE] 💡 Tip: Install CUDA PyTorch for GPU acceleration (pip install torch --index-url https://download.pytorch.org/whl/cu121)');
+      await fallbackToEdgeTTS(segments, outputDir, outputManifest, targetLang);
     } else {
-      // Even without VoxCPM2, check if PyTorch is available for XTTS fallback
-      try {
-        await utils.runProcess(utils.getPython(), [
-          '-c', 'import torch; print("torch_ok")'
-        ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
-        engineAvailable = true;
-        console.log('[CLONE] PyTorch detected – will try XTTS fallback');
-      } catch {
-        console.log('[CLONE] Neither VoxCPM2 nor PyTorch available – falling back to edge-tts');
-      }
+      console.log(`[CLONE] ✅ VoxCPM2 benchmark: ${benchmark.perSegment.toFixed(1)}s/segment → est. ${benchmark.estimatedTotal.toFixed(0)}s total. Proceeding.`);
+      await utils.runPython(pythonScript, commonArgs, { logLabel: 'CLONE', timeoutMs: 1800000 });
     }
+  } else if (engineAvailable && (voiceEngine === 'xtts' || voiceEngine === 'edge')) {
+    // XTTS / edge — no benchmark needed, run directly
+    await utils.runPython(pythonScript, commonArgs, { logLabel: 'CLONE', timeoutMs: 1800000 });
   }
 
-  if (engineAvailable) {
-    const pythonScript = getPythonScriptPath();
-    await utils.runPython(pythonScript, [
-      '--input', translationFile,
-      '--output-dir', outputDir,
-      '--output-manifest', outputManifest,
-      '--voice-engine', voiceEngine,
-      '--reference', resolveReferenceAudio(vocalsFile, userReferencePath),
-      '--ref-seconds', String(voiceRefSeconds),
-      '--source-language', dubbing.source_language || 'en',
-      '--target-language', dubbing.target_language || 'ur',
-      '--voice-mode', voiceMode,
-      '--voice-style', voiceStyle,
-      '--script', scriptMode,
-    ], { logLabel: 'CLONE', timeoutMs: 600000 });
+  // ── 3. Handle failures / partial output ───────────────────────────────
+  if (!fs.existsSync(outputManifest)) {
+    const partialFiles = fs.readdirSync(outputDir).filter(f => f.startsWith('segment_') && f.endsWith('.wav'));
+    if (partialFiles.length > 0) {
+      console.log(`[CLONE] ⚠️ Engine produced ${partialFiles.length}/${segments.length} segments before failing. Using edge-tts for all segments.`);
+    } else {
+      console.log('[CLONE] ⚠️ Voice engine failed – using edge-tts fallback');
+    }
+    await fallbackToEdgeTTS(segments, outputDir, outputManifest, targetLang);
   }
 
-  // If no engine available or Python script didn't produce output, fallback to direct edge-tts
-  if (!engineAvailable || !fs.existsSync(outputManifest)) {
-    console.log('[CLONE] ⚠️ Voice engine unavailable – using direct edge-tts fallback');
-    await fallbackToEdgeTTS(segments, outputDir, outputManifest, dubbing.target_language || 'ur');
-  }
-
+  // ── 4. Read and return result ─────────────────────────────────────────
   const result = fs.existsSync(outputManifest) ? utils.readJson(outputManifest) : null;
   if (!result) throw new Error('[CLONE] Failed to produce cloned audio segments');
 
@@ -135,10 +102,165 @@ async function cloneStage(workDir, manifest) {
 
   const segCount = result.segments?.length || 0;
   const audioFiles = (result.segments || []).filter(s => s.audio_file).length;
-  console.log(`[CLONE] ✅ Done – ${audioFiles}/${segCount} segments with audio (engine: ${result.engine || voiceEngine})${result.fallback ? ' ⚠️ (fallback – ' + result.engine + ')' : ''}`);
+  console.log(`[CLONE] ✅ Done – ${audioFiles}/${segCount} segments with audio (engine: ${result.engine || voiceEngine})${result.fallback ? ' ⚠️ (fallback)' : ''}`);
   return result;
 }
 
+/**
+ * Check if a voice engine's Python package is importable.
+ */
+async function checkEngineAvailability(voiceEngine) {
+  if (voiceEngine === 'edge') {
+    try {
+      await utils.runProcess(utils.getPython(), [
+        '-c', 'import edge_tts; print("edge_ok")'
+      ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
+      console.log('[CLONE] edge-tts detected');
+      return true;
+    } catch {
+      console.log('[CLONE] edge-tts not installed');
+      return false;
+    }
+  }
+
+  if (voiceEngine === 'xtts') {
+    try {
+      await utils.runProcess(utils.getPython(), [
+        '-c', 'import TTS; print("xtts_ok")'
+      ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
+      console.log('[CLONE] Coqui XTTS detected');
+      return true;
+    } catch {
+      console.log('[CLONE] Coqui XTTS not installed');
+      return false;
+    }
+  }
+
+  // voxcpm2
+  try {
+    await utils.runProcess(utils.getPython(), [
+      '-c', 'from voxcpm import VoxCPM; print("voxcpm_ok")'
+    ], { stdio: 'pipe', timeoutMs: 15000, logLabel: 'CLONE' });
+    console.log('[CLONE] VoxCPM2 detected (voxcpm package)');
+    return true;
+  } catch {
+    console.log('[CLONE] VoxCPM2 not installed – checking for PyTorch fallback');
+  }
+
+  // PyTorch available (for XTTS fallback via Python)
+  try {
+    await utils.runProcess(utils.getPython(), [
+      '-c', 'import torch; print("torch_ok")'
+    ], { stdio: 'pipe', timeoutMs: 10000, logLabel: 'CLONE' });
+    console.log('[CLONE] PyTorch detected – will try XTTS fallback');
+    return true;
+  } catch {
+    console.log('[CLONE] Neither VoxCPM2 nor PyTorch available');
+    return false;
+  }
+}
+
+/**
+ * Build common CLI args for clone.py.
+ */
+function buildCommonArgs(translationFile, outputDir, outputManifest, voiceEngine,
+                          vocalsFile, userReferencePath, voiceRefSeconds, dubbing,
+                          voiceMode, voiceStyle, scriptMode) {
+  return [
+    '--input', translationFile,
+    '--output-dir', outputDir,
+    '--output-manifest', outputManifest,
+    '--voice-engine', voiceEngine,
+    '--reference', resolveReferenceAudio(vocalsFile, userReferencePath),
+    '--ref-seconds', String(voiceRefSeconds),
+    '--source-language', dubbing.source_language || 'en',
+    '--target-language', dubbing.target_language || 'ur',
+    '--voice-mode', voiceMode,
+    '--voice-style', voiceStyle,
+    '--script', scriptMode,
+  ];
+}
+
+/**
+ * Run one segment as a speed benchmark.
+ * Creates a temporary translation file with just 1 segment so the benchmark
+ * accurately measures per-segment speed, then cleans up.
+ *
+ * Returns { perSegment, estimatedTotal, tooSlow }.
+ */
+async function runVoxCPM2Benchmark(translationFile, workDir, outputDir,
+                                    vocalsFile, userReferencePath, voiceRefSeconds,
+                                    dubbing, voiceMode, voiceStyle, scriptMode, segments) {
+  const result = { perSegment: 0, estimatedTotal: 0, tooSlow: false };
+  if (segments.length === 0) return result;
+
+  console.log('[CLONE] 🔬 Running VoxCPM2 speed benchmark (1 segment)...');
+
+  // Create a temp translation file with ONLY the first segment
+  const fullTranslation = utils.readJson(translationFile);
+  const benchTranslation = {
+    ...fullTranslation,
+    segments: [segments[0]], // just 1 segment
+  };
+  const benchTranslationFile = path.join(workDir, '_benchmark_translation_.json');
+  utils.writeJson(benchTranslationFile, benchTranslation);
+
+  const benchManifest = path.join(workDir, '_benchmark_.json');
+  const benchOutputDir = path.join(workDir, '_benchmark_output_');
+  utils.ensureDir(benchOutputDir);
+
+  const benchArgs = [
+    '--input', benchTranslationFile,
+    '--output-dir', benchOutputDir,
+    '--output-manifest', benchManifest,
+    '--voice-engine', 'voxcpm2',
+    '--reference', resolveReferenceAudio(vocalsFile, userReferencePath),
+    '--ref-seconds', String(voiceRefSeconds),
+    '--source-language', dubbing.source_language || 'en',
+    '--target-language', dubbing.target_language || 'ur',
+    '--voice-mode', voiceMode,
+    '--voice-style', voiceStyle,
+    '--script', scriptMode,
+  ];
+
+  const benchStart = Date.now();
+  try {
+    await utils.runPython(getPythonScriptPath(), benchArgs, { logLabel: 'BENCH', timeoutMs: 300000 });
+  } catch {
+    // Benchmark itself timed out (>5 min for 1 segment) — definitely too slow
+    console.log('[CLONE] ⚠️ VoxCPM2 benchmark timed out (>5 min for 1 segment) — CPU too slow');
+    result.tooSlow = true;
+    result.perSegment = 300;
+    result.estimatedTotal = 300 * segments.length;
+    // Cleanup
+    cleanupBenchmark(workDir, benchOutputDir);
+    return result;
+  }
+
+  const benchTime = (Date.now() - benchStart) / 1000;
+  const estimatedTotal = benchTime * segments.length;
+
+  // Clean up benchmark artifacts
+  cleanupBenchmark(workDir, benchOutputDir);
+
+  result.perSegment = benchTime;
+  result.estimatedTotal = estimatedTotal;
+  // Consider too slow if >30s/segment or estimated total >5 min
+  result.tooSlow = benchTime > 30 || estimatedTotal > 300;
+  return result;
+}
+
+/** Clean up benchmark temp files. */
+function cleanupBenchmark(workDir, benchOutputDir) {
+  try { fs.rmSync(path.join(workDir, '_benchmark_translation_.json'), { force: true }); } catch {}
+  try { fs.rmSync(path.join(workDir, '_benchmark_.json'), { force: true }); } catch {}
+  try { fs.rmSync(path.join(workDir, '_benchmark_output_'), { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(path.join(benchOutputDir, '_benchmark_test_.wav'), { force: true }); } catch {}
+}
+
+/**
+ * Direct edge-tts fallback — fast, no GPU required, supports 35+ languages.
+ */
 async function fallbackToEdgeTTS(segments, outputDir, outputManifest, targetLang) {
   utils.ensureDir(outputDir);
   const edgeVoice = getEdgeVoice(targetLang);
