@@ -648,7 +648,7 @@ export default function AutomationsPage() {
                         label = "Engine setup needed";
                         badgeClass += " bg-[rgba(239,68,68,0.15)] text-red-200";
                       }
-                      const canRun = auto.status === "active" && (verdict === "ready" || verdict === "degraded");
+                      const canRun = auto.status === "active";
                       return (
                         <>
                           <span className={badgeClass} title={tooltip}>{label}</span>
