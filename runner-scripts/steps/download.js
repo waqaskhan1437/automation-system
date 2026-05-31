@@ -7,6 +7,9 @@
  * - User-Agent rotation to avoid fingerprinting
  * - Cookie health checking with expiry validation
  * - Detailed error classification
+ *
+ * NOTE: --remote-components ejs:github and --js-runtimes node intentionally omitted
+ * because they caused crashes on GitHub runner yt-dlp versions
  */
 const { fs, path } = require('../lib/core');
 const { execFileSync, spawnSync } = require('child_process');
@@ -159,10 +162,6 @@ function buildYtDlpArgs(ytDlp, outFile) {
     '--extractor-retries', '3',
     '--merge-output-format',
     'mp4',
-    '--remote-components',
-    'ejs:github',
-    '--js-runtimes',
-    'node',
     '--user-agent',
     getNextUserAgent(),
     '--extractor-args',
