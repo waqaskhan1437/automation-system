@@ -1076,6 +1076,7 @@ function runCommand(command, args, label, timeout) {
   const resolved = resolveCommand(command);
   const result = spawnSync(resolved, args, {
     stdio: ['inherit', 'inherit', 'pipe'],
+    encoding: 'utf8',
     timeout,
     shell: needsShellWrapper(resolved),
   });
