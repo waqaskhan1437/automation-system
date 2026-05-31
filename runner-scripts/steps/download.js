@@ -8,8 +8,10 @@
  * - Cookie health checking with expiry validation
  * - Detailed error classification
  *
- * NOTE: --remote-components ejs:github and --js-runtimes node intentionally omitted
- * because they caused crashes on GitHub runner yt-dlp versions
+ * NOTE: --remote-components ejs:github intentionally omitted because it caused
+ * crashes on some yt-dlp versions when downloading from GitHub.
+ * --js-runtimes node is included because the workflow always installs the
+ * latest yt-dlp version, and node is always available on GitHub runners.
  */
 const { fs, path } = require('../lib/core');
 const { execFileSync, spawnSync } = require('child_process');
@@ -151,6 +153,7 @@ function readPositiveInt(value, fallback) {
 function buildYtDlpArgs(ytDlp, outFile) {
   return [
     ...ytDlp.baseArgs,
+    ...buildJsRuntimesArgs(),
     '--force-overwrites',
     '--no-part',
     '--no-playlist',
@@ -164,6 +167,7 @@ function buildYtDlpArgs(ytDlp, outFile) {
     'mp4',
     '--user-agent',
     getNextUserAgent(),
+    '--no-check-formats',
     '--extractor-args',
     'youtube:player_client=android,web',
     '-f',
@@ -195,6 +199,19 @@ function getBrowserCookieFallbacks() {
 
 function isYouTubeUrl(sourceUrl) {
   return /youtube\.com|youtu\.be/i.test(String(sourceUrl || ''));
+}
+
+function buildJsRuntimesArgs() {
+  // Add flags to solve YouTube's n-challenge (anti-bot JS challenge).
+  // The workflow always installs the latest yt-dlp which supports these flags.
+  // --js-runtimes node: tells yt-dlp to use Node.js as the JavaScript runtime
+  // --remote-components ejs:github: downloads/downloads the EJS solver scripts from
+  //   GitHub (if not already cached from the workflow pre-download step).
+  // Both flags were introduced in yt-dlp 2025.x and are stable as of 2026.
+  if (commandExists('node')) {
+    return ['--remote-components', 'ejs:github', '--js-runtimes', 'node'];
+  }
+  return [];
 }
 
 function runYtDlpWithArgs(ytDlp, args, outFile) {

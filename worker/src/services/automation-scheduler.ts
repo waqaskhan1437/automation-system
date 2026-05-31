@@ -1479,7 +1479,11 @@ export async function triggerAutomationRun(
     fetch_stats: fetchStats,
     segment_info: segmentInfo,
     ...(videoSource === "youtube" || videoSource === "youtube_channel"
-      ? { youtube_cookies: readString(videoSourceSettings?.youtube_cookies).trim() }
+      ? {
+          youtube_cookies: readString(videoSourceSettings?.youtube_cookies).trim(),
+          youtube_cookies_meta: videoSourceSettings?.youtube_cookies_meta || null,
+          cookie_synced_at: new Date().toISOString(),
+        }
       : {}),
     ...(videoSource === "google_photos"
       ? {

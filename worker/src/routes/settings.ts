@@ -18,6 +18,7 @@ import {
 import { generateImageBannerPreviewSpecs, normalizeBannerFormat } from "../services/image-automation";
 import { getScopedSettings, upsertScopedSettings } from "../services/user-settings";
 import { buildCookieUploadDiagnostics } from "../services/cookie-files";
+import { syncVideoSourceSecretsToGithub } from "../services/github-secrets";
 
 type SyncedPostformeAccount = {
   id: string;
@@ -391,6 +392,21 @@ export async function handleSettingsRoutes(
           youtube_cookies_meta: normalizedYoutubeCookies ? JSON.stringify(buildCookieUploadDiagnostics(normalizedYoutubeCookies, "youtube", "manual-paste.txt")) : null,
           google_photos_cookies_meta: normalizedGooglePhotosCookies ? JSON.stringify(buildCookieUploadDiagnostics(normalizedGooglePhotosCookies, "google_photos", "manual-paste.txt")) : null,
         });
+
+        // Auto-sync cookies to GitHub Secrets immediately
+        const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
+        if (githubSettings?.pat_token) {
+          const syncResult = await syncVideoSourceSecretsToGithub(githubSettings, {
+            youtubeCookies: normalizedYoutubeCookies,
+            googlePhotosCookies: normalizedGooglePhotosCookies,
+          });
+          if (!syncResult.success && syncResult.failed.length > 0) {
+            console.warn(`[settings] GitHub secret sync had failures: ${syncResult.failed.map(f => `${f.name}: ${f.error}`).join(", ")}`);
+          } else if (syncResult.updated.length > 0) {
+            console.log(`[settings] GitHub secrets synced: ${syncResult.updated.join(", ")}`);
+          }
+        }
+
         return jsonResponse({ success: true, message: "Video source settings saved" });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : "Failed to save video source settings";
@@ -432,14 +448,31 @@ export async function handleSettingsRoutes(
       await ensureVideoSourceCookieMetadataColumns(env);
       const diagnostics = buildCookieUploadDiagnostics(normalized, source === "youtube" ? "youtube" : "google_photos", fileName);
       const existing = await getScopedSettings<VideoSourceSettings & { youtube_cookies_meta?: string | null; google_photos_cookies_meta?: string | null }>(env.DB, "video-sources", userId);
+      const finalYoutubeCookies = sourceConfig.field === "youtube_cookies" ? normalized : existing?.youtube_cookies || null;
+      const finalGooglePhotosCookies = sourceConfig.field === "google_photos_cookies" ? normalized : existing?.google_photos_cookies || null;
+
       await upsertScopedSettings(env.DB, "settings_video_sources", userId, {
         bunny_api_key: existing?.bunny_api_key || null,
         bunny_library_id: existing?.bunny_library_id || null,
-        youtube_cookies: sourceConfig.field === "youtube_cookies" ? normalized : existing?.youtube_cookies || null,
-        google_photos_cookies: sourceConfig.field === "google_photos_cookies" ? normalized : existing?.google_photos_cookies || null,
+        youtube_cookies: finalYoutubeCookies,
+        google_photos_cookies: finalGooglePhotosCookies,
         youtube_cookies_meta: sourceConfig.field === "youtube_cookies" ? JSON.stringify(diagnostics) : existing?.youtube_cookies_meta || null,
         google_photos_cookies_meta: sourceConfig.field === "google_photos_cookies" ? JSON.stringify(diagnostics) : existing?.google_photos_cookies_meta || null,
       });
+
+      // Auto-sync cookies to GitHub Secrets immediately
+      const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
+      if (githubSettings?.pat_token) {
+        const syncResult = await syncVideoSourceSecretsToGithub(githubSettings, {
+          youtubeCookies: sourceConfig.field === "youtube_cookies" ? normalized : finalYoutubeCookies,
+          googlePhotosCookies: sourceConfig.field === "google_photos_cookies" ? normalized : finalGooglePhotosCookies,
+        });
+        if (!syncResult.success && syncResult.failed.length > 0) {
+          console.warn(`[settings] Upload GitHub secret sync had failures: ${syncResult.failed.map(f => `${f.name}: ${f.error}`).join(", ")}`);
+        } else if (syncResult.updated.length > 0) {
+          console.log(`[settings] Upload GitHub secrets synced: ${syncResult.updated.join(", ")}`);
+        }
+      }
 
       return jsonResponse({
         success: true,

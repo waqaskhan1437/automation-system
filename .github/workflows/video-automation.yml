@@ -55,7 +55,7 @@ jobs:
         run: node runner-scripts/fetch-runtime-config.js
 
       - name: Install & update yt-dlp (latest)
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: |
           set -euo pipefail
           # Upgrade yt-dlp to latest version every run (critical for YouTube 2026 compatibility)
@@ -67,6 +67,11 @@ jobs:
           yt-dlp --help 2>&1 | grep -q "extractor-args" && echo "extractor-args: available" || true
           # Check for required dependencies
           python3 -c "import urllib.request, json, re; print('Python deps: OK')" || echo "Warning: Python deps incomplete"
+          # Pre-download EJS (Encrypted JavaScript Solver) components for YouTube n-challenge
+          # This must be done BEFORE the actual download so components are cached locally.
+          # The --js-runtimes node flag (set in download.js) requires these EJS scripts.
+          echo "Pre-downloading EJS components for YouTube n-challenge solving..."
+          yt-dlp --remote-components ejs:github -v 2>&1 | tail -5 || echo "EJS pre-download: not supported on this version (will try at download time)"
 
       - name: Install FFmpeg and fonts
         timeout-minutes: 8
