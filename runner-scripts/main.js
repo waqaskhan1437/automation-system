@@ -76,7 +76,8 @@ function appendErrorLog(message) {
 
 function isBlockingDownloadFailure(error) {
   const message = String(error && (error.message || error) || '').toLowerCase();
-  return /youtube authentication|cookies?|sign in|login|not a bot|confirm.*bot|bot check|private video|age.?restricted|members-only|google photos.*download|forbidden|unauthorized|http error 401|http error 403/.test(message);
+  // Comprehensive blocking failure detection covering all 5 download layers
+  return /youtube authentication|cookies?|sign in|login|not a bot|confirm.*bot|bot check|private video|age.?restricted|members-only|google photos.*download|forbidden|unauthorized|http error 401|http error 403|http error 429|too many requests|rate limit|all 5 download layers|all.*layers.*failed|bot challenge|video unavailable|video deleted|age. restricted/i.test(message);
 }
 
 function loadConfig() {
@@ -86,6 +87,36 @@ function loadConfig() {
   } catch (error) {
     throw new Error(`Invalid automation config at ${CONFIG_PATH}: ${error.message}`);
   }
+}
+
+function classifyMainError(error) {
+  const message = String(error && (error.message || error) || '').toLowerCase();
+  const categories = [];
+  if (/429|too many requests|rate.limit/i.test(message)) categories.push('RATE_LIMIT');
+  if (/403|forbidden/i.test(message)) categories.push('FORBIDDEN');
+  if (/401|unauthorized/i.test(message)) categories.push('UNAUTHORIZED');
+  if (/not a bot|confirm.*bot|bot.check|captcha|unusual.traffic/i.test(message)) categories.push('BOT_CHALLENGE');
+  if (/sign in|login|authentication|cookie/i.test(message)) categories.push('AUTH_FAILURE');
+  if (/private.video/i.test(message)) categories.push('PRIVATE_VIDEO');
+  if (/age.restricted|members.only/i.test(message)) categories.push('AGE_RESTRICTED');
+  if (/video.unavailable|unavailable|deleted|removed|410/i.test(message)) categories.push('VIDEO_UNAVAILABLE');
+  if (/layer.*fail|all.*layers|all 5/i.test(message)) categories.push('ALL_LAYERS_FAILED');
+  if (/inner.*tube|innertube/i.test(message)) categories.push('INNERTUBE_ISSUE');
+  if (/browser|playwright|chromium/i.test(message)) categories.push('BROWSER_ISSUE');
+  if (/yt-dlp|youtube-dl/i.test(message)) categories.push('YTDLP_ISSUE');
+  return categories.length > 0 ? categories.join(', ') : 'UNKNOWN_ERROR';
+}
+
+function appendDetailedErrorLog(videoUrl, error, segmentInfo) {
+  const categories = classifyMainError(error);
+  const detail = [
+    `[VIDEO_FAIL] url=${videoUrl}`,
+    `categories=${categories}`,
+    `message=${error && error.message || error}`,
+    `segment=${segmentInfo ? JSON.stringify(segmentInfo) : 'none'}`,
+    `timestamp=${new Date().toISOString()}`,
+  ].join(' | ');
+  appendErrorLog(detail);
 }
 
 function writeConfig(config) {
@@ -649,10 +680,12 @@ async function main() {
       }
     } catch (e) {
       console.error(`[VIDEO ${i + 1}] FAILED:`, e.message);
-      appendErrorLog(`[VIDEO ${i + 1}/${toProcess.length}] ${url} FAILED: ${e.message}`);
+      appendDetailedErrorLog(url, e, segmentInfo);
+      const categories = classifyMainError(e);
       failures.push({
         source_url: url,
         error: e.message,
+        error_categories: categories,
         failed_at: new Date().toISOString(),
       });
       if (isBlockingDownloadFailure(e)) {

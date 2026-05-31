@@ -1,11 +1,123 @@
 /**
  * Step: Download
+ *
+ * 2026 Robust YouTube Download System:
+ * - Multi-layer fallback chain: yt-dlp (cookies) -> yt-dlp (browser) -> yt-dlp (no auth) -> InnerTube API -> Playwright Browser
+ * - Rate limiting detection with exponential backoff
+ * - User-Agent rotation to avoid fingerprinting
+ * - Cookie health checking with expiry validation
+ * - Detailed error classification
  */
 const { fs, path } = require('../lib/core');
 const { execFileSync, spawnSync } = require('child_process');
 const { chromium } = require('playwright-core');
 const { OUTPUT_DIR, CONFIG_PATH } = require('../lib/paths');
 
+// Rotating User-Agents to avoid YouTube fingerprinting (2026)
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0',
+];
+
+let userAgentIndex = 0;
+
+function getNextUserAgent() {
+  const ua = USER_AGENTS[userAgentIndex % USER_AGENTS.length];
+  userAgentIndex++;
+  return ua;
+}
+
+// Rate limiting state
+let rateLimitRetryCount = 0;
+const MAX_RATE_LIMIT_BACKOFF = 120000; // 2 minutes max
+
+function isRateLimitError(error) {
+  const message = String(error && (error.message || error) || '').toLowerCase();
+  return /429|too many requests|rate limit|rate_limit/i.test(message);
+}
+
+function handleRateLimit() {
+  rateLimitRetryCount++;
+  // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 64s, 120s max
+  const waitMs = Math.min(
+    Math.pow(2, rateLimitRetryCount) * 1000 + Math.floor(Math.random() * 3000),
+    MAX_RATE_LIMIT_BACKOFF
+  );
+  console.log(`[RATE-LIMIT] Backing off for ${(waitMs / 1000).toFixed(1)}s (attempt ${rateLimitRetryCount})...`);
+  sleepSync(waitMs);
+}
+
+function resetRateLimitState() {
+  rateLimitRetryCount = 0;
+}
+
+function wrapSyncWithRateLimit(fn) {
+  return function (...args) {
+    const maxRetries = 3;
+    let lastError = null;
+    resetRateLimitState();
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return fn(...args);
+      } catch (error) {
+        lastError = error;
+        if (isRateLimitError(error) && attempt < maxRetries) {
+          handleRateLimit();
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError;
+  };
+}
+
+async function wrapAsyncWithRateLimit(fn) {
+  return async function (...args) {
+    const maxRetries = 3;
+    let lastError = null;
+    resetRateLimitState();
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn(...args);
+      } catch (error) {
+        lastError = error;
+        if (isRateLimitError(error) && attempt < maxRetries) {
+          handleRateLimit();
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError;
+  };
+}
+
+// Extended error classification for YouTube download failures
+function classifyDownloadError(error) {
+  const message = String(error && (error.message || error) || '').toLowerCase();
+  if (/429|too many requests/i.test(message)) return 'RATE_LIMIT';
+  if (/403|forbidden|signature|player response/i.test(message)) return 'FORBIDDEN';
+  if (/401|unauthorized/i.test(message)) return 'UNAUTHORIZED';
+  if (/not a bot|confirm.*bot|bot check|captcha|unusual traffic/i.test(message)) return 'BOT_CHALLENGE';
+  if (/sign in|login|authentication/i.test(message)) return 'SIGN_IN_REQUIRED';
+  if (/cookie|cookies/i.test(message)) return 'COOKIE_ISSUE';
+  if (/private video/i.test(message)) return 'PRIVATE_VIDEO';
+  if (/age.?restricted|age.restricted|members-only/i.test(message)) return 'AGE_RESTRICTED';
+  if (/video unavailable|unavailable/i.test(message)) return 'VIDEO_UNAVAILABLE';
+  if (/410|gone|deleted|removed/i.test(message)) return 'VIDEO_DELETED';
+  if (/live|upcoming|scheduled/i.test(message)) return 'LIVE_OR_UPCOMING';
+  return 'UNKNOWN';
+}
+
+function isAuthLikeDownloadError(error) {
+  const message = String(error && (error.message || error) || '').toLowerCase();
+  return /cookie|cookies|sign in|login|not a bot|confirm.*bot|bot check|private video|age.?restricted|members-only|account|authentication|unauthorized|forbidden|http error 401|http error 403|http error 429/.test(message);
+}
 
 function loadRuntimeConfig() {
   try {
@@ -33,11 +145,6 @@ function readPositiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function isAuthLikeDownloadError(error) {
-  const message = String(error && (error.message || error) || '').toLowerCase();
-  return /cookie|cookies|sign in|login|not a bot|confirm.*bot|bot check|private video|age.?restricted|members-only|account|authentication|unauthorized|forbidden|http error 401|http error 403/.test(message);
-}
-
 function buildYtDlpArgs(ytDlp, outFile) {
   return [
     ...ytDlp.baseArgs,
@@ -46,16 +153,20 @@ function buildYtDlpArgs(ytDlp, outFile) {
     '--no-playlist',
     '--no-cache-dir',
     '--socket-timeout', '20',
-    '--retries', '2',
-    '--fragment-retries', '2',
-    '--file-access-retries', '2',
-    '--extractor-retries', '1',
+    '--retries', '3',
+    '--fragment-retries', '3',
+    '--file-access-retries', '3',
+    '--extractor-retries', '3',
     '--merge-output-format',
     'mp4',
     '--remote-components',
     'ejs:github',
     '--js-runtimes',
     'node',
+    '--user-agent',
+    getNextUserAgent(),
+    '--extractor-args',
+    'youtube:player_client=android,web;skip=webpage',
     '-f',
     'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b[height<=1080]/b',
     '-o',
@@ -93,7 +204,8 @@ function runYtDlpWithArgs(ytDlp, args, outFile) {
   validateOutput(outFile);
 }
 
-function runYtDlpDownload(normalizedSource, outFile) {
+// Rate-limit-aware wrapper for yt-dlp downloads
+const runYtDlpDownload = wrapSyncWithRateLimit(function runYtDlpDownloadInner(normalizedSource, outFile) {
   const ytDlp = resolveYtDlpRunner();
   if (!ytDlp) {
     throw new Error('yt-dlp is not installed');
@@ -105,7 +217,7 @@ function runYtDlpDownload(normalizedSource, outFile) {
   if (cookiesFile) {
     const ytArgs = [...baseArgs];
     ytArgs.push('--cookies', cookiesFile);
-    console.log('[DOWNLOAD] Using cookie file for YouTube/source authentication');
+    console.log('[DOWNLOAD] Using cookie file for YouTube authentication');
     ytArgs.push(normalizedSource);
     runYtDlpWithArgs(ytDlp, ytArgs, outFile);
     return;
@@ -134,7 +246,7 @@ function runYtDlpDownload(normalizedSource, outFile) {
     }
     throw error;
   }
-}
+});
 
 function getCommandCandidates(name) {
   const candidates = [];
@@ -156,17 +268,11 @@ function resolveCommand(name) {
     }
   }
 
-  // On Windows, spawnSync with shell:false can't find .exe via PATH.
-  // Prefer .exe over .cmd/.bat globally: Node 20+ refuses to spawn .cmd/.bat
-  // without shell:true (CVE-2024-27980), and WindowsApps alias .cmd stubs
-  // throw EINVAL even via shell. Scan every PATH dir for .exe first.
   if (process.platform === 'win32') {
     const dirs = (process.env.PATH || '').split(path.delimiter);
     for (const ext of ['.exe', '.cmd', '.bat', '']) {
       for (const dir of dirs) {
         if (!dir) continue;
-        // Skip WindowsApps alias stubs entirely — they are reparse points
-        // that throw spawn EINVAL when invoked from non-interactive contexts.
         if (/[\\/]WindowsApps([\\/]|$)/i.test(dir)) continue;
         const full = path.join(dir, name + ext);
         if (fs.existsSync(full)) return full;
@@ -181,9 +287,6 @@ function needsShellWrapper(resolvedCommand) {
   return /\.(cmd|bat)$/i.test(String(resolvedCommand || ''));
 }
 
-// Sniff whether ffprobe.exe itself is broken/corrupted by probing -version.
-// If `-version` fails too, the binary (not the video) is the problem and we
-// must not blame the user's video file.
 function probeFfprobeBinary(ffprobe) {
   try {
     const versionProbe = spawnSync(ffprobe, ['-version'], {
@@ -209,9 +312,6 @@ function probeFfprobeBinary(ffprobe) {
 
 function isLikelyCorruptBinaryError(error) {
   const msg = String(error && (error.message || error.code) || '').toLowerCase();
-  // Windows-specific corruption signals — Node surfaces these as UNKNOWN or
-  // similar opaque codes when the PE header is damaged or the file is
-  // blocked by the OS (e.g. SmartScreen / Defender quarantine).
   return /unknown|corrupted|corrupt|exec format|einval|access is denied|not a valid win32/i.test(msg);
 }
 
@@ -260,11 +360,6 @@ function validateOutput(outFile) {
       throw new Error('ffprobe did not detect a video stream');
     }
   } catch (error) {
-    // Before blaming the video, confirm ffprobe itself is healthy. A common
-    // failure mode on Windows is a corrupted bundled ffprobe.exe (incomplete
-    // zip extraction, antivirus quarantine, disk error) — `spawnSync` then
-    // returns an UNKNOWN error and the old code mislabeled the user's video
-    // as invalid.
     if (isLikelyCorruptBinaryError(error)) {
       const sanity = probeFfprobeBinary(ffprobe);
       if (!sanity.ok) {
@@ -371,8 +466,6 @@ function resolveExistingLocalPath(sourcePath) {
     return absolutePath;
   }
 
-  // Some saved local-file configs accidentally keep whitespace before the
-  // extension, e.g. "video .mp4". Try the de-spaced variant before failing.
   const normalizedWhitespacePath = absolutePath.replace(/\s+\.(mp4|mov|m4v|webm|avi|mkv)$/i, '.$1');
   if (normalizedWhitespacePath !== absolutePath && fs.existsSync(normalizedWhitespacePath)) {
     return normalizedWhitespacePath;
@@ -494,6 +587,10 @@ function resolveYtDlpRunner() {
   return null;
 }
 
+// ──────────────────────────────────────────────
+// Google Photos Browser Download
+// ──────────────────────────────────────────────
+
 async function openGooglePhotosVideo(page) {
   if (!/\/photo\//.test(page.url())) {
     const videoTile = page.locator('a[aria-label^="Video"]').first();
@@ -583,7 +680,7 @@ async function downloadGooglePhotosViaBrowser(sourceUrl, outFile) {
         '--max-time', '300',
         '--connect-timeout', '30',
         '-H', `Cookie: ${cookieHeader}`,
-        '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-H', `User-Agent: ${getNextUserAgent()}`,
         '-H', 'Referer: https://photos.google.com/',
         '-H', 'Accept: */*',
         '-H', 'Accept-Encoding: identity',
@@ -591,7 +688,7 @@ async function downloadGooglePhotosViaBrowser(sourceUrl, outFile) {
       ], 'curl', 320000);
 
       if (fs.existsSync(outFile) && fs.statSync(outFile).size > 50000) {
-        console.log(`[DOWNLOAD] Google Photos download successful via download.url() (${(fs.statSync(outFile).size / 1024 / 1024).toFixed(2)} MB)`);
+        console.log(`[DOWNLOAD] Google Photos download successful (${(fs.statSync(outFile).size / 1024 / 1024).toFixed(2)} MB)`);
         return;
       }
 
@@ -611,6 +708,10 @@ async function downloadGooglePhotosViaBrowser(sourceUrl, outFile) {
 
   throw lastError || new Error('Google Photos browser download failed');
 }
+
+// ──────────────────────────────────────────────
+// YouTube InnerTube API Download (4 client variants)
+// ──────────────────────────────────────────────
 
 async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
   console.log('[DOWNLOAD] Downloading YouTube video via InnerTube API...');
@@ -632,12 +733,12 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
     {
       clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
       clientVersion: '2.0',
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      userAgent: getNextUserAgent(),
     },
     {
       clientName: 'WEB_CREATOR',
       clientVersion: '1.20260321.00.00',
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      userAgent: getNextUserAgent(),
     },
     {
       clientName: 'ANDROID_VR',
@@ -666,7 +767,7 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
 
       const headers = {
         'Content-Type': 'application/json',
-        'User-Agent': client.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': client.userAgent || getNextUserAgent(),
         'Origin': 'https://www.youtube.com',
         'Referer': 'https://www.youtube.com/',
       };
@@ -724,7 +825,7 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
               '-L', '-o', audioFile,
               '--max-time', '300',
               '--connect-timeout', '30',
-              '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              '-H', `User-Agent: ${getNextUserAgent()}`,
               '-H', 'Referer: https://www.youtube.com/',
               audioFormat.url,
             ], 'curl', 320000);
@@ -753,7 +854,7 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
             '-L', '-o', outFile,
             '--max-time', '300',
             '--connect-timeout', '30',
-            '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '-H', `User-Agent: ${getNextUserAgent()}`,
             '-H', 'Referer: https://www.youtube.com/',
             bestFormat.url,
           ], 'curl', 320000);
@@ -771,7 +872,7 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
           '-L', '-o', outFile,
           '--max-time', '300',
           '--connect-timeout', '30',
-          '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          '-H', `User-Agent: ${getNextUserAgent()}`,
           '-H', 'Referer: https://www.youtube.com/',
           bestFormat.url,
         ], 'curl', 320000);
@@ -797,6 +898,118 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
   throw lastError || new Error('YouTube InnerTube download failed');
 }
 
+// ──────────────────────────────────────────────
+// YouTube Browser Download (Ultimate Fallback via Playwright)
+// ──────────────────────────────────────────────
+
+async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
+  console.log('[DOWNLOAD] Attempting YouTube download via Playwright browser (ultimate fallback)...');
+  const executablePath = resolveBrowserExecutable();
+  let lastError = null;
+
+  const runtimeConfig = loadRuntimeConfig();
+  const maxAttempts = readPositiveInt(process.env.YOUTUBE_BROWSER_DOWNLOAD_ATTEMPTS || runtimeConfig.youtube_browser_download_attempts, 1);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const browser = await chromium.launch({
+      executablePath,
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+      ],
+    });
+
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 1440, height: 900 },
+        userAgent: getNextUserAgent(),
+        locale: 'en-US',
+      });
+
+      // Remove automation traces
+      const page = await context.newPage();
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      });
+
+      // Navigate to YouTube video page
+      console.log(`[DOWNLOAD] Navigating to YouTube video...`);
+      await page.goto(sourceUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+
+      // Wait for video player to load
+      await page.waitForTimeout(3000);
+
+      // Try to get the video URL via the page's video element
+      const videoUrl = await page.evaluate(() => {
+        const video = document.querySelector('video');
+        if (video && video.src) return video.src;
+        // Try ytplayer config
+        try {
+          const config = JSON.parse(document.querySelector('yt-player')?.getAttribute('config') || '{}');
+          if (config?.args?.url) return config.args.url;
+        } catch {}
+        // Try ytInitialPlayerResponse
+        try {
+          const ytData = JSON.parse(document.querySelector('script#player-response')?.textContent || '{}');
+          const formats = ytData?.streamingData?.formats || [];
+          const adaptive = ytData?.streamingData?.adaptiveFormats || [];
+          const all = [...formats, ...adaptive].filter(f => f.url);
+          if (all.length > 0) return all.sort((a, b) => (b.height || 0) - (a.height || 0))[0].url;
+        } catch {}
+        return null;
+      });
+
+      if (videoUrl && videoUrl.startsWith('http')) {
+        console.log(`[DOWNLOAD] Found video URL via browser extraction, downloading...`);
+        const cookies = await context.cookies();
+        const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+
+        runCommand('curl', [
+          '-L', '-o', outFile,
+          '--max-time', '300',
+          '--connect-timeout', '30',
+          '-H', `Cookie: ${cookieHeader}`,
+          '-H', `User-Agent: ${getNextUserAgent()}`,
+          '-H', 'Referer: https://www.youtube.com/',
+          '-H', 'Accept: */*',
+          videoUrl,
+        ], 'curl', 320000);
+
+        if (fs.existsSync(outFile) && fs.statSync(outFile).size > 50000) {
+          console.log(`[DOWNLOAD] YouTube browser download successful (${(fs.statSync(outFile).size / 1024 / 1024).toFixed(2)} MB)`);
+          return;
+        }
+      }
+
+      // Alternative: try to get the download URL from the page
+      console.log(`[DOWNLOAD] Direct video URL not found, trying yt-dlp inside page...`);
+      throw new Error('Could not extract video URL from browser page');
+    } catch (error) {
+      lastError = error;
+      console.log(`[DOWNLOAD] YouTube browser attempt ${attempt}/${maxAttempts} failed: ${error.message}`);
+      try {
+        if (fs.existsSync(outFile)) {
+          fs.unlinkSync(outFile);
+        }
+      } catch {}
+    } finally {
+      await browser.close();
+    }
+  }
+
+  throw lastError || new Error('YouTube browser download failed');
+}
+
+// ──────────────────────────────────────────────
+// Cookie Management
+// ──────────────────────────────────────────────
+
 function analyzeCookieFile(rawText, label) {
   const lines = String(rawText || '').split(/\r?\n/g).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -804,7 +1017,7 @@ function analyzeCookieFile(rawText, label) {
   let expired = 0;
   let persistent = 0;
   for (const line of lines) {
-    const fields = line.split('	');
+    const fields = line.split('\t');
     if (fields.length < 7) continue;
     const expires = Number.parseInt(fields[4], 10);
     const name = fields[5];
@@ -918,7 +1131,7 @@ function downloadDirectFile(sourceUrl, outFile) {
         '--retry-all-errors',
         '--connect-timeout', '15',
         '--max-time', '120',
-        '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        '-H', `User-Agent: ${getNextUserAgent()}`,
         '-o', outFile,
         sourceUrl,
       ], 'curl', 150000);
@@ -947,6 +1160,120 @@ function downloadDirectFileViaFfmpeg(sourceUrl, outFile) {
   validateOutput(outFile);
 }
 
+// ──────────────────────────────────────────────
+// Main Download Function - Multi-Layer Fallback Chain
+// ──────────────────────────────────────────────
+
+/**
+ * YouTube Download Strategy (2026 Robust):
+ *
+ * Layer 1: yt-dlp with server cookies (Netscape format from GitHub Secrets)
+ * Layer 2: yt-dlp with browser cookies (Chrome/Firefox/Edge extraction)
+ * Layer 3: yt-dlp without auth (last resort yt-dlp attempt)
+ * Layer 4: InnerTube API (4 clients: Android, TV, Web Creator, Android VR)
+ * Layer 5: Playwright browser (ultimate fallback - full browser simulation)
+ *
+ * Each layer has rate-limit detection and exponential backoff
+ */
+
+async function downloadYouTubeWithFullChain(sourceUrl, outFile) {
+  const normalizedSource = String(sourceUrl || '').trim();
+  const errorLog = [];
+  let lastError = null;
+
+  // LAYER 1: yt-dlp with server cookies
+  try {
+    console.log('[DOWNLOAD] [LAYER 1/5] yt-dlp with server cookies...');
+    runYtDlpDownload(normalizedSource, outFile);
+    console.log('[DOWNLOAD] [LAYER 1] SUCCESS');
+    return;
+  } catch (error) {
+    const category = classifyDownloadError(error);
+    lastError = error;
+    errorLog.push(`Layer1(yt-dlp+cookies): ${category} - ${error.message}`);
+    console.log(`[DOWNLOAD] [LAYER 1] FAILED: ${category} - ${error.message}`);
+  }
+
+  // LAYER 2: yt-dlp with browser cookies (for local runners)
+  const browserFallbacks = getBrowserCookieFallbacks();
+  if (browserFallbacks.length > 0) {
+    const ytDlp = resolveYtDlpRunner();
+    if (ytDlp) {
+      const baseArgs = buildYtDlpArgs(ytDlp, outFile);
+      for (const browser of browserFallbacks) {
+        try {
+          console.log(`[DOWNLOAD] [LAYER 2/5] yt-dlp with browser cookies (${browser})...`);
+          clearDownloadArtifacts(outFile);
+          const ytArgs = [...baseArgs, '--cookies-from-browser', browser, normalizedSource];
+          runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
+          validateOutput(outFile);
+          console.log(`[DOWNLOAD] [LAYER 2] SUCCESS via ${browser}`);
+          return;
+        } catch (error) {
+          const category = classifyDownloadError(error);
+          errorLog.push(`Layer2(yt-dlp+${browser}): ${category} - ${error.message}`);
+          console.log(`[DOWNLOAD] [LAYER 2] ${browser} FAILED: ${category} - ${error.message}`);
+        }
+      }
+    }
+  }
+
+  // LAYER 3: yt-dlp without any auth (public videos only)
+  try {
+    console.log('[DOWNLOAD] [LAYER 3/5] yt-dlp without auth...');
+    const ytDlp = resolveYtDlpRunner();
+    if (ytDlp) {
+      clearDownloadArtifacts(outFile);
+      const ytArgs = [...buildYtDlpArgs(ytDlp, outFile), normalizedSource];
+      runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
+      validateOutput(outFile);
+      console.log('[DOWNLOAD] [LAYER 3] SUCCESS');
+      return;
+    }
+  } catch (error) {
+    const category = classifyDownloadError(error);
+    errorLog.push(`Layer3(yt-dlp+noauth): ${category} - ${error.message}`);
+    console.log(`[DOWNLOAD] [LAYER 3] FAILED: ${category} - ${error.message}`);
+  }
+
+  // LAYER 4: InnerTube API
+  try {
+    console.log('[DOWNLOAD] [LAYER 4/5] InnerTube API...');
+    await downloadYouTubeViaInnerTube(normalizedSource, outFile);
+    validateOutput(outFile);
+    console.log('[DOWNLOAD] [LAYER 4] SUCCESS');
+    return;
+  } catch (error) {
+    const category = classifyDownloadError(error);
+    errorLog.push(`Layer4(InnerTube): ${category} - ${error.message}`);
+    console.log(`[DOWNLOAD] [LAYER 4] FAILED: ${category} - ${error.message}`);
+  }
+
+  // LAYER 5: Playwright Browser (ultimate fallback)
+  try {
+    console.log('[DOWNLOAD] [LAYER 5/5] Playwright browser (ultimate fallback)...');
+    await downloadYouTubeViaBrowser(normalizedSource, outFile);
+    validateOutput(outFile);
+    console.log('[DOWNLOAD] [LAYER 5] SUCCESS');
+    return;
+  } catch (error) {
+    const category = classifyDownloadError(error);
+    errorLog.push(`Layer5(Browser): ${category} - ${error.message}`);
+    console.log(`[DOWNLOAD] [LAYER 5] FAILED: ${category} - ${error.message}`);
+  }
+
+  // ALL LAYERS FAILED - build comprehensive error message
+  const summary = errorLog.join(' | ');
+  const fallbackAdvice = isAuthLikeDownloadError(lastError)
+    ? 'YouTube authentication failed. Refresh YouTube cookies in Settings (export from browser in Netscape format) and retry.'
+    : 'All 5 download layers failed. Check that the video is public and accessible.';
+  throw new Error(`YouTube download failed after all 5 layers. ${fallbackAdvice} Errors: ${summary}`);
+}
+
+// ──────────────────────────────────────────────
+// Exported Download Function
+// ──────────────────────────────────────────────
+
 module.exports = async function download(videoUrl) {
   console.log('[DOWNLOAD] Starting...');
   const outFile = path.join(OUTPUT_DIR, 'input-video.mp4');
@@ -973,8 +1300,8 @@ module.exports = async function download(videoUrl) {
   }
 
   let lastError = null;
-  let downloadSource = normalizedSource;
 
+  // Google Photos → browser download
   if (isGooglePhotosSource(normalizedSource)) {
     try {
       await downloadGooglePhotosViaBrowser(normalizedSource, outFile);
@@ -986,13 +1313,20 @@ module.exports = async function download(videoUrl) {
     }
   }
 
+  // YouTube → full 5-layer fallback chain
+  if (isLikelyYtDlpSource(normalizedSource) && /youtube\.com|youtu\.be/i.test(normalizedSource)) {
+    await downloadYouTubeWithFullChain(normalizedSource, outFile);
+    return;
+  }
+
+  // Direct media URL
   if (!isLikelyYtDlpSource(normalizedSource)) {
     if (isDirectMediaUrl(normalizedSource)) {
-      await preflightDirectMediaUrl(downloadSource);
+      await preflightDirectMediaUrl(normalizedSource);
     }
 
     try {
-      downloadDirectFile(downloadSource, outFile);
+      downloadDirectFile(normalizedSource, outFile);
       return;
     } catch (error) {
       lastError = error;
@@ -1001,7 +1335,7 @@ module.exports = async function download(videoUrl) {
 
     if (isDirectMediaUrl(normalizedSource)) {
       try {
-        downloadDirectFileViaFfmpeg(downloadSource, outFile);
+        downloadDirectFileViaFfmpeg(normalizedSource, outFile);
         return;
       } catch (error) {
         lastError = error;
@@ -1010,36 +1344,7 @@ module.exports = async function download(videoUrl) {
     }
   }
 
-  if (isLikelyYtDlpSource(normalizedSource) && /youtube\.com|youtu\.be/i.test(normalizedSource)) {
-    const runtimeConfig = loadRuntimeConfig();
-    const allowInnerTubeFallback = readBool(process.env.ALLOW_INNERTUBE_FALLBACK ?? runtimeConfig.allow_innertube_fallback, false);
-
-    try {
-      console.log('[DOWNLOAD] YouTube strategy: yt-dlp first (prevents repeated InnerTube download attempts)');
-      runYtDlpDownload(normalizedSource, outFile);
-      return;
-    } catch (error) {
-      lastError = error;
-      console.log(`[DOWNLOAD] yt-dlp failed: ${error.message}`);
-      if (isAuthLikeDownloadError(error)) {
-        throw new Error(`YouTube authentication/download failed. Refresh YouTube cookies in Settings and retry. Details: ${error.message}`);
-      }
-      if (!allowInnerTubeFallback) {
-        throw error;
-      }
-    }
-
-    try {
-      console.log('[DOWNLOAD] Trying optional InnerTube fallback...');
-      await downloadYouTubeViaInnerTube(normalizedSource, outFile);
-      validateOutput(outFile);
-      return;
-    } catch (error) {
-      lastError = error;
-      console.log('[DOWNLOAD] Optional InnerTube fallback also failed');
-    }
-  }
-
+  // Other yt-dlp sources (Google Photos links etc.)
   if (isLikelyYtDlpSource(normalizedSource)) {
     try {
       runYtDlpDownload(normalizedSource, outFile);

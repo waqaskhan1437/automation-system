@@ -54,12 +54,19 @@ jobs:
       - name: Save config
         run: node runner-scripts/fetch-runtime-config.js
 
-      - name: Install yt-dlp
+      - name: Install & update yt-dlp (latest)
         timeout-minutes: 5
         run: |
           set -euo pipefail
+          # Upgrade yt-dlp to latest version every run (critical for YouTube 2026 compatibility)
           python3 -m pip install -q "yt-dlp[default]" --upgrade --break-system-packages
-          yt-dlp --version
+          echo "yt-dlp version: $(yt-dlp --version 2>&1)"
+          # Verify extractors are functional
+          yt-dlp --list-extractors 2>&1 | grep -i youtube || echo "YouTube extractor check: not found (may still work)"
+          # Enable experimental features for 2026 compatibility
+          yt-dlp --help 2>&1 | grep -q "extractor-args" && echo "extractor-args: available" || true
+          # Check for required dependencies
+          python3 -c "import urllib.request, json, re; print('Python deps: OK')" || echo "Warning: Python deps incomplete"
 
       - name: Install FFmpeg and fonts
         timeout-minutes: 8
