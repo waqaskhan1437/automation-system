@@ -165,9 +165,9 @@ function buildYtDlpArgs(ytDlp, outFile) {
     '--user-agent',
     getNextUserAgent(),
     '--extractor-args',
-    'youtube:player_client=android,web;skip=webpage',
+    'youtube:player_client=android,web',
     '-f',
-    'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b[height<=1080]/b',
+    'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
     '-o',
     outFile,
   ];
@@ -1075,17 +1075,27 @@ function resolveCookiesFile(sourceUrl) {
 function runCommand(command, args, label, timeout) {
   const resolved = resolveCommand(command);
   const result = spawnSync(resolved, args, {
-    stdio: 'inherit',
+    stdio: ['inherit', 'inherit', 'pipe'],
     timeout,
     shell: needsShellWrapper(resolved),
   });
+
+  // Print captured stderr after command finishes (preserves logs while also capturing for errors)
+  const stderr = (result.stderr || '').trim();
+  if (stderr) {
+    process.stderr.write(stderr.replace(/^/gm, `[${label}] `) + '\n');
+  }
 
   if (result.error) {
     throw result.error;
   }
 
   if (typeof result.status === 'number' && result.status !== 0) {
-    throw new Error(`${label} exited with code ${result.status}`);
+    const tail = stderr.split('\n').slice(-3).join(' | ');
+    const msg = tail
+      ? `${label} exited with code ${result.status}: ${tail}`
+      : `${label} exited with code ${result.status}`;
+    throw new Error(msg);
   }
 }
 
