@@ -1286,17 +1286,16 @@ export async function triggerAutomationRun(
     videoSource === "youtube_channel" ||
     (readString(config.short_generation_mode, "normal") === "prompt" && readString(config.prompt_source_type) === "youtube");
 
+  // YouTube + GitHub runner + cookies warning (non-blocking)
+  // The 5-layer fallback (yt-dlp → InnerTube API → Playwright) can handle
+  // public YouTube videos without cookies even on GitHub runners.
+  // Cookies are passed as best-effort; they may not work due to IP binding.
   if (executionMode === "github" && isYoutubeSource && youtubeCookiesConfigured) {
-    const error =
-      "YouTube account cookies are not reliable on GitHub-hosted runners because YouTube ties them to the browser/IP session. Run this automation from a local runner workspace instead of GitHub for YouTube sources.";
-    const jobId = await createFailedAutomationJob(env, automation, userId, config, error, "preflight.youtube_runner_mode", {
-      video_source: videoSource,
-      execution_mode: executionMode,
-      short_generation_mode: readString(config.short_generation_mode, "normal"),
-      prompt_source_type: readString(config.prompt_source_type),
-      youtube_cookies_configured: youtubeCookiesConfigured,
-    });
-    return { success: false, jobId: jobId || undefined, executionMode, error };
+    console.warn(
+      "[WARN] YouTube cookies configured but running on GitHub runner — " +
+      "cookies may not work due to IP binding. The 5-layer fallback chain will " +
+      "attempt download via InnerTube API / Playwright if cookies fail."
+    );
   }
 
   // Handle video sources based on type
