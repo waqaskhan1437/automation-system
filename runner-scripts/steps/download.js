@@ -190,11 +190,6 @@ function getBrowserCookieFallbacks() {
     return configured.split(',').map((item) => item.trim()).filter(Boolean);
   }
 
-  // Playwright Chromium is available on GitHub Actions runner (installed in workflow)
-  if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
-    return ['chromium'];
-  }
-
   if (process.env.RUNNER_EXECUTION_MODE === 'local') {
     return ['firefox', 'chrome', 'edge'];
   }
@@ -213,10 +208,12 @@ function buildJsRuntimesArgs() {
   // --remote-components ejs:github: downloads/downloads the EJS solver scripts from
   //   GitHub (if not already cached from the workflow pre-download step).
   // Both flags were introduced in yt-dlp 2025.x and are stable as of 2026.
-  if (commandExists('node')) {
-    return ['--remote-components', 'ejs:github', '--js-runtimes', 'node'];
+  const hasNode = commandExists('node');
+  if (!hasNode) {
+    console.warn('[DOWNLOAD] Node.js not found via which/where — JS runtime may be unavailable for n-challenge solving');
+    return [];
   }
-  return [];
+  return ['--remote-components', 'ejs:github', '--js-runtimes', 'node'];
 }
 
 function runYtDlpWithArgs(ytDlp, args, outFile) {
@@ -262,7 +259,7 @@ const runYtDlpDownload = wrapSyncWithRateLimit(function runYtDlpDownloadInner(no
     const ytArgs = [...baseArgs, normalizedSource];
     runYtDlpWithArgs(ytDlp, ytArgs, outFile);
   } catch (error) {
-    if (lastError && isAuthLikeDownloadError(error)) {
+    if (lastError && isAuthLikeDownloadError(lastError)) {
       throw new Error(`${error.message}. Browser cookie fallback also failed: ${lastError.message}`);
     }
     throw error;
@@ -796,6 +793,22 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
         'Referer': 'https://www.youtube.com/',
       };
 
+      // Inject cookies for authenticated requests (needed for private/age-restricted videos)
+      const cookieText = readServerCookieFile(sourceUrl);
+      if (cookieText) {
+        const { entries } = require('./cookie-files') || { entries: [] };
+        // Build Cookie header from Netscape file
+        const cookieLines = cookieText.split(/\r?\n/).filter(l => l && !l.startsWith('#'));
+        const cookiePairs = [];
+        for (const line of cookieLines) {
+          const parts = line.split('\t');
+          if (parts.length >= 7) cookiePairs.push(`${parts[5]}=${parts.slice(6).join('\t')}`);
+        }
+        if (cookiePairs.length > 0) {
+          headers['Cookie'] = cookiePairs.join('; ');
+        }
+      }
+
       if (client.androidSdkVersion) {
         headers['X-Goog-Visitor-Id'] = '';
       }
@@ -827,22 +840,41 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
       const sd = json.streamingData;
       let bestFormat = null;
 
+      // Helper: extract URL from format, handling cipher/signatureCipher if needed
+      function resolveFormatUrl(fmt) {
+        if (fmt.url) return fmt.url;
+        // Try to extract URL from cipher
+        const cipherText = fmt.signatureCipher || fmt.cipher;
+        if (!cipherText) return null;
+        const params = new URLSearchParams(cipherText);
+        const urlParam = params.get('url');
+        const sParam = params.get('s');
+        if (urlParam && sParam) {
+          // For properly signed URLs we'd need to decrypt the signature
+          // yt-dlp handles this internally; for our raw curl approach we skip ciphered
+          console.log(`[DOWNLOAD] Format has signatureCipher (itag=${fmt.itag}) — skipping, will fall back to yt-dlp`);
+        }
+        return urlParam || null;
+      }
+
       if (sd.formats && sd.formats.length > 0) {
-        const combined = sd.formats.filter(f => f.url && f.mimeType?.includes('video/mp4'));
+        const combined = sd.formats.filter(f => resolveFormatUrl(f) && f.mimeType?.includes('video/mp4'));
         if (combined.length > 0) {
           bestFormat = combined.sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+          bestFormat.url = resolveFormatUrl(bestFormat);
           console.log(`[DOWNLOAD] Found combined format: itag=${bestFormat.itag} ${bestFormat.qualityLabel || bestFormat.mimeType}`);
         }
       }
 
       if (!bestFormat && sd.adaptiveFormats && sd.adaptiveFormats.length > 0) {
-        const videoOnly = sd.adaptiveFormats.filter(f => f.url && f.mimeType?.includes('video/mp4'));
+        const videoOnly = sd.adaptiveFormats.filter(f => resolveFormatUrl(f) && f.mimeType?.includes('video/mp4'));
         if (videoOnly.length > 0) {
           bestFormat = videoOnly.sort((a, b) => (b.height || 0) - (a.height || 0))[0];
           console.log(`[DOWNLOAD] Found adaptive video format: itag=${bestFormat.itag} ${bestFormat.qualityLabel || bestFormat.mimeType}`);
 
-          const audioFormat = sd.adaptiveFormats.find(f => f.url && f.mimeType?.includes('audio/mp4'));
+          const audioFormat = sd.adaptiveFormats.find(f => resolveFormatUrl(f) && f.mimeType?.includes('audio/mp4'));
           if (audioFormat) {
+            audioFormat.url = resolveFormatUrl(audioFormat);
             console.log(`[DOWNLOAD] Found audio format: itag=${audioFormat.itag}`);
             const audioFile = outFile.replace('.mp4', '-audio.m4a');
             runCommand('curl', [
@@ -942,6 +974,7 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        '--disable-gpu',
         '--disable-blink-features=AutomationControlled',
       ],
     });
@@ -962,38 +995,79 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
       // Inject server cookies into browser so we're authenticated
       await injectServerCookiesToBrowser(context, sourceUrl);
 
-      // Navigate to YouTube video page
+      // Navigate to YouTube video page — wait for full page + player JS to load
       console.log(`[DOWNLOAD] Navigating to YouTube video...`);
-      await page.goto(sourceUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
+      const response = await page.goto(sourceUrl, {
+        waitUntil: 'networkidle',
+        timeout: 45000,
       });
 
-      // Wait for video player to load
-      await page.waitForTimeout(3000);
+      if (!response || !response.ok()) {
+        throw new Error(`YouTube returned HTTP ${response ? response.status() : 'no response'} — may be blocked`);
+      }
 
-      // Try to get the video URL via the page's video element
-      const videoUrl = await page.evaluate(() => {
-        const video = document.querySelector('video');
-        if (video && video.src) return video.src;
-        // Try ytplayer config
-        try {
-          const config = JSON.parse(document.querySelector('yt-player')?.getAttribute('config') || '{}');
-          if (config?.args?.url) return config.args.url;
-        } catch {}
-        // Try ytInitialPlayerResponse
-        try {
-          const ytData = JSON.parse(document.querySelector('script#player-response')?.textContent || '{}');
-          const formats = ytData?.streamingData?.formats || [];
-          const adaptive = ytData?.streamingData?.adaptiveFormats || [];
-          const all = [...formats, ...adaptive].filter(f => f.url);
-          if (all.length > 0) return all.sort((a, b) => (b.height || 0) - (a.height || 0))[0].url;
-        } catch {}
-        return null;
-      });
+      // Wait for the video player element to appear (up to 15s)
+      try {
+        await page.waitForSelector('video', { timeout: 15000 });
+        console.log('[DOWNLOAD] Video player element detected');
+      } catch {
+        console.log('[DOWNLOAD] Video player element not found within timeout, continuing...');
+      }
+
+      // Extra settle time for JS player to initialize
+      await page.waitForTimeout(2000);
+
+      // Try to extract video URL from page using multiple methods
+      let videoUrl = null;
+      let extractedVia = null;
+
+      // Method 1: video element src
+      videoUrl = await page.evaluate(() => document.querySelector('video')?.src || null);
+      if (videoUrl) extractedVia = 'video.src';
+
+      // Method 2: ytplayer config
+      if (!videoUrl) {
+        videoUrl = await page.evaluate(() => {
+          try {
+            const config = JSON.parse(document.querySelector('yt-player')?.getAttribute('config') || '{}');
+            return config?.args?.url || null;
+          } catch { return null; }
+        });
+        if (videoUrl) extractedVia = 'ytplayer config';
+      }
+
+      // Method 3: ytInitialPlayerResponse (most reliable for YouTube)
+      if (!videoUrl) {
+        const ytResult = await page.evaluate(() => {
+          try {
+            const text = document.querySelector('script#player-response')?.textContent || '';
+            const ytData = JSON.parse(text);
+            const all = [
+              ...(ytData?.streamingData?.formats || []),
+              ...(ytData?.streamingData?.adaptiveFormats || []),
+            ];
+            // Prefer formats with direct URL
+            const withUrl = all.filter(f => f.url);
+            if (withUrl.length > 0) {
+              return { url: withUrl.sort((a, b) => (b.height || 0) - (a.height || 0))[0].url, method: 'direct' };
+            }
+            // Try signatureCipher / cipher (need to decrypt)
+            const ciphered = all.filter(f => f.signatureCipher || f.cipher);
+            if (ciphered.length > 0) return { url: null, method: 'ciphered' };
+            return { url: null, method: 'none' };
+          } catch { return { url: null, method: 'error' }; }
+        });
+        if (ytResult.url) {
+          videoUrl = ytResult.url;
+          extractedVia = 'ytInitialPlayerResponse';
+        }
+        if (!ytResult.url && ytResult.method === 'ciphered') {
+          console.log('[DOWNLOAD] Found cipher-protected URLs — trying yt-dlp with browser cookies as fallback');
+        }
+      }
 
       if (videoUrl && videoUrl.startsWith('http')) {
-        console.log(`[DOWNLOAD] Found video URL via browser extraction, downloading...`);
+        console.log(`[DOWNLOAD] Found video URL via ${extractedVia}, downloading with curl...`);
         const cookies = await context.cookies();
         const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
 
@@ -1012,11 +1086,43 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
           console.log(`[DOWNLOAD] YouTube browser download successful (${(fs.statSync(outFile).size / 1024 / 1024).toFixed(2)} MB)`);
           return;
         }
+        console.log(`[DOWNLOAD] Curl download produced small file, trying yt-dlp as fallback...`);
       }
 
-      // Alternative: try to get the download URL from the page
-      console.log(`[DOWNLOAD] Direct video URL not found, trying yt-dlp inside page...`);
-      throw new Error('Could not extract video URL from browser page');
+      // Fallback: export cookies from browser and use yt-dlp with them
+      // This handles cipher-protected URLs and cases where direct URL extraction fails
+      console.log(`[DOWNLOAD] Exporting browser cookies and trying yt-dlp...`);
+      const browserCookies = await context.cookies();
+      const netscapeLines = browserCookies.map(c => {
+        const domain = c.domain.startsWith('.') ? c.domain : `.${c.domain}`;
+        const expiry = c.expires ? Math.floor(new Date(c.expires).getTime() / 1000) : 0;
+        const includeSub = 'TRUE';
+        const secure = c.secure ? 'TRUE' : 'FALSE';
+        const httpOnly = c.httpOnly ? 'TRUE' : 'FALSE';
+        return `${domain}\t${includeSub}\t${c.path}\t${secure}\t${expiry}\t${httpOnly}\t${c.name}\t${c.value}`;
+      }).join('\n');
+      const browserCookieFile = path.join(path.dirname(outFile) || OUTPUT_DIR, 'browser-cookies.txt');
+      const header = '# Netscape HTTP Cookie File\n# Exported from browser\n';
+      fs.writeFileSync(browserCookieFile, `${header}${netscapeLines}\n`, 'utf8');
+      console.log(`[DOWNLOAD] Wrote ${browserCookies.length} browser cookies to ${browserCookieFile}`);
+
+      const ytDlp = resolveYtDlpRunner();
+      if (ytDlp) {
+        clearDownloadArtifacts(outFile);
+        const ytArgs = [
+          ...buildYtDlpArgs(ytDlp, outFile),
+          '--cookies', browserCookieFile,
+          sourceUrl,
+        ];
+        console.log('[DOWNLOAD] Running yt-dlp with browser-exported cookies...');
+        runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
+        validateOutput(outFile);
+        console.log(`[DOWNLOAD] YouTube download successful via yt-dlp with browser cookies`);
+        try { fs.unlinkSync(browserCookieFile); } catch {}
+        return;
+      }
+
+      throw new Error('Could not extract video URL from browser page and no yt-dlp available as fallback');
     } catch (error) {
       lastError = error;
       console.log(`[DOWNLOAD] YouTube browser attempt ${attempt}/${maxAttempts} failed: ${error.message}`);
@@ -1051,6 +1157,8 @@ function readServerCookieFile(sourceUrl) {
   return null;
 }
 
+const HTTPONLY_COOKIE_NAMES = new Set(['HSID', 'SSID', 'SID', 'SAPISID', 'APISID', 'LOGIN_INFO', 'PREF', 'YSC', 'VISITOR_INFO1_LIVE']);
+
 /**
  * Parse Netscape cookie file and return an array of Playwright-compatible cookie objects.
  */
@@ -1066,14 +1174,15 @@ function parseNetscapeCookiesForPlaywright(rawText) {
     const expires = Number.parseInt(expiresRaw.trim(), 10);
     const value = valueParts.join('\t').trim();
     if (!domain || !path || !name) continue;
+    const isAuthDomain = /google\.com|youtube\.com/i.test(domain);
     const cookie = {
       name,
       value,
       domain: domain.startsWith('.') ? domain.slice(1) : domain,
       path,
-      secure: true,
-      httpOnly: false,
-      sameSite: 'Lax' ,
+      secure: isAuthDomain,
+      httpOnly: HTTPONLY_COOKIE_NAMES.has(name),
+      sameSite: isAuthDomain ? 'None' : 'Lax',
     };
     if (Number.isFinite(expires) && expires > 0) {
       cookie.expires = expires;
