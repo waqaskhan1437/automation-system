@@ -165,14 +165,7 @@ function buildYtDlpArgs(ytDlp, outFile, extraFlags) {
     '--extractor-retries', '3',
     '--merge-output-format',
     'mp4',
-    '--user-agent',
-    getNextUserAgent(),
     '--no-check-formats',
-    // Try android client first (avoids PoToken requirement in 2026).
-    // web/mweb require PoToken which is unavailable on ephemeral runners.
-    // If android fails, runYtDlpDownloadInner retries with web client.
-    '--extractor-args',
-    'youtube:player_client=android',
     '-f',
     'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
     '-o',
@@ -180,6 +173,28 @@ function buildYtDlpArgs(ytDlp, outFile, extraFlags) {
   ];
   if (extraFlags) args.push(...extraFlags);
   return args;
+}
+
+function buildYouTubeClientArgs(ytDlp, outFile, clientName, cookiesFile) {
+  // Build yt-dlp args for a specific YouTube client.
+  // clientName: 'android' (default, no PoToken), 'web' (needs PoToken)
+  // Unlike buildYtDlpArgs, this does NOT set --user-agent — yt-dlp handles it
+  // per client. A mismatched UA causes YouTube to return bot challenges.
+  const c = clientName || 'android';
+  return [
+    ...ytDlp.baseArgs,
+    ...buildJsRuntimesArgs(),
+    '--force-overwrites', '--no-part', '--no-playlist', '--no-cache-dir',
+    '--socket-timeout', '20',
+    '--retries', '3', '--fragment-retries', '3',
+    '--file-access-retries', '3', '--extractor-retries', '3',
+    '--merge-output-format', 'mp4',
+    '--no-check-formats',
+    '--extractor-args', `youtube:player_client=${c}`,
+    ...(cookiesFile ? ['--cookies', cookiesFile] : []),
+    '-f', 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
+    '-o', outFile,
+  ];
 }
 
 function getBrowserCookieFallbacks() {
@@ -236,35 +251,19 @@ const runYtDlpDownload = wrapSyncWithRateLimit(function runYtDlpDownloadInner(no
   }
 
   const cookiesFile = resolveCookiesFile(normalizedSource);
-  const baseArgs = buildYtDlpArgs(ytDlp, outFile);
 
   if (cookiesFile) {
-    // Try android client first (no PoToken required, works for most public videos)
-    const androidArgs = [...baseArgs, '--cookies', cookiesFile, normalizedSource];
+    // Try android client first (no PoToken required).
+    // No custom --user-agent — yt-dlp sets the right UA per client.
     console.log('[DOWNLOAD] Using cookie file for YouTube authentication (android client)...');
     try {
+      const androidArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android', cookiesFile), normalizedSource];
       runYtDlpWithArgs(ytDlp, androidArgs, outFile);
       return;
     } catch (error) {
-      // If android fails with auth/bot error, retry with web client + PoToken bypass
       if (isAuthLikeDownloadError(error)) {
         console.log('[DOWNLOAD] Android client auth failed, retrying with web client...');
-        const webArgs = [
-          ...ytDlp.baseArgs,
-          ...buildJsRuntimesArgs(),
-          '--force-overwrites', '--no-part', '--no-playlist', '--no-cache-dir',
-          '--socket-timeout', '20',
-          '--retries', '3', '--fragment-retries', '3',
-          '--file-access-retries', '3', '--extractor-retries', '3',
-          '--merge-output-format', 'mp4',
-          '--user-agent', getNextUserAgent(),
-          '--no-check-formats',
-          '--extractor-args', 'youtube:player_client=web',
-          '--cookies', cookiesFile,
-          '-f', 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
-          '-o', outFile,
-          normalizedSource,
-        ];
+        const webArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'web', cookiesFile), normalizedSource];
         runYtDlpWithArgs(ytDlp, webArgs, outFile);
         return;
       }
@@ -276,7 +275,7 @@ const runYtDlpDownload = wrapSyncWithRateLimit(function runYtDlpDownloadInner(no
   let lastError = null;
   for (const browser of browserFallbacks) {
     try {
-      const ytArgs = [...baseArgs, '--cookies-from-browser', browser, normalizedSource];
+      const ytArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android'), '--cookies-from-browser', browser, normalizedSource];
       console.log(`[DOWNLOAD] No server cookie file found; trying local browser cookies from ${browser}`);
       runYtDlpWithArgs(ytDlp, ytArgs, outFile);
       return;
@@ -287,7 +286,7 @@ const runYtDlpDownload = wrapSyncWithRateLimit(function runYtDlpDownloadInner(no
   }
 
   try {
-    const ytArgs = [...baseArgs, normalizedSource];
+    const ytArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android'), normalizedSource];
     runYtDlpWithArgs(ytDlp, ytArgs, outFile);
   } catch (error) {
     if (lastError && isAuthLikeDownloadError(lastError)) {
@@ -1141,22 +1140,7 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
       if (ytDlp) {
         // Try android client first (no PoToken required)
         clearDownloadArtifacts(outFile);
-        const androidArgs = [
-          ...ytDlp.baseArgs,
-          ...buildJsRuntimesArgs(),
-          '--force-overwrites', '--no-part', '--no-playlist', '--no-cache-dir',
-          '--socket-timeout', '20',
-          '--retries', '3', '--fragment-retries', '3',
-          '--file-access-retries', '3', '--extractor-retries', '3',
-          '--merge-output-format', 'mp4',
-          '--user-agent', getNextUserAgent(),
-          '--no-check-formats',
-          '--extractor-args', 'youtube:player_client=android',
-          '--cookies', browserCookieFile,
-          '-f', 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
-          '-o', outFile,
-          sourceUrl,
-        ];
+        const androidArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android', browserCookieFile), sourceUrl];
         console.log('[DOWNLOAD] Running yt-dlp with browser-exported cookies (android client)...');
         try {
           runCommand(ytDlp.command, androidArgs, ytDlp.label, 480000);
@@ -1167,7 +1151,7 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
         } catch (error) {
           if (isAuthLikeDownloadError(error)) {
             console.log('[DOWNLOAD] Android client failed, retrying with web client...');
-            const webArgs = androidArgs.map(function(a) { return a === 'youtube:player_client=android' ? 'youtube:player_client=web' : a; });
+            const webArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'web', browserCookieFile), sourceUrl];
             clearDownloadArtifacts(outFile);
             runCommand(ytDlp.command, webArgs, ytDlp.label, 480000);
             validateOutput(outFile);
@@ -1463,17 +1447,16 @@ async function downloadYouTubeWithFullChain(sourceUrl, outFile) {
     console.log(`[DOWNLOAD] [LAYER 1] FAILED: ${category} - ${error.message}`);
   }
 
-  // LAYER 2: yt-dlp with browser cookies (for local runners)
+  // LAYER 2: yt-dlp with browser cookies (for local runners with browser profiles)
   const browserFallbacks = getBrowserCookieFallbacks();
   if (browserFallbacks.length > 0) {
     const ytDlp = resolveYtDlpRunner();
     if (ytDlp) {
-      const baseArgs = buildYtDlpArgs(ytDlp, outFile);
       for (const browser of browserFallbacks) {
         try {
           console.log(`[DOWNLOAD] [LAYER 2/5] yt-dlp with browser cookies (${browser})...`);
           clearDownloadArtifacts(outFile);
-          const ytArgs = [...baseArgs, '--cookies-from-browser', browser, normalizedSource];
+          const ytArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android'), '--cookies-from-browser', browser, normalizedSource];
           runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
           validateOutput(outFile);
           console.log(`[DOWNLOAD] [LAYER 2] SUCCESS via ${browser}`);
@@ -1493,7 +1476,7 @@ async function downloadYouTubeWithFullChain(sourceUrl, outFile) {
     const ytDlp = resolveYtDlpRunner();
     if (ytDlp) {
       clearDownloadArtifacts(outFile);
-      const ytArgs = [...buildYtDlpArgs(ytDlp, outFile), normalizedSource];
+      const ytArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android'), normalizedSource];
       runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
       validateOutput(outFile);
       console.log('[DOWNLOAD] [LAYER 3] SUCCESS');
