@@ -197,7 +197,10 @@ export default function VideoSourceSettings() {
       const response = await fetch("/api/settings/video-sources/refresh-secrets", { method: "POST" });
       const result = await response.json();
       if (!result.success) {
-        throw new Error(result.error || (result.data?.failed?.length ? `Sync failed: ${result.data.failed.map((f: { name: string }) => f.name).join(", ")}` : "Refresh failed"));
+        const failedDetails = result.data?.failed?.length
+          ? result.data.failed.map((f: { name: string; error: string }) => `${f.name}: ${f.error}`).join(" | ")
+          : null;
+        throw new Error(result.error || (failedDetails ? `Sync failed: ${failedDetails}` : "Refresh failed"));
       }
       const updated: string[] = result.data?.updated || [];
       const deleted: string[] = result.data?.deleted || [];
