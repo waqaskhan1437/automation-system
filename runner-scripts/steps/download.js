@@ -150,8 +150,8 @@ function readPositiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function buildYtDlpArgs(ytDlp, outFile) {
-  return [
+function buildYtDlpArgs(ytDlp, outFile, extraFlags) {
+  const args = [
     ...ytDlp.baseArgs,
     ...buildJsRuntimesArgs(),
     '--force-overwrites',
@@ -168,13 +168,18 @@ function buildYtDlpArgs(ytDlp, outFile) {
     '--user-agent',
     getNextUserAgent(),
     '--no-check-formats',
+    // Try android client first (avoids PoToken requirement in 2026).
+    // web/mweb require PoToken which is unavailable on ephemeral runners.
+    // If android fails, runYtDlpDownloadInner retries with web client.
     '--extractor-args',
-    'youtube:player_client=android,web',
+    'youtube:player_client=android',
     '-f',
     'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
     '-o',
     outFile,
   ];
+  if (extraFlags) args.push(...extraFlags);
+  return args;
 }
 
 function getBrowserCookieFallbacks() {
@@ -234,12 +239,37 @@ const runYtDlpDownload = wrapSyncWithRateLimit(function runYtDlpDownloadInner(no
   const baseArgs = buildYtDlpArgs(ytDlp, outFile);
 
   if (cookiesFile) {
-    const ytArgs = [...baseArgs];
-    ytArgs.push('--cookies', cookiesFile);
-    console.log('[DOWNLOAD] Using cookie file for YouTube authentication');
-    ytArgs.push(normalizedSource);
-    runYtDlpWithArgs(ytDlp, ytArgs, outFile);
-    return;
+    // Try android client first (no PoToken required, works for most public videos)
+    const androidArgs = [...baseArgs, '--cookies', cookiesFile, normalizedSource];
+    console.log('[DOWNLOAD] Using cookie file for YouTube authentication (android client)...');
+    try {
+      runYtDlpWithArgs(ytDlp, androidArgs, outFile);
+      return;
+    } catch (error) {
+      // If android fails with auth/bot error, retry with web client + PoToken bypass
+      if (isAuthLikeDownloadError(error)) {
+        console.log('[DOWNLOAD] Android client auth failed, retrying with web client...');
+        const webArgs = [
+          ...ytDlp.baseArgs,
+          ...buildJsRuntimesArgs(),
+          '--force-overwrites', '--no-part', '--no-playlist', '--no-cache-dir',
+          '--socket-timeout', '20',
+          '--retries', '3', '--fragment-retries', '3',
+          '--file-access-retries', '3', '--extractor-retries', '3',
+          '--merge-output-format', 'mp4',
+          '--user-agent', getNextUserAgent(),
+          '--no-check-formats',
+          '--extractor-args', 'youtube:player_client=web',
+          '--cookies', cookiesFile,
+          '-f', 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
+          '-o', outFile,
+          normalizedSource,
+        ];
+        runYtDlpWithArgs(ytDlp, webArgs, outFile);
+        return;
+      }
+      throw error;
+    }
   }
 
   const browserFallbacks = isYouTubeUrl(normalizedSource) ? getBrowserCookieFallbacks() : [];
@@ -1109,18 +1139,44 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
 
       const ytDlp = resolveYtDlpRunner();
       if (ytDlp) {
+        // Try android client first (no PoToken required)
         clearDownloadArtifacts(outFile);
-        const ytArgs = [
-          ...buildYtDlpArgs(ytDlp, outFile),
+        const androidArgs = [
+          ...ytDlp.baseArgs,
+          ...buildJsRuntimesArgs(),
+          '--force-overwrites', '--no-part', '--no-playlist', '--no-cache-dir',
+          '--socket-timeout', '20',
+          '--retries', '3', '--fragment-retries', '3',
+          '--file-access-retries', '3', '--extractor-retries', '3',
+          '--merge-output-format', 'mp4',
+          '--user-agent', getNextUserAgent(),
+          '--no-check-formats',
+          '--extractor-args', 'youtube:player_client=android',
           '--cookies', browserCookieFile,
+          '-f', 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
+          '-o', outFile,
           sourceUrl,
         ];
-        console.log('[DOWNLOAD] Running yt-dlp with browser-exported cookies...');
-        runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
-        validateOutput(outFile);
-        console.log(`[DOWNLOAD] YouTube download successful via yt-dlp with browser cookies`);
-        try { fs.unlinkSync(browserCookieFile); } catch {}
-        return;
+        console.log('[DOWNLOAD] Running yt-dlp with browser-exported cookies (android client)...');
+        try {
+          runCommand(ytDlp.command, androidArgs, ytDlp.label, 480000);
+          validateOutput(outFile);
+          console.log(`[DOWNLOAD] YouTube download successful via yt-dlp with browser cookies`);
+          try { fs.unlinkSync(browserCookieFile); } catch {}
+          return;
+        } catch (error) {
+          if (isAuthLikeDownloadError(error)) {
+            console.log('[DOWNLOAD] Android client failed, retrying with web client...');
+            const webArgs = androidArgs.map(function(a) { return a === 'youtube:player_client=android' ? 'youtube:player_client=web' : a; });
+            clearDownloadArtifacts(outFile);
+            runCommand(ytDlp.command, webArgs, ytDlp.label, 480000);
+            validateOutput(outFile);
+            console.log(`[DOWNLOAD] YouTube download successful via yt-dlp with browser cookies (web client)`);
+            try { fs.unlinkSync(browserCookieFile); } catch {}
+            return;
+          }
+          throw error;
+        }
       }
 
       throw new Error('Could not extract video URL from browser page and no yt-dlp available as fallback');
