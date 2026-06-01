@@ -2,6 +2,8 @@ import { seal } from "tweetsodium";
 import { GithubSettings } from "../types";
 import { githubHeaders } from "../utils";
 
+const GITHUB_SECRET_MAX_BYTES = 48 * 1024; // 48 KB limit
+
 export interface RepoSecretSyncResult {
   attempted: boolean;
   success: boolean;
@@ -43,46 +45,79 @@ async function putRepoSecret(
   secretValue: string,
   publicKey: { key: string; key_id: string }
 ): Promise<void> {
-  const encryptedBytes = seal(
-    new TextEncoder().encode(secretValue),
-    decodeBase64(publicKey.key)
-  );
+  const encoder = new TextEncoder();
+  let rawBytes = encoder.encode(secretValue);
 
-  const response = await fetch(
-    `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/secrets/${secretName}`,
-    {
-      method: "PUT",
-      headers: {
-        ...githubHeaders(githubSettings.pat_token),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        encrypted_value: encodeBase64(encryptedBytes),
-        key_id: publicKey.key_id,
-      }),
-    }
-  );
+  const isOversized = rawBytes.length > GITHUB_SECRET_MAX_BYTES;
+  if (isOversized) {
+    const kept = GITHUB_SECRET_MAX_BYTES - 128;
+    const truncated = secretValue.slice(0, kept);
+    rawBytes = encoder.encode(truncated);
+    console.warn(`[github-secrets] ${secretName} value was ${rawBytes.length} bytes (limit ${GITHUB_SECRET_MAX_BYTES}) — truncated to ${kept} bytes. Some cookies may be missing.`);
+  }
+
+  const encryptedBytes = seal(rawBytes, decodeBase64(publicKey.key));
+
+  async function doPut(): Promise<Response> {
+    return fetch(
+      `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/secrets/${secretName}`,
+      {
+        method: "PUT",
+        headers: {
+          ...githubHeaders(githubSettings.pat_token),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          encrypted_value: encodeBase64(encryptedBytes),
+          key_id: publicKey.key_id,
+        }),
+      }
+    );
+  }
+
+  let response = await doPut();
+
+  // Retry once on 5xx (transient server errors)
+  if (response.status >= 500) {
+    console.warn(`[github-secrets] ${secretName} got ${response.status}, retrying once...`);
+    await new Promise((r) => setTimeout(r, 2000));
+    response = await doPut();
+  }
 
   if (!response.ok) {
-    throw new Error(`GitHub secret update failed (${response.status})`);
+    const body = await response.text().catch(() => "");
+    const detail = body ? ` — ${body.slice(0, 200)}` : "";
+    throw new Error(`GitHub secret update failed (${response.status})${detail}`);
   }
 }
 
 async function deleteRepoSecret(githubSettings: GithubSettings, secretName: string): Promise<void> {
-  const response = await fetch(
-    `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/secrets/${secretName}`,
-    {
-      method: "DELETE",
-      headers: githubHeaders(githubSettings.pat_token),
-    }
-  );
+  async function doDelete(): Promise<Response> {
+    return fetch(
+      `https://api.github.com/repos/${githubSettings.repo_owner}/${githubSettings.repo_name}/actions/secrets/${secretName}`,
+      {
+        method: "DELETE",
+        headers: githubHeaders(githubSettings.pat_token),
+      }
+    );
+  }
+
+  let response = await doDelete();
 
   if (response.status === 404) {
     return;
   }
 
+  if (response.status >= 500) {
+    console.warn(`[github-secrets] DELETE ${secretName} got ${response.status}, retrying once...`);
+    await new Promise((r) => setTimeout(r, 2000));
+    response = await doDelete();
+  }
+
   if (!response.ok) {
-    throw new Error(`GitHub secret delete failed (${response.status})`);
+    const body = await response.text().catch(() => "");
+    const detail = body ? ` — ${body.slice(0, 200)}` : "";
+    throw new Error(`GitHub secret delete failed (${response.status})${detail}`);
   }
 }
 

@@ -178,6 +178,9 @@ export default function VideoSourceSettings() {
         throw new Error(result.error || "Failed to save settings");
       }
       setSaved(true);
+      if (result.warning) {
+        setSaveError(result.warning);
+      }
       setTimeout(() => setSaved(false), 3000);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Failed to save settings");
@@ -249,7 +252,7 @@ export default function VideoSourceSettings() {
     }
     if (!verdict) return null;
     const tone = verdict.inconclusive
-      ? { border: "border-amber-500/20", bg: "bg-amber-500/10", text: "text-amber-200", label: "Inconclusive" }
+      ? { border: "border-amber-500/20", bg: "bg-amber-500/10", text: "text-amber-200", label: "Inconclusive (may still work on runner)" }
       : verdict.signed_in
         ? { border: "border-emerald-500/20", bg: "bg-emerald-500/10", text: "text-emerald-300", label: "Signed in" }
         : { border: "border-red-500/20", bg: "bg-red-500/10", text: "text-red-300", label: "Not signed in" };
@@ -258,6 +261,9 @@ export default function VideoSourceSettings() {
         <div className="font-medium">{tone.label}</div>
         <div>{verdict.reason}</div>
         {verdict.account_hint && <div>Account: <span className="font-mono">{verdict.account_hint}</span></div>}
+        {verdict.inconclusive && (
+          <div className="mt-1 text-xs opacity-70">Cookies runner (GitHub Actions / local) par kaam karengi chahe worker datacenter IP verify na kar paye. Save karke proceed karein.</div>
+        )}
       </div>
     );
   };

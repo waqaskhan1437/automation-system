@@ -396,19 +396,25 @@ export async function handleSettingsRoutes(
 
         // Auto-sync cookies to GitHub Secrets immediately
         const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
+        let syncWarning: string | null = null;
         if (githubSettings?.pat_token) {
           const syncResult = await syncVideoSourceSecretsToGithub(githubSettings, {
             youtubeCookies: normalizedYoutubeCookies,
             googlePhotosCookies: normalizedGooglePhotosCookies,
           });
           if (!syncResult.success && syncResult.failed.length > 0) {
-            console.warn(`[settings] GitHub secret sync had failures: ${syncResult.failed.map(f => `${f.name}: ${f.error}`).join(", ")}`);
+            syncWarning = `GitHub sync warnings: ${syncResult.failed.map(f => `${f.name}: ${f.error}`).join(", ")}`;
+            console.warn(`[settings] ${syncWarning}`);
           } else if (syncResult.updated.length > 0) {
             console.log(`[settings] GitHub secrets synced: ${syncResult.updated.join(", ")}`);
           }
         }
 
-        return jsonResponse({ success: true, message: "Video source settings saved" });
+        return jsonResponse({
+          success: true,
+          message: "Video source settings saved",
+          ...(syncWarning ? { warning: syncWarning } : {}),
+        });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : "Failed to save video source settings";
         return jsonResponse({ success: false, error: errorMsg }, 400);
@@ -500,9 +506,13 @@ export async function handleSettingsRoutes(
         googlePhotosCookies: videoSourceSettings?.google_photos_cookies || null,
       });
 
+      const failedDetails = syncResult.failed.length > 0
+        ? syncResult.failed.map((f) => `${f.name}: ${f.error}`).join(" | ")
+        : null;
+
       return jsonResponse({
         success: syncResult.success,
-        message: syncResult.message,
+        message: failedDetails ? `${syncResult.message} Issues: ${failedDetails}` : syncResult.message,
         data: { updated: syncResult.updated, deleted: syncResult.deleted, failed: syncResult.failed },
       });
     } catch (error) {
