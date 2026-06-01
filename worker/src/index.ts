@@ -31,7 +31,6 @@ import { handleApiKeysRoutes } from "./routes/api-keys";
 import { handleAiAccessRoutes } from "./routes/ai-access";
 import { handleWebhookRoutes } from "./routes/webhooks";
 import { handleYoutubeExtractRoutes } from "./routes/youtube-extract";
-import { handleYoutubeQueueRoutes } from "./routes/youtube-queue";
 import { formatDatabaseDate, markAutomationRunCompleted, processDueAutomations, processPendingUploads, syncStaleRunningJobs } from "./services/automation-scheduler";
 import { getAdminEmail, getAdminPassword, getAuthContext, issueAdminAccessToken, requireAuth, logApiRequest } from "./services/auth";
 import { verifyWorkflowRuntimeConfigToken } from "./services/github";
@@ -1035,41 +1034,6 @@ export default {
          requestSize
        );
      }
-
-      // YouTube Queue management
-      if (path.startsWith("/api/youtube-queue")) {
-        const authContext = await requireAuth(request, env);
-        if (authContext instanceof Response) {
-          const durationMs = Date.now() - startTime;
-          await logApiRequest(
-            env,
-            null,
-            null,
-            path,
-            method,
-            401,
-            ipAddress,
-            userAgent,
-            requestSize,
-            0,
-            durationMs,
-            "Unauthorized"
-          );
-          return authContext;
-        }
-
-        return handleRouteWithAuditLog(
-          env,
-          () => handleYoutubeQueueRoutes(request, env, path, authContext),
-          authContext,
-          path,
-          method,
-          startTime,
-          ipAddress,
-          userAgent,
-          requestSize
-        );
-      }
 
       // YouTube download URL extraction (via ytdown.to proxy)
       if (path.startsWith("/api/extract")) {
