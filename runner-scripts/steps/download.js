@@ -841,14 +841,13 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
         }
       };
 
+      const apiKey = INNERTUBE_API_KEYS[client.clientName] || INNERTUBE_API_KEYS.WEB_CREATOR;
+
       const headers = {
         'Content-Type': 'application/json',
         'User-Agent': client.userAgent,
         'Origin': 'https://www.youtube.com',
         'Referer': 'https://www.youtube.com/',
-        'X-Goog-API-Key': INNERTUBE_API_KEYS[client.clientName] || INNERTUBE_API_KEYS.WEB_CREATOR,
-        'X-YouTube-Client-Name': String(client.clientName === 'ANDROID' ? 3 : client.clientName === 'IOS' ? 5 : client.clientName === 'TVHTML5_SIMPLY_EMBEDDED_PLAYER' ? 85 : 87),
-        'X-YouTube-Client-Version': client.clientVersion,
         'Accept': '*/*',
       };
 
@@ -856,7 +855,7 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
         headers['Cookie'] = cookieHeader;
       }
 
-      const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload)
