@@ -194,7 +194,10 @@ export default function VideoSourceSettings() {
     setRefreshResult("");
     setRefreshError("");
     try {
-      const response = await fetch("/api/settings/video-sources/refresh-secrets", { method: "POST" });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const response = await fetch("/api/settings/video-sources/refresh-secrets", { method: "POST", signal: controller.signal });
+      clearTimeout(timeoutId);
       const result = await response.json();
       if (!result.success) {
         const failedDetails = result.data?.failed?.length

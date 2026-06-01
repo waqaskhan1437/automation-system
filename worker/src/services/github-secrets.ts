@@ -2,7 +2,10 @@ import { seal } from "tweetsodium";
 import { GithubSettings } from "../types";
 import { githubHeaders } from "../utils";
 
-const GITHUB_SECRET_MAX_BYTES = 48 * 1024; // 48 KB limit
+// GitHub encrypted_value field has a 64 KB (65536 chars) base64 limit.
+// Base64 expands binary by 4/3 (~33%). Sodium seal adds ~48 bytes overhead.
+// Max raw bytes ≈ 49104. We use 44000 to leave safe margin.
+const GITHUB_SECRET_MAX_RAW_BYTES = 44 * 1024;
 
 export interface RepoSecretSyncResult {
   attempted: boolean;
@@ -47,16 +50,30 @@ async function putRepoSecret(
 ): Promise<void> {
   const encoder = new TextEncoder();
   let rawBytes = encoder.encode(secretValue);
+  const originalLen = rawBytes.length;
 
-  const isOversized = rawBytes.length > GITHUB_SECRET_MAX_BYTES;
-  if (isOversized) {
-    const kept = GITHUB_SECRET_MAX_BYTES - 128;
+  if (rawBytes.length > GITHUB_SECRET_MAX_RAW_BYTES) {
+    const kept = GITHUB_SECRET_MAX_RAW_BYTES;
     const truncated = secretValue.slice(0, kept);
     rawBytes = encoder.encode(truncated);
-    console.warn(`[github-secrets] ${secretName} value was ${rawBytes.length} bytes (limit ${GITHUB_SECRET_MAX_BYTES}) — truncated to ${kept} bytes. Some cookies may be missing.`);
+    console.warn(`[github-secrets] ${secretName} value was ${originalLen} bytes (limit ${GITHUB_SECRET_MAX_RAW_BYTES}) — truncated to ${rawBytes.length} bytes. Some cookies may be missing.`);
   }
 
   const encryptedBytes = seal(rawBytes, decodeBase64(publicKey.key));
+  const encryptedB64 = encodeBase64(encryptedBytes);
+
+  // Safety check: encrypted base64 must be under 64 KB
+  if (encryptedB64.length > 64000) {
+    const factor = 64000 / encryptedB64.length;
+    const newKept = Math.floor(rawBytes.length * factor * 0.95);
+    const truncated = secretValue.slice(0, newKept);
+    rawBytes = encoder.encode(truncated);
+    console.warn(`[github-secrets] ${secretName} encrypted base64 was ${encryptedB64.length} chars — retrying with ${rawBytes.length} raw bytes.`);
+  }
+
+  // Re-encrypt with potentially reduced data
+  const finalEncrypted = seal(rawBytes, decodeBase64(publicKey.key));
+  const finalB64 = encodeBase64(finalEncrypted);
 
   async function doPut(): Promise<Response> {
     return fetch(
@@ -68,7 +85,7 @@ async function putRepoSecret(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          encrypted_value: encodeBase64(encryptedBytes),
+          encrypted_value: finalB64,
           key_id: publicKey.key_id,
         }),
       }
