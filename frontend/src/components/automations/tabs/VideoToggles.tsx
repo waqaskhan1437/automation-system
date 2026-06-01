@@ -138,6 +138,24 @@ export default function VideoToggles({ data, onChange }: Props) {
         </select>
       </ToggleCard>
 
+      {/* YouTube Queue */}
+      <ToggleCard
+        icon={<svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>}
+        title="YouTube Queue"
+        subtitle="Auto pick next"
+        checked={data.youtube_queue_enabled === true}
+        onChange={v => onChange("youtube_queue_enabled", v)}
+        color="indigo"
+      >
+        <p className="text-[10px] text-[#a1a1aa]">
+          Each run picks the next pending URL from your&nbsp;
+          <a href="/youtube-queue" className="text-[#6366f1] hover:underline">
+            YouTube Queue
+          </a>
+          . Fresh download link extracted at run time.
+        </p>
+      </ToggleCard>
+
       {/* Mute Audio */}
       <ToggleCard
         icon={<svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" /></svg>}

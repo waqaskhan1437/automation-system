@@ -4,6 +4,7 @@ import { getImageAspectRatio, prepareImageAutomationRunConfig } from "./image-au
 import { buildStoredPostMetadata, parseSavedPostformeAccounts, resolveScheduledAccounts } from "./post-metadata";
 import { getScopedSettings } from "./user-settings";
 import { parseGhazalTimestamps, createVideoMetadata, processGhazalVideo } from "./ghazal-timestamps";
+import { extractYoutubeDownloadUrl } from "./ytdown-proxy";
 
 
 type ScheduleType = "minutes" | "hourly" | "daily" | "weekly";
@@ -1468,6 +1469,53 @@ export async function triggerAutomationRun(
     console.log(`[TRIGGER] Queue: ${fetchStats.processed_already} processed, ${fetchStats.unprocessed} remaining, sending ${videoUrls.length}`);
   }
 
+  // YouTube Queue Mode: override videoUrls with next pending URL from user queue
+  let ytQueueItemId: number | null = null;
+  let ytDownloadUrl: string | null = null;
+  let ytDownloadUrlExpiresAt: number | null = null;
+  if (readBoolean(config.youtube_queue_enabled) && (videoSource === "youtube" || videoSource === "manual_links" || videoSource === "direct")) {
+    const queueItem = await env.DB.prepare(
+      "SELECT id, url FROM youtube_queue WHERE user_id = ? AND status = 'pending' ORDER BY queue_order ASC, id ASC LIMIT 1"
+    ).bind(userId).first<{ id: number; url: string }>();
+
+    if (queueItem) {
+      ytQueueItemId = queueItem.id;
+      videoUrls = [queueItem.url];
+      fetchStats.to_process = 1;
+      fetchStats.unprocessed = 0;
+      fetchStats.total = 1;
+      console.log(`[TRIGGER] YouTube Queue: picked item #${queueItem.id} — ${queueItem.url}`);
+
+      // Mark as processing immediately
+      await env.DB.prepare(
+        "UPDATE youtube_queue SET status = 'processing' WHERE id = ?"
+      ).bind(queueItem.id).run();
+
+      // Extract fresh download URL via ytdown.to (best-effort)
+      try {
+        const ytdownResult = await extractYoutubeDownloadUrl(queueItem.url);
+        ytDownloadUrl = ytdownResult.downloadUrl;
+        ytDownloadUrlExpiresAt = ytdownResult.expiresAt;
+        console.log(`[TRIGGER] ytdown.to: extracted download URL (expires at ${ytdownResult.expiresAt})`);
+      } catch (ytdownErr) {
+        console.log(`[TRIGGER] ytdown.to extraction failed: ${ytdownErr instanceof Error ? ytdownErr.message : String(ytdownErr)}`);
+        // Don't fail the job — runner download will still attempt its chain
+      }
+    } else {
+      const errorMsg = "YouTube Queue is enabled but no pending URLs found in queue";
+      console.log(`[TRIGGER] ${errorMsg}`);
+      const jobId = await createFailedAutomationJob(env, automation, userId, {
+        ...config,
+        video_source: videoSource,
+        video_urls: [],
+        source_urls: [],
+      }, errorMsg, "preflight.empty_youtube_queue", {
+        youtube_queue_enabled: true,
+      });
+      return { success: false, jobId: jobId || undefined, executionMode, error: errorMsg };
+    }
+  }
+
   // Add config for job
   const jobConfig = {
     ...config,
@@ -1499,6 +1547,13 @@ export async function triggerAutomationRun(
       prompt_source_type: readString(config.prompt_source_type),
       short_generation_mode: readString(config.short_generation_mode, "normal"),
     },
+    ...(ytDownloadUrl
+      ? {
+          yt_download_url: ytDownloadUrl,
+          yt_download_url_expires_at: ytDownloadUrlExpiresAt,
+        }
+      : {}),
+    ...(ytQueueItemId ? { yt_queue_item_id: ytQueueItemId } : {}),
   };
 
   // Validate: If no videos found, return error
@@ -1627,6 +1682,31 @@ export async function markAutomationRunCompleted(env: Env, jobId: number, comple
   const jobRecord = await env.DB.prepare(
     "SELECT status, input_data, output_data FROM jobs WHERE id = ?"
   ).bind(jobId).first<{ status: string; input_data: string | null; output_data: string | null }>();
+
+  // YouTube Queue: update queue item status when job finishes
+  if (jobRecord?.input_data) {
+    try {
+      const inputData = JSON.parse(jobRecord.input_data) as Record<string, unknown>;
+      const ytQueueItemId = inputData.yt_queue_item_id as number | undefined;
+      if (ytQueueItemId) {
+        const queueStatus = jobRecord.status === "success" ? "completed" : "failed";
+        const errorMessage = queueStatus === "failed" && jobRecord.output_data
+          ? (() => {
+              try {
+                const od = JSON.parse(jobRecord.output_data) as Record<string, unknown>;
+                return typeof od.error_message === "string" ? od.error_message.slice(0, 500) : null;
+              } catch { return null; }
+            })()
+          : null;
+        await env.DB.prepare(
+          "UPDATE youtube_queue SET status = ?, job_id = ?, error_message = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?"
+        ).bind(queueStatus, jobId, errorMessage, ytQueueItemId).run();
+        console.log(`[YOUTUBE-QUEUE] Item #${ytQueueItemId} → ${queueStatus}`);
+      }
+    } catch {
+      // ignore parse error
+    }
+  }
 
   if (automation.type === "image" && jobRecord?.status === "success") {
     const inputData = parseJsonRecord(jobRecord.input_data);

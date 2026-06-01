@@ -1567,6 +1567,20 @@ module.exports = async function download(videoUrl) {
     return;
   }
 
+  // Check for pre-extracted download URL in runtime config (YouTube Queue mode)
+  const runtimeCfg = loadRuntimeConfig();
+  const preExtractedUrl = runtimeCfg && runtimeCfg.yt_download_url;
+  if (preExtractedUrl && typeof preExtractedUrl === 'string' && preExtractedUrl.startsWith('http')) {
+    console.log(`[DOWNLOAD] Found pre-extracted download URL in config — bypassing YouTube chain`);
+    try {
+      downloadDirectFile(preExtractedUrl, outFile);
+      console.log('[DOWNLOAD] Pre-extracted download SUCCESS');
+      return;
+    } catch (error) {
+      console.log(`[DOWNLOAD] Pre-extracted download failed: ${error.message} — falling through to regular chain`);
+    }
+  }
+
   let lastError = null;
 
   // Google Photos → browser download

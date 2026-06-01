@@ -244,6 +244,21 @@ CREATE INDEX IF NOT EXISTS idx_video_queue_automation_id ON video_queue(automati
 CREATE INDEX IF NOT EXISTS idx_video_queue_status ON video_queue(status);
 CREATE INDEX IF NOT EXISTS idx_video_queue_position ON video_queue(job_id, queue_position);
 
+-- YouTube Queue table for independent URL queue (not tied to any automation)
+CREATE TABLE IF NOT EXISTS youtube_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','completed','failed')),
+  job_id INTEGER,
+  error_message TEXT,
+  queue_order INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  processed_at DATETIME,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 -- Add video_url column to jobs table if not exists (for Litterbox URLs)
 -- ALTER TABLE jobs ADD COLUMN video_url TEXT;
 -- Note: Run this separately as Cloudflare D1 doesn't support IF NOT EXISTS for ALTER TABLE
