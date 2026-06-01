@@ -63,18 +63,26 @@ function extractAccountHint(text: string): string | null {
   return null;
 }
 
+const RECOMMENDED_YOUTUBE_COOKIES = ["SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO"];
+
 /**
- * Structural cookie validation: checks if SAPISID exists and at least some cookies
- * have future expiry. If the live probes fail due to datacenter IP blocking but
+ * Structural cookie validation: checks for recommended YouTube auth cookies and
+ * future expiry. If the live probes fail due to datacenter IP blocking but
  * structural validation passes, we return signed_in=true — the cookies WILL work
  * on a real runner IP (GitHub Actions / local).
  */
-function validateCookieStructure(rawCookies: string): { valid: boolean; sapisid: boolean; hasFutureExpiry: boolean } {
+function validateCookieStructure(rawCookies: string): { valid: boolean; present: string[]; missing: string[]; hasFutureExpiry: boolean } {
   const { entries } = normalizeCookieFile(rawCookies);
   const now = Math.floor(Date.now() / 1000);
-  const sapisid = entries.some((e) => e.name === "SAPISID" || e.name === "__Secure-3PAPISID");
+  const presentNames = new Set(entries.map((e) => e.name));
+  const present = RECOMMENDED_YOUTUBE_COOKIES.filter((n) => presentNames.has(n));
+  const missing = RECOMMENDED_YOUTUBE_COOKIES.filter((n) => !presentNames.has(n));
+  const sapisidOk = presentNames.has("SAPISID") || presentNames.has("__Secure-3PAPISID");
   const hasFutureExpiry = entries.some((e) => e.expires === 0 || e.expires > now);
-  return { valid: sapisid && hasFutureExpiry, sapisid, hasFutureExpiry };
+  // Valid: SAPISID present, at least 4 of 6 recommended cookies present, and future expiry
+  const enoughCookies = present.length >= 4;
+  const valid = sapisidOk && enoughCookies && hasFutureExpiry;
+  return { valid, present, missing, hasFutureExpiry };
 }
 
 export async function testYouTubeCookies(rawCookies: string): Promise<CookieTestResult> {
@@ -208,7 +216,7 @@ export async function testYouTubeCookies(rawCookies: string): Promise<CookieTest
       return {
         signed_in: true,
         inconclusive: false,
-        reason: "Live verification datacenter IP se block hua, lekin cookies structurally valid hain (SAPISID mojood, expiry future mein). Runner par kaam karengi.",
+        reason: `Live verification datacenter IP se block hua, lekin cookies structurally valid hain (${structural.present.length}/6 recommended cookies, SAPISID mojood, expiry future mein). Runner par kaam karengi.`,
         http_status: res.status,
         account_hint: null,
         checked_at,
@@ -217,7 +225,7 @@ export async function testYouTubeCookies(rawCookies: string): Promise<CookieTest
     return {
       signed_in: false,
       inconclusive: true,
-      reason: `Login state clearly detect nahi hua (Google ne shayad challenge/anonymous page diya). Structurally bhi cookies invalid lag rahi hain (SAPISID: ${structural.sapisid ? "hai" : "nahi"}, future expiry: ${structural.hasFutureExpiry ? "hai" : "nahi"}). Result inconclusive.`,
+      reason: `Login state clearly detect nahi hua. Cookies structurally invalid: missing ${structural.missing.join(", ")}. Result inconclusive.`,
       http_status: res.status,
       account_hint: null,
       checked_at,
@@ -228,7 +236,7 @@ export async function testYouTubeCookies(rawCookies: string): Promise<CookieTest
       return {
         signed_in: true,
         inconclusive: false,
-        reason: `Network error during YouTube check: ${error instanceof Error ? error.message : String(error)} — but cookies structurally valid hain, runner par kaam karengi.`,
+        reason: `Network error during YouTube check: ${error instanceof Error ? error.message : String(error)} — but cookies structurally valid hain (${structural.present.length}/6), runner par kaam karengi.`,
         account_hint: null,
         checked_at,
       };
@@ -310,7 +318,7 @@ export async function testGooglePhotosCookies(rawCookies: string): Promise<Cooki
       return {
         signed_in: true,
         inconclusive: false,
-        reason: "Live verification datacenter IP se block hua, lekin cookies structurally valid hain (SAPISID mojood, expiry future mein). Runner par kaam karengi.",
+        reason: `Live verification datacenter IP se block hua, lekin cookies structurally valid hain (${structural.present.length}/6 recommended cookies, SAPISID mojood, expiry future mein). Runner par kaam karengi.`,
         http_status: res.status,
         account_hint: null,
         checked_at,
@@ -319,7 +327,7 @@ export async function testGooglePhotosCookies(rawCookies: string): Promise<Cooki
     return {
       signed_in: false,
       inconclusive: true,
-      reason: `Google Photos login state clearly detect nahi hua. Structurally bhi cookies invalid lag rahi hain (SAPISID: ${structural.sapisid ? "hai" : "nahi"}, future expiry: ${structural.hasFutureExpiry ? "hai" : "nahi"}). Result inconclusive.`,
+      reason: `Google Photos login state clearly detect nahi hua. Cookies structurally invalid: missing ${structural.missing.join(", ")}. Result inconclusive.`,
       http_status: res.status,
       account_hint: null,
       checked_at,
@@ -330,7 +338,7 @@ export async function testGooglePhotosCookies(rawCookies: string): Promise<Cooki
       return {
         signed_in: true,
         inconclusive: false,
-        reason: `Network error during Google Photos check: ${error instanceof Error ? error.message : String(error)} — but cookies structurally valid hain, runner par kaam karengi.`,
+        reason: `Network error during Google Photos check: ${error instanceof Error ? error.message : String(error)} — but cookies structurally valid hain (${structural.present.length}/6), runner par kaam karengi.`,
         account_hint: null,
         checked_at,
       };

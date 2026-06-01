@@ -190,6 +190,11 @@ function getBrowserCookieFallbacks() {
     return configured.split(',').map((item) => item.trim()).filter(Boolean);
   }
 
+  // Playwright Chromium is available on GitHub Actions runner (installed in workflow)
+  if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+    return ['chromium'];
+  }
+
   if (process.env.RUNNER_EXECUTION_MODE === 'local') {
     return ['firefox', 'chrome', 'edge'];
   }
@@ -662,6 +667,9 @@ async function downloadGooglePhotosViaBrowser(sourceUrl, outFile) {
       });
       const page = await context.newPage();
 
+      // Inject server cookies for auth
+      await injectServerCookiesToBrowser(context, sourceUrl);
+
       await page.goto(sourceUrl, {
         waitUntil: 'domcontentloaded',
         timeout: 60000,
@@ -951,6 +959,9 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
       });
 
+      // Inject server cookies into browser so we're authenticated
+      await injectServerCookiesToBrowser(context, sourceUrl);
+
       // Navigate to YouTube video page
       console.log(`[DOWNLOAD] Navigating to YouTube video...`);
       await page.goto(sourceUrl, {
@@ -1025,6 +1036,71 @@ async function downloadYouTubeViaBrowser(sourceUrl, outFile) {
 // ──────────────────────────────────────────────
 // Cookie Management
 // ──────────────────────────────────────────────
+
+/**
+ * Read server-managed cookie file for a given source URL and return as Netscape text,
+ * or null if no cookie file is found/valid.
+ */
+function readServerCookieFile(sourceUrl) {
+  const cookieFile = resolveCookiesFile(sourceUrl);
+  if (!cookieFile) return null;
+  try {
+    const rawText = fs.readFileSync(cookieFile, 'utf8');
+    if (looksLikeNetscapeCookieFile(rawText)) return rawText;
+  } catch {}
+  return null;
+}
+
+/**
+ * Parse Netscape cookie file and return an array of Playwright-compatible cookie objects.
+ */
+function parseNetscapeCookiesForPlaywright(rawText) {
+  const lines = String(rawText || '').split(/\r?\n/g).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  const cookies = [];
+  for (const line of lines) {
+    const fields = line.split('\t');
+    if (fields.length < 7) continue;
+    const [domainRaw, , pathRaw, , expiresRaw, name, ...valueParts] = fields;
+    const domain = domainRaw.trim();
+    const path = pathRaw.trim();
+    const expires = Number.parseInt(expiresRaw.trim(), 10);
+    const value = valueParts.join('\t').trim();
+    if (!domain || !path || !name) continue;
+    const cookie = {
+      name,
+      value,
+      domain: domain.startsWith('.') ? domain.slice(1) : domain,
+      path,
+      secure: true,
+      httpOnly: false,
+      sameSite: 'Lax' ,
+    };
+    if (Number.isFinite(expires) && expires > 0) {
+      cookie.expires = expires;
+    }
+    cookies.push(cookie);
+  }
+  return cookies;
+}
+
+/**
+ * Inject server-managed cookies into an existing Playwright browser context
+ * so the browser session is authenticated.
+ */
+async function injectServerCookiesToBrowser(context, sourceUrl) {
+  const cookieText = readServerCookieFile(sourceUrl);
+  if (!cookieText) {
+    console.log('[COOKIES] No server cookie file to inject into browser');
+    return;
+  }
+  const cookies = parseNetscapeCookiesForPlaywright(cookieText);
+  if (cookies.length === 0) {
+    console.log('[COOKIES] No valid cookies parsed from server cookie file');
+    return;
+  }
+  await context.addCookies(cookies);
+  console.log(`[COOKIES] Injected ${cookies.length} server cookies into browser context`);
+}
 
 function analyzeCookieFile(rawText, label) {
   const lines = String(rawText || '').split(/\r?\n/g).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
