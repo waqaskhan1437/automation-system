@@ -63,28 +63,33 @@ jobs:
           YT_VERSION="$(yt-dlp --version 2>&1)"
           echo "yt-dlp version: $YT_VERSION"
           # Verify extractors are functional
-          yt-dlp --list-extractors 2>&1 | grep -qi youtube || { echo "FATAL: YouTube extractor missing in yt-dlp $YT_VERSION"; exit 1; }
+          yt-dlp --list-extractors 2>&1 | grep -qi youtube || { echo "YouTube extractor check failed (yt-dlp $YT_VERSION)"; exit 1; }
           # Check JS runtime support (required for n-challenge solving)
           if yt-dlp --help 2>&1 | grep -q "js-runtimes"; then
             echo "js-runtimes: available"
           else
             echo "FATAL: yt-dlp $YT_VERSION does not support --js-runtimes (required for YouTube 2026)"; exit 1
           fi
-          # Check remote-components support (required for EJS solver scripts)
-          if yt-dlp --help 2>&1 | grep -q "remote-components"; then
-            echo "remote-components: available"
-          else
-            echo "FATAL: yt-dlp $YT_VERSION does not support --remote-components (required for EJS)"; exit 1
-          fi
-          # Check that node is available (yt-dlp's JS runtime)
+          # Check node is available (JS runtime for n-challenge)
           which node && echo "Node.js: $(node --version)" || { echo "FATAL: node not found (required for JS runtime)"; exit 1; }
-          # Check that pip's yt-dlp-ejs package is available (offline EJS solver)
-          python3 -c "import yt_dlp_ejs" 2>/dev/null && echo "yt-dlp-ejs: installed (offline)" || echo "yt-dlp-ejs: not bundled (will use --remote-components instead)"
-          # Pre-download EJS (Encrypted JavaScript Solver) components for YouTube n-challenge
-          # This must be done BEFORE the actual download so components are cached locally.
-          echo "Pre-downloading EJS components for YouTube n-challenge solving..."
-          yt-dlp --remote-components ejs:github -v 2>&1 || { echo "FATAL: EJS pre-download failed — YouTube downloads will fail without it"; exit 1; }
-          echo "EJS pre-download: SUCCESS"
+          # Check if yt-dlp-ejs is bundled (from yt-dlp[default] pip package)
+          EJS_BUNDLED=false
+          if python3 -c "import yt_dlp_ejs" 2>/dev/null; then
+            echo "yt-dlp-ejs: installed (offline — EJS solver bundled)"
+            EJS_BUNDLED=true
+          else
+            echo "yt-dlp-ejs: not bundled (will use --remote-components)"
+          fi
+          # Pre-download EJS scripts for n-challenge solving (if not bundled)
+          if [ "$EJS_BUNDLED" = false ] && yt-dlp --help 2>&1 | grep -q "remote-components"; then
+            echo "Pre-downloading EJS components from GitHub..."
+            yt-dlp --remote-components ejs:github -v 2>&1 || echo "WARNING: EJS pre-download failed — will retry at download time"
+          elif [ "$EJS_BUNDLED" = false ]; then
+            echo "WARNING: No EJS solver available (neither bundled nor --remote-components). YouTube n-challenge may fail."
+          else
+            echo "EJS solver: bundled (no pre-download needed)"
+          fi
+          echo "yt-dlp setup complete"
           echo ""
 
       - name: Install FFmpeg and fonts

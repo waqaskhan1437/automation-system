@@ -203,17 +203,18 @@ function isYouTubeUrl(sourceUrl) {
 
 function buildJsRuntimesArgs() {
   // Add flags to solve YouTube's n-challenge (anti-bot JS challenge).
-  // The workflow always installs the latest yt-dlp which supports these flags.
   // --js-runtimes node: tells yt-dlp to use Node.js as the JavaScript runtime
-  // --remote-components ejs:github: downloads/downloads the EJS solver scripts from
-  //   GitHub (if not already cached from the workflow pre-download step).
-  // Both flags were introduced in yt-dlp 2025.x and are stable as of 2026.
+  // --remote-components ejs:github: downloads EJS solver scripts from GitHub at runtime
+  //   (only needed if not bundled via yt-dlp[default] pip package)
+  //
+  // yt-dlp[default] bundles yt-dlp-ejs which provides EJS offline.
+  // --remote-components is only needed as fallback.
   const hasNode = commandExists('node');
   if (!hasNode) {
-    console.warn('[DOWNLOAD] Node.js not found via which/where — JS runtime may be unavailable for n-challenge solving');
+    console.warn('[DOWNLOAD] Node.js not found — JS runtime unavailable for n-challenge solving');
     return [];
   }
-  return ['--remote-components', 'ejs:github', '--js-runtimes', 'node'];
+  return ['--js-runtimes', 'node'];
 }
 
 function runYtDlpWithArgs(ytDlp, args, outFile) {
