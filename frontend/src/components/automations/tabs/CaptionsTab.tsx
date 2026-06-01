@@ -1,4 +1,4 @@
-import { TabProps } from "./types";
+import { TabProps } from "../types";
 
 const LANGUAGES = [
   { value: "en", label: "English" },
