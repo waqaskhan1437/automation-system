@@ -7,6 +7,7 @@ const { OUTPUT_DIR, CONFIG_PATH } = require('./lib/paths');
 
 const download = require('./steps/download');
 const processVideo = require('./steps/process');
+const caption = require('./steps/caption');
 const upload = require('./steps/upload');
 const post = require('./steps/post');
 const webhook = require('./steps/webhook');
@@ -546,6 +547,8 @@ async function main() {
             continue;
           }
 
+          await caption();
+
           let uploadUrl = null;
           if (config.skip_upload === true) {
             const localPath = saveLocalFinalMedia(segmentConfig, `-seg${seg.index}.mp4`, processedSegmentFile);
@@ -640,6 +643,7 @@ async function main() {
       } else {
         writeConfig(config);
         await processVideo();
+        await caption();
         
         let uploadUrl = null;
         if (config.skip_upload === true) {

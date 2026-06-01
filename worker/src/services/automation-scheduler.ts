@@ -1524,6 +1524,12 @@ export async function triggerAutomationRun(
           yt_download_url_expires_at: ytDownloadUrlExpiresAt,
         }
       : {}),
+    whisper_enabled: readString(config.whisper_enabled) === "true",
+    whisper_language: readString(config.whisper_language, "en"),
+    caption_font_size: readString(config.caption_font_size, "medium"),
+    caption_text_color: readString(config.caption_text_color, "#FFFFFF"),
+    caption_bg_opacity: readString(config.caption_bg_opacity, "0.5"),
+    caption_position: readString(config.caption_position, "bottom"),
   };
 
   // Validate: If no videos found, return error

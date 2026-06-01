@@ -132,6 +132,19 @@ jobs:
           });
           NODE
 
+      - name: Install Whisper (if captions enabled)
+        timeout-minutes: 10
+        run: |
+          cd runner-scripts
+          WHISPER=$(node -e "try { const c = require('./automation-config.json'); process.exit(c.whisper_enabled === true ? 0 : 1); } catch { process.exit(1); }" 2>/dev/null && echo "install" || echo "skip")
+          if [ "$WHISPER" = "install" ]; then
+            echo "Installing openai-whisper (for captions)..."
+            pip install -q openai-whisper --upgrade
+            echo "Whisper installed"
+          else
+            echo "Captions disabled — skipping whisper install"
+          fi
+
       - name: Download and Process Videos
         timeout-minutes: 30
         run: |
