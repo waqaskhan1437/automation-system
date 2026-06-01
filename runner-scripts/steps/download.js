@@ -760,6 +760,16 @@ async function downloadGooglePhotosViaBrowser(sourceUrl, outFile) {
   throw lastError || new Error('Google Photos browser download failed');
 }
 
+// Known YouTube InnerTube API keys for different clients.
+// These are PUBLIC keys hardcoded in the YouTube apps — not secrets.
+const INNERTUBE_API_KEYS = {
+  ANDROID: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+  ANDROID_VR: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+  TVHTML5_SIMPLY_EMBEDDED_PLAYER: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+  WEB_CREATOR: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+  IOS: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+};
+
 // ──────────────────────────────────────────────
 // YouTube InnerTube API Download (4 client variants)
 // ──────────────────────────────────────────────
@@ -774,28 +784,41 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
   const videoId = videoIdMatch[1];
   console.log(`[DOWNLOAD] Video ID: ${videoId}`);
 
+  // Build cookie header once for all client attempts
+  const cookieText = readServerCookieFile(sourceUrl);
+  let cookieHeader = '';
+  if (cookieText) {
+    const cookieLines = cookieText.split(/\r?\n/).filter(l => l && !l.startsWith('#'));
+    const cookiePairs = [];
+    for (const line of cookieLines) {
+      const parts = line.split('\t');
+      if (parts.length >= 7) cookiePairs.push(`${parts[5]}=${parts.slice(6).join('\t')}`);
+    }
+    cookieHeader = cookiePairs.join('; ');
+  }
+
   const clients = [
     {
       clientName: 'ANDROID',
       clientVersion: '19.44.38',
       androidSdkVersion: 31,
-      userAgent: 'com.google.android.youtube/19.44.38 (Linux; U; Android 12) gzip',
-    },
-    {
-      clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-      clientVersion: '2.0',
-      userAgent: getNextUserAgent(),
-    },
-    {
-      clientName: 'WEB_CREATOR',
-      clientVersion: '1.20260321.00.00',
-      userAgent: getNextUserAgent(),
+      userAgent: 'com.google.android.youtube/19.44.38 (Linux; U; Android 12; en_US)',
     },
     {
       clientName: 'ANDROID_VR',
       clientVersion: '1.60.19',
       androidSdkVersion: 32,
-      userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+      userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1)',
+    },
+    {
+      clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+      clientVersion: '2.0',
+      userAgent: 'Mozilla/5.0 (Unknown; Linux x86_64) AppleWebKit/538.1 (KHTML, like Gecko) Safari/538.1',
+    },
+    {
+      clientName: 'IOS',
+      clientVersion: '19.44.38',
+      userAgent: 'com.google.ios.youtube/19.44.38 (iPhone; U; CPU iOS 17_5 like Mac OS X)',
     },
   ];
 
@@ -811,39 +834,29 @@ async function downloadYouTubeViaInnerTube(sourceUrl, outFile) {
           client: {
             hl: 'en',
             gl: 'US',
-            ...client,
+            clientName: client.clientName,
+            clientVersion: client.clientVersion,
+            ...(client.androidSdkVersion ? { androidSdkVersion: client.androidSdkVersion } : {}),
           }
         }
       };
 
       const headers = {
         'Content-Type': 'application/json',
-        'User-Agent': client.userAgent || getNextUserAgent(),
+        'User-Agent': client.userAgent,
         'Origin': 'https://www.youtube.com',
         'Referer': 'https://www.youtube.com/',
+        'X-Goog-API-Key': INNERTUBE_API_KEYS[client.clientName] || INNERTUBE_API_KEYS.WEB_CREATOR,
+        'X-YouTube-Client-Name': String(client.clientName === 'ANDROID' ? 3 : client.clientName === 'IOS' ? 5 : client.clientName === 'TVHTML5_SIMPLY_EMBEDDED_PLAYER' ? 85 : 87),
+        'X-YouTube-Client-Version': client.clientVersion,
+        'Accept': '*/*',
       };
 
-      // Inject cookies for authenticated requests (needed for private/age-restricted videos)
-      const cookieText = readServerCookieFile(sourceUrl);
-      if (cookieText) {
-        const { entries } = require('./cookie-files') || { entries: [] };
-        // Build Cookie header from Netscape file
-        const cookieLines = cookieText.split(/\r?\n/).filter(l => l && !l.startsWith('#'));
-        const cookiePairs = [];
-        for (const line of cookieLines) {
-          const parts = line.split('\t');
-          if (parts.length >= 7) cookiePairs.push(`${parts[5]}=${parts.slice(6).join('\t')}`);
-        }
-        if (cookiePairs.length > 0) {
-          headers['Cookie'] = cookiePairs.join('; ');
-        }
+      if (cookieHeader) {
+        headers['Cookie'] = cookieHeader;
       }
 
-      if (client.androidSdkVersion) {
-        headers['X-Goog-Visitor-Id'] = '';
-      }
-
-      const res = await fetch('https://www.youtube.com/youtubei/v1/player', {
+      const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
         method: 'POST',
         headers,
         body: JSON.stringify(payload)
@@ -1420,10 +1433,13 @@ function downloadDirectFileViaFfmpeg(sourceUrl, outFile) {
 /**
  * YouTube Download Strategy (2026 Robust):
  *
- * Layer 1: yt-dlp with server cookies (Netscape format from GitHub Secrets)
- * Layer 2: yt-dlp with browser cookies (Chrome/Firefox/Edge extraction)
- * Layer 3: yt-dlp without auth (last resort yt-dlp attempt)
- * Layer 4: InnerTube API (4 clients: Android, TV, Web Creator, Android VR)
+ * yt-dlp gets bot-blocked at the HTML page level on datacenter IPs.
+ * InnerTube API bypasses the HTML challenge entirely (like ytmp4 sites).
+ *
+ * Layer 1: InnerTube API (direct API call — android → ios → tv → web)
+ * Layer 2: yt-dlp with server cookies (Netscape format from GitHub Secrets)
+ * Layer 3: yt-dlp with browser cookies (Chrome/Firefox/Edge extraction)
+ * Layer 4: yt-dlp without auth (last resort yt-dlp attempt)
  * Layer 5: Playwright browser (ultimate fallback - full browser simulation)
  *
  * Each layer has rate-limit detection and exponential backoff
@@ -1434,70 +1450,71 @@ async function downloadYouTubeWithFullChain(sourceUrl, outFile) {
   const errorLog = [];
   let lastError = null;
 
-  // LAYER 1: yt-dlp with server cookies
+  // LAYER 1: InnerTube API (bypasses HTML bot challenge, used by ytmp4 sites)
   try {
-    console.log('[DOWNLOAD] [LAYER 1/5] yt-dlp with server cookies...');
-    runYtDlpDownload(normalizedSource, outFile);
+    console.log('[DOWNLOAD] [LAYER 1/5] InnerTube API (direct, bypasses bot challenge)...');
+    await downloadYouTubeViaInnerTube(normalizedSource, outFile);
+    validateOutput(outFile);
     console.log('[DOWNLOAD] [LAYER 1] SUCCESS');
     return;
   } catch (error) {
     const category = classifyDownloadError(error);
     lastError = error;
-    errorLog.push(`Layer1(yt-dlp+cookies): ${category} - ${error.message}`);
+    errorLog.push(`Layer1(InnerTube): ${category} - ${error.message}`);
     console.log(`[DOWNLOAD] [LAYER 1] FAILED: ${category} - ${error.message}`);
   }
 
-  // LAYER 2: yt-dlp with browser cookies (for local runners with browser profiles)
+  // LAYER 2: yt-dlp with server cookies
+  try {
+    console.log('[DOWNLOAD] [LAYER 2/5] yt-dlp with server cookies...');
+    runYtDlpDownload(normalizedSource, outFile);
+    console.log('[DOWNLOAD] [LAYER 2] SUCCESS');
+    return;
+  } catch (error) {
+    const category = classifyDownloadError(error);
+    lastError = error;
+    errorLog.push(`Layer2(yt-dlp+cookies): ${category} - ${error.message}`);
+    console.log(`[DOWNLOAD] [LAYER 2] FAILED: ${category} - ${error.message}`);
+  }
+
+  // LAYER 3: yt-dlp with browser cookies (for local runners with browser profiles)
   const browserFallbacks = getBrowserCookieFallbacks();
   if (browserFallbacks.length > 0) {
     const ytDlp = resolveYtDlpRunner();
     if (ytDlp) {
       for (const browser of browserFallbacks) {
         try {
-          console.log(`[DOWNLOAD] [LAYER 2/5] yt-dlp with browser cookies (${browser})...`);
+          console.log(`[DOWNLOAD] [LAYER 3/5] yt-dlp with browser cookies (${browser})...`);
           clearDownloadArtifacts(outFile);
           const ytArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android'), '--cookies-from-browser', browser, normalizedSource];
           runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
           validateOutput(outFile);
-          console.log(`[DOWNLOAD] [LAYER 2] SUCCESS via ${browser}`);
+          console.log(`[DOWNLOAD] [LAYER 3] SUCCESS via ${browser}`);
           return;
         } catch (error) {
           const category = classifyDownloadError(error);
-          errorLog.push(`Layer2(yt-dlp+${browser}): ${category} - ${error.message}`);
-          console.log(`[DOWNLOAD] [LAYER 2] ${browser} FAILED: ${category} - ${error.message}`);
+          errorLog.push(`Layer3(yt-dlp+${browser}): ${category} - ${error.message}`);
+          console.log(`[DOWNLOAD] [LAYER 3] ${browser} FAILED: ${category} - ${error.message}`);
         }
       }
     }
   }
 
-  // LAYER 3: yt-dlp without any auth (public videos only)
+  // LAYER 4: yt-dlp without any auth (public videos only)
   try {
-    console.log('[DOWNLOAD] [LAYER 3/5] yt-dlp without auth...');
+    console.log('[DOWNLOAD] [LAYER 4/5] yt-dlp without auth...');
     const ytDlp = resolveYtDlpRunner();
     if (ytDlp) {
       clearDownloadArtifacts(outFile);
       const ytArgs = [...buildYouTubeClientArgs(ytDlp, outFile, 'android'), normalizedSource];
       runCommand(ytDlp.command, ytArgs, ytDlp.label, 480000);
       validateOutput(outFile);
-      console.log('[DOWNLOAD] [LAYER 3] SUCCESS');
+      console.log('[DOWNLOAD] [LAYER 4] SUCCESS');
       return;
     }
   } catch (error) {
     const category = classifyDownloadError(error);
-    errorLog.push(`Layer3(yt-dlp+noauth): ${category} - ${error.message}`);
-    console.log(`[DOWNLOAD] [LAYER 3] FAILED: ${category} - ${error.message}`);
-  }
-
-  // LAYER 4: InnerTube API
-  try {
-    console.log('[DOWNLOAD] [LAYER 4/5] InnerTube API...');
-    await downloadYouTubeViaInnerTube(normalizedSource, outFile);
-    validateOutput(outFile);
-    console.log('[DOWNLOAD] [LAYER 4] SUCCESS');
-    return;
-  } catch (error) {
-    const category = classifyDownloadError(error);
-    errorLog.push(`Layer4(InnerTube): ${category} - ${error.message}`);
+    errorLog.push(`Layer4(yt-dlp+noauth): ${category} - ${error.message}`);
     console.log(`[DOWNLOAD] [LAYER 4] FAILED: ${category} - ${error.message}`);
   }
 
