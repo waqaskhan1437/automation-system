@@ -84,6 +84,9 @@ export async function fetchYtdownMediaList(youtubeUrl: string): Promise<{
   };
 }
 
+const YTDOWN_POLL_MAX = 20;
+const YTDOWN_POLL_INTERVAL_MS = 2000;
+
 export async function fetchYtdownDownloadUrl(mediaUrl: string): Promise<{
   downloadUrl: string;
   fileName: string;
@@ -91,39 +94,50 @@ export async function fetchYtdownDownloadUrl(mediaUrl: string): Promise<{
   fileSizeBytes: number;
   expiresAt: number | null;
 }> {
-  const pollRes = await fetch(YTDOWN_PROXY, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ url: mediaUrl }),
-  });
+  for (let attempt = 1; attempt <= YTDOWN_POLL_MAX; attempt++) {
+    const pollRes = await fetch(YTDOWN_PROXY, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ url: mediaUrl }),
+    });
 
-  if (!pollRes.ok) {
-    throw new Error(`ytdown.to poll failed: HTTP ${pollRes.status}`);
+    if (!pollRes.ok) {
+      throw new Error(`ytdown.to poll failed: HTTP ${pollRes.status}`);
+    }
+
+    const data = (await pollRes.json()) as YtdownDownloadResponse;
+
+    if (data.api?.status === "error") {
+      throw new Error(data.api.message || `ytdown.to error (code ${data.api.code || "unknown"})`);
+    }
+
+    if (data.api?.status === "completed") {
+      if (!data.api.fileUrl) {
+        throw new Error("ytdown.to completed but no fileUrl returned");
+      }
+
+      const expiresAt = extractExpiryFromToken(data.api.fileUrl);
+
+      return {
+        downloadUrl: data.api.fileUrl,
+        fileName: data.api.fileName || `video-${Date.now()}.mp4`,
+        fileSize: data.api.fileSize || "unknown",
+        fileSizeBytes: data.api.fileSizeBytes || 0,
+        expiresAt,
+      };
+    }
+
+    if (attempt < YTDOWN_POLL_MAX) {
+      console.log(`[ytdown.to] Status "${data.api?.status}" — polling (${attempt}/${YTDOWN_POLL_MAX})...`);
+      await new Promise((r) => setTimeout(r, YTDOWN_POLL_INTERVAL_MS));
+    } else {
+      throw new Error(
+        `ytdown.to did not return "completed" after ${YTDOWN_POLL_MAX} polls (last status: "${data.api?.status}")`
+      );
+    }
   }
 
-  const data = (await pollRes.json()) as YtdownDownloadResponse;
-
-  if (data.api?.status === "error") {
-    throw new Error(data.api.message || `ytdown.to error (code ${data.api.code || "unknown"})`);
-  }
-
-  if (data.api?.status !== "completed") {
-    throw new Error(`ytdown.to returned status "${data.api?.status}" — expected "completed"`);
-  }
-
-  if (!data.api.fileUrl) {
-    throw new Error("ytdown.to completed but no fileUrl returned");
-  }
-
-  const expiresAt = extractExpiryFromToken(data.api.fileUrl);
-
-  return {
-    downloadUrl: data.api.fileUrl,
-    fileName: data.api.fileName || `video-${Date.now()}.mp4`,
-    fileSize: data.api.fileSize || "unknown",
-    fileSizeBytes: data.api.fileSizeBytes || 0,
-    expiresAt,
-  };
+  throw new Error("ytdown.to poll exited loop unexpectedly");
 }
 
 export async function extractYoutubeDownloadUrl(youtubeUrl: string): Promise<{
