@@ -173,6 +173,29 @@ export function normalizeCookieFile(rawValue: string): NormalizedCookieBundle {
   };
 }
 
+/**
+ * Build an HTTP `Cookie:` request header from a Netscape cookie file.
+ * Reuses {@link normalizeCookieFile} parsing so we never duplicate cookie parsing logic.
+ * Pass a `domainFilter` to keep only cookies whose domain matches (e.g. /youtube\.com|google\.com/i).
+ */
+export function buildCookieHeader(rawValue: string, domainFilter?: RegExp): string {
+  const { entries } = normalizeCookieFile(rawValue);
+  return entries
+    .filter((entry) => (domainFilter ? domainFilter.test(entry.domain) : true))
+    .map((entry) => `${entry.name}=${entry.value}`)
+    .join("; ");
+}
+
+/**
+ * Extract a single cookie value by name from a Netscape cookie file (first match wins).
+ * Returns null when the cookie is absent. Used by the live auth-check probes.
+ */
+export function getCookieValue(rawValue: string, name: string): string | null {
+  const { entries } = normalizeCookieFile(rawValue);
+  const match = entries.find((entry) => entry.name === name);
+  return match ? match.value : null;
+}
+
 export function summarizeCookieFile(rawValue: string | null | undefined, updatedAt: string | null | undefined, purpose: "youtube" | "google_photos"): CookieSummary {
   const source = typeof rawValue === "string" ? rawValue : "";
   const normalized = normalizeCookieFile(source);

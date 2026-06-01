@@ -19,6 +19,7 @@ import { generateImageBannerPreviewSpecs, normalizeBannerFormat } from "../servi
 import { getScopedSettings, upsertScopedSettings } from "../services/user-settings";
 import { buildCookieUploadDiagnostics } from "../services/cookie-files";
 import { syncVideoSourceSecretsToGithub } from "../services/github-secrets";
+import { testYouTubeCookies, testGooglePhotosCookies } from "../services/cookie-test";
 
 type SyncedPostformeAccount = {
   id: string;
@@ -481,6 +482,64 @@ export async function handleSettingsRoutes(
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Cookies upload failed";
+      return jsonResponse({ success: false, error: errorMsg }, 500);
+    }
+  }
+
+  // VIDEO SOURCE: Refresh cookies to GitHub Secrets (manual re-push of stored DB cookies)
+  if (path === "/api/settings/video-sources/refresh-secrets" && method === "POST") {
+    try {
+      const videoSourceSettings = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
+      const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", userId);
+      if (!githubSettings?.pat_token || !githubSettings.repo_owner || !githubSettings.repo_name) {
+        return jsonResponse({ success: false, error: "GitHub settings not configured. Settings -> GitHub Runner me PAT/repo set karein." }, 400);
+      }
+
+      const syncResult = await syncVideoSourceSecretsToGithub(githubSettings, {
+        youtubeCookies: videoSourceSettings?.youtube_cookies || null,
+        googlePhotosCookies: videoSourceSettings?.google_photos_cookies || null,
+      });
+
+      return jsonResponse({
+        success: syncResult.success,
+        message: syncResult.message,
+        data: { updated: syncResult.updated, deleted: syncResult.deleted, failed: syncResult.failed },
+      });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Failed to refresh GitHub secrets";
+      return jsonResponse({ success: false, error: errorMsg }, 500);
+    }
+  }
+
+  // VIDEO SOURCE: Live test cookies against the real provider (signed-in verdict)
+  if (path === "/api/settings/video-sources/test-cookies" && method === "POST") {
+    const body = await safeRequestJson<{ source?: string; cookies?: string }>(request);
+    const source = String(body?.source || "").trim().toLowerCase();
+    if (source !== "youtube" && source !== "google_photos") {
+      return jsonResponse({ success: false, error: "source must be 'youtube' or 'google_photos'" }, 400);
+    }
+
+    try {
+      let rawCookies = typeof body?.cookies === "string" ? body.cookies.trim() : "";
+      if (!rawCookies) {
+        const videoSourceSettings = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", userId);
+        rawCookies = (source === "youtube"
+          ? videoSourceSettings?.youtube_cookies
+          : videoSourceSettings?.google_photos_cookies) || "";
+        rawCookies = rawCookies.trim();
+      }
+
+      if (!rawCookies) {
+        return jsonResponse({ success: false, error: "No cookies to test. Pehle cookies upload/paste karein." }, 400);
+      }
+
+      const result = source === "youtube"
+        ? await testYouTubeCookies(rawCookies)
+        : await testGooglePhotosCookies(rawCookies);
+
+      return jsonResponse({ success: true, data: { source, ...result } });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Cookie test failed";
       return jsonResponse({ success: false, error: errorMsg }, 500);
     }
   }

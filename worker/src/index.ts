@@ -18,7 +18,7 @@
  * ============================================================================
  */
 
-import { Env, GithubSettings, Job, PostformeSettings, AuthContext } from "./types";
+import { Env, GithubSettings, Job, PostformeSettings, AuthContext, VideoSourceSettings } from "./types";
 import { jsonResponse, githubHeaders, safeRequestJson } from "./utils";
 import { unzipSync } from "fflate";
 import { decompress } from "zstd-wasm-decoder/cloudflare";
@@ -772,6 +772,26 @@ export default {
       if (postformeSettings?.api_key && !("postforme_api_key" in automationConfig)) {
         automationConfig.postforme_api_key = postformeSettings.api_key;
       }
+
+      // ── Live cookie override (CORE FIX) ──────────────────────────────────
+      // Cookies are frozen into jobs.input_data at dispatch time. By the time the
+      // runner picks up the job (often 30-60 min later, mid-way through a large
+      // video), those cookies may be stale and YouTube rejects them. Inject the
+      // LATEST cookies from settings_video_sources here so every run uses the
+      // freshest session. The frozen value survives only as a fallback when the
+      // live store has been cleared.
+      const videoSourceSettings = await getScopedSettings<VideoSourceSettings>(env.DB, "video-sources", job.user_id);
+      const liveYoutube = (videoSourceSettings?.youtube_cookies || "").trim();
+      const liveGooglePhotos = (videoSourceSettings?.google_photos_cookies || "").trim();
+      if (liveYoutube) {
+        automationConfig.youtube_cookies = liveYoutube;
+        automationConfig.youtube_cookies_meta = videoSourceSettings?.youtube_cookies_meta ?? automationConfig.youtube_cookies_meta ?? null;
+      }
+      if (liveGooglePhotos) {
+        automationConfig.google_photos_cookies = liveGooglePhotos;
+      }
+      automationConfig.cookie_source = (liveYoutube || liveGooglePhotos) ? "live" : "frozen";
+      automationConfig.cookie_live_fetched_at = new Date().toISOString();
 
       return new Response(JSON.stringify({
         success: true,

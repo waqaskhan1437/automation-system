@@ -10,6 +10,9 @@ type CookieDiagnostics = {
   session_cookie_count?: number;
   expired_cookie_count?: number;
   domains?: string[];
+  earliest_expiry?: string | null;
+  latest_expiry?: string | null;
+  youtube_auth_likely?: boolean;
   summary?: {
     total_cookies?: number;
     expired_cookies?: number;
@@ -18,6 +21,14 @@ type CookieDiagnostics = {
   };
   critical_warnings?: string[];
   warnings?: string[];
+};
+
+type CookieTestVerdict = {
+  signed_in: boolean;
+  inconclusive: boolean;
+  reason: string;
+  account_hint?: string | null;
+  http_status?: number;
 };
 
 function parseCookieDiagnostics(value: unknown): CookieDiagnostics | null {
@@ -47,6 +58,14 @@ export default function VideoSourceSettings() {
   const [youtubeDiagnostics, setYoutubeDiagnostics] = useState<CookieDiagnostics | null>(null);
   const [googlePhotosDiagnostics, setGooglePhotosDiagnostics] = useState<CookieDiagnostics | null>(null);
   const [saveError, setSaveError] = useState("");
+  const [refreshingSecrets, setRefreshingSecrets] = useState(false);
+  const [refreshResult, setRefreshResult] = useState("");
+  const [refreshError, setRefreshError] = useState("");
+  const [testingCookies, setTestingCookies] = useState<"youtube" | "google_photos" | null>(null);
+  const [youtubeTestResult, setYoutubeTestResult] = useState<CookieTestVerdict | null>(null);
+  const [googlePhotosTestResult, setGooglePhotosTestResult] = useState<CookieTestVerdict | null>(null);
+  const [youtubeTestError, setYoutubeTestError] = useState("");
+  const [googlePhotosTestError, setGooglePhotosTestError] = useState("");
 
   const loadSettings = async () => {
     const response = await fetch("/api/settings/video-sources");
@@ -85,9 +104,13 @@ export default function VideoSourceSettings() {
     if (source === "youtube") {
       setYoutubeUploadError("");
       setYoutubeUploadMessage("");
+      setYoutubeTestResult(null);
+      setYoutubeTestError("");
     } else {
       setGooglePhotosUploadError("");
       setGooglePhotosUploadMessage("");
+      setGooglePhotosTestResult(null);
+      setGooglePhotosTestError("");
     }
 
     try {
@@ -163,6 +186,103 @@ export default function VideoSourceSettings() {
   };
 
 
+  const handleRefreshSecrets = async () => {
+    setRefreshingSecrets(true);
+    setRefreshResult("");
+    setRefreshError("");
+    try {
+      const response = await fetch("/api/settings/video-sources/refresh-secrets", { method: "POST" });
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || (result.data?.failed?.length ? `Sync failed: ${result.data.failed.map((f: { name: string }) => f.name).join(", ")}` : "Refresh failed"));
+      }
+      const updated: string[] = result.data?.updated || [];
+      const deleted: string[] = result.data?.deleted || [];
+      const parts: string[] = [];
+      if (updated.length) parts.push(`Updated: ${updated.join(", ")}`);
+      if (deleted.length) parts.push(`Cleared: ${deleted.join(", ")}`);
+      setRefreshResult(`GitHub secrets refresh ho gaye. ${parts.join(" | ") || result.message || ""}`.trim());
+    } catch (error) {
+      setRefreshError(error instanceof Error ? error.message : "Refresh failed");
+    } finally {
+      setRefreshingSecrets(false);
+    }
+  };
+
+  const handleTestCookies = async (source: "youtube" | "google_photos") => {
+    setTestingCookies(source);
+    if (source === "youtube") {
+      setYoutubeTestError("");
+      setYoutubeTestResult(null);
+    } else {
+      setGooglePhotosTestError("");
+      setGooglePhotosTestResult(null);
+    }
+    try {
+      const cookies = source === "youtube" ? youtubeCookies : googlePhotosCookies;
+      const response = await fetch("/api/settings/video-sources/test-cookies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, cookies: cookies || undefined }),
+      });
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || "Test failed");
+      }
+      const verdict = result.data as CookieTestVerdict;
+      if (source === "youtube") setYoutubeTestResult(verdict);
+      else setGooglePhotosTestResult(verdict);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Test failed";
+      if (source === "youtube") setYoutubeTestError(message);
+      else setGooglePhotosTestError(message);
+    } finally {
+      setTestingCookies(null);
+    }
+  };
+
+  const renderTestVerdict = (verdict: CookieTestVerdict | null, error: string) => {
+    if (error) {
+      return (
+        <div className="mt-2 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>
+      );
+    }
+    if (!verdict) return null;
+    const tone = verdict.inconclusive
+      ? { border: "border-amber-500/20", bg: "bg-amber-500/10", text: "text-amber-200", label: "Inconclusive" }
+      : verdict.signed_in
+        ? { border: "border-emerald-500/20", bg: "bg-emerald-500/10", text: "text-emerald-300", label: "Signed in" }
+        : { border: "border-red-500/20", bg: "bg-red-500/10", text: "text-red-300", label: "Not signed in" };
+    return (
+      <div className={`mt-2 rounded-xl border ${tone.border} ${tone.bg} px-3 py-2 text-sm ${tone.text} space-y-1`}>
+        <div className="font-medium">{tone.label}</div>
+        <div>{verdict.reason}</div>
+        {verdict.account_hint && <div>Account: <span className="font-mono">{verdict.account_hint}</span></div>}
+      </div>
+    );
+  };
+
+  const renderCookieActions = (source: "youtube" | "google_photos") => (
+    <div className="mt-4 flex flex-wrap gap-2">
+      <button
+        type="button"
+        onClick={() => handleTestCookies(source)}
+        disabled={testingCookies === source}
+        className="glass-button text-sm px-4 py-2"
+      >
+        {testingCookies === source ? "Testing..." : "Test Cookies"}
+      </button>
+      <button
+        type="button"
+        onClick={handleRefreshSecrets}
+        disabled={refreshingSecrets}
+        className="glass-button text-sm px-4 py-2"
+      >
+        {refreshingSecrets ? "Refreshing..." : "Refresh to GitHub"}
+      </button>
+    </div>
+  );
+
   const renderCookieDiagnostics = (diagnostics: CookieDiagnostics | null) => {
     if (!diagnostics) return null;
     const warnings = Array.isArray(diagnostics.critical_warnings) ? diagnostics.critical_warnings : (Array.isArray(diagnostics.warnings) ? diagnostics.warnings : []);
@@ -171,6 +291,11 @@ export default function VideoSourceSettings() {
     const totalCookies = diagnostics.cookie_count ?? diagnostics.summary?.total_cookies ?? 0;
     const sessionCookies = diagnostics.session_cookie_count ?? diagnostics.summary?.session_cookies ?? 0;
     const expiredCookies = diagnostics.expired_cookie_count ?? diagnostics.summary?.expired_cookies ?? 0;
+    const expiryDays = diagnostics.earliest_expiry
+      ? Math.round((new Date(diagnostics.earliest_expiry).getTime() - Date.now()) / 86400000)
+      : null;
+    const expiryTone = expiryDays === null ? "text-[#d4d4d8]" : expiryDays <= 0 ? "text-red-400" : expiryDays <= 7 ? "text-amber-300" : "text-emerald-300";
+    const authLikely = diagnostics.youtube_auth_likely;
     return (
       <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-[#d4d4d8] space-y-1">
         <div className="font-medium text-white">Active uploaded cookies</div>
@@ -178,6 +303,17 @@ export default function VideoSourceSettings() {
         {diagnostics.uploaded_at && <div>Uploaded: {diagnostics.uploaded_at}</div>}
         {diagnostics.fingerprint && <div>Fingerprint: <span className="font-mono">{diagnostics.fingerprint}</span></div>}
         <div>Cookies: {totalCookies} total, {expiredCookies} expired, {sessionCookies} session</div>
+        {expiryDays !== null && (
+          <div className={expiryTone}>
+            Earliest cookie expiry: {expiryDays <= 0 ? "expired" : `${expiryDays} din baad`}
+          </div>
+        )}
+        {typeof authLikely === "boolean" && (
+          <div className="flex items-center gap-1.5">
+            <span className={`inline-block h-2 w-2 rounded-full ${authLikely ? "bg-emerald-400" : "bg-red-400"}`} />
+            <span>{authLikely ? "YouTube auth cookies complete lag rahi hain" : "YouTube auth cookies incomplete ho sakti hain"}</span>
+          </div>
+        )}
         {domains && <div>Domains: {domains}</div>}
         {warnings.length > 0 && (
           <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-2 text-amber-200">
@@ -262,6 +398,13 @@ export default function VideoSourceSettings() {
             </div>
           )}
           {renderCookieDiagnostics(youtubeDiagnostics)}
+          {renderCookieActions("youtube")}
+          {renderTestVerdict(youtubeTestResult, youtubeTestError)}
+          {(refreshResult || refreshError) && (
+            <div className={`mt-2 rounded-xl border px-3 py-2 text-sm ${refreshError ? "border-red-500/20 bg-red-500/10 text-red-300" : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"}`}>
+              {refreshError || refreshResult}
+            </div>
+          )}
           <div className="mt-4">
             <label className="block text-sm text-[#a1a1aa] mb-2">YouTube Cookies (Netscape format)</label>
             <textarea
@@ -312,7 +455,14 @@ export default function VideoSourceSettings() {
             </div>
           )}
           {renderCookieDiagnostics(googlePhotosDiagnostics)}
-          <div>
+          {renderCookieActions("google_photos")}
+          {renderTestVerdict(googlePhotosTestResult, googlePhotosTestError)}
+          {(refreshResult || refreshError) && (
+            <div className={`mt-2 rounded-xl border px-3 py-2 text-sm ${refreshError ? "border-red-500/20 bg-red-500/10 text-red-300" : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"}`}>
+              {refreshError || refreshResult}
+            </div>
+          )}
+          <div className="mt-4">
             <label className="block text-sm text-[#a1a1aa] mb-2">Google Photos Cookies (Netscape format)</label>
             <textarea
               className="glass-input h-24 font-mono text-xs"
