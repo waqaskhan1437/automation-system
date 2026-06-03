@@ -44,6 +44,43 @@ interface GenerateSocialInput {
   topic: string;
   platform: string;
   count: number;
+  focusKeyword?: string;
+  brief?: string;
+}
+
+interface PlatformContentSpec {
+  titleMaxChars: number;
+  descWordsMin: number;
+  descWordsMax: number;
+}
+
+// Platform-aware length targets for titles/descriptions.
+// Titles are hard-capped at titleMaxChars; descriptions target the word range
+// (broad, never artificially short) and are only trimmed at the platform max.
+const PLATFORM_CONTENT_SPECS: Record<string, PlatformContentSpec> = {
+  youtube: { titleMaxChars: 100, descWordsMin: 150, descWordsMax: 350 },
+  facebook: { titleMaxChars: 120, descWordsMin: 80, descWordsMax: 200 },
+  tiktok: { titleMaxChars: 150, descWordsMin: 30, descWordsMax: 100 },
+  instagram: { titleMaxChars: 150, descWordsMin: 40, descWordsMax: 120 },
+  twitter: { titleMaxChars: 100, descWordsMin: 20, descWordsMax: 60 },
+};
+
+function getPlatformContentSpec(platform: string): PlatformContentSpec {
+  const key = String(platform || "").trim().toLowerCase();
+  return PLATFORM_CONTENT_SPECS[key] || PLATFORM_CONTENT_SPECS.youtube;
+}
+
+// Generous output budget so broad descriptions and large title/description/hashtag
+// sets are never truncated by a small provider default.
+const AI_MAX_OUTPUT_TOKENS = 4096;
+
+// Trim a title to a hard character cap on a word boundary (no mid-word cut).
+function truncateTitleToChars(title: string, maxChars: number): string {
+  const trimmed = String(title || "").trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  const slice = trimmed.slice(0, maxChars);
+  const lastSpace = slice.lastIndexOf(" ");
+  return (lastSpace > maxChars * 0.6 ? slice.slice(0, lastSpace) : slice).trim();
 }
 
 interface PromptPlanSegmentResult {
@@ -557,24 +594,56 @@ function buildTaglinesPrompt({ topic, count }: GenerateTaglinesInput): Generatio
   };
 }
 
-function buildSocialPrompt({ topic, platform, count }: GenerateSocialInput): GenerationMessages {
+function buildSocialPrompt({ topic, platform, count, focusKeyword, brief }: GenerateSocialInput): GenerationMessages {
   const hashtagCount = Math.min(Math.max(count * 3, 10), 40);
+  const spec = getPlatformContentSpec(platform);
+  const keyword = String(focusKeyword || "").trim();
+  const briefText = String(brief || "").trim();
+
+  const lines: string[] = [
+    `Generate social media metadata for ${platform}.`,
+    `Topic: ${topic}`,
+  ];
+
+  if (keyword) {
+    lines.push(`Focus keyword: ${keyword}`);
+  }
+  if (briefText) {
+    lines.push(`Brief / angle (MUST be fully covered, do not ignore or narrow it): ${briefText}`);
+  }
+
+  lines.push(
+    "",
+    `Create exactly ${count} titles.`,
+    `Create exactly ${count} descriptions.`,
+    `Create exactly ${hashtagCount} hashtags.`,
+    "",
+    "TITLE rules:",
+    `- Catchy, ${platform}-native, and specific to the topic — never generic filler.`,
+    `- Each title must be at most ${spec.titleMaxChars} characters (the ${platform} limit).`,
+    ...(keyword ? [`- Naturally include the focus keyword "${keyword}" in every title.`] : []),
+    "",
+    "DESCRIPTION rules:",
+    `- Write broad, detailed, complete descriptions — NOT short. Target ${spec.descWordsMin}-${spec.descWordsMax} words each.`,
+    "- Fully cover the topic" + (briefText ? " and the brief/angle above" : "") + "; be informative and engaging, not a one-line caption.",
+    ...(keyword ? [`- Use the focus keyword "${keyword}" exactly TWICE in each description, placed naturally.`] : []),
+    "- Each description must read as a finished, publishable caption — never cut off mid-thought.",
+    "",
+    "HASHTAG rules:",
+    "- Unique, relevant to the topic, no duplicates, no spaces inside a tag.",
+    "",
+    'Return JSON with this exact shape: {"titles":["..."],"descriptions":["..."],"hashtags":["#..."]}',
+  );
 
   return {
-    system:
-      "You create social media metadata. Return valid JSON only. No markdown, no prose, no code fences.",
-    user: [
-      `Generate social content for ${platform}.`,
-      `Topic: ${topic}`,
-      `Create exactly ${count} titles.`,
-      `Create exactly ${count} descriptions.`,
-      `Create exactly ${hashtagCount} hashtags.`,
-      "Rules:",
-      "- titles should be catchy and platform-native",
-      "- descriptions should be short and usable as captions",
-      "- hashtags must be unique and relevant",
-      '- return JSON with this exact shape: {"titles":["..."],"descriptions":["..."],"hashtags":["#..."]}',
+    system: [
+      "You are an expert social media copywriter and SEO strategist.",
+      "Think broadly and creatively: cover the FULL topic and brief, explore angles, and write substantive copy.",
+      "Follow the length, keyword, and platform rules in the user message exactly.",
+      "Never produce generic, repetitive, or artificially short filler.",
+      "Return valid JSON only. No markdown, no prose, no code fences.",
     ].join("\n"),
+    user: lines.join("\n"),
   };
 }
 
@@ -654,6 +723,7 @@ async function generateWithOpenAI(
         { role: "system", content: messages.system },
         { role: "user", content: messages.user },
       ],
+      max_output_tokens: AI_MAX_OUTPUT_TOKENS,
     }),
   });
 
@@ -674,6 +744,7 @@ async function generateWithOpenAI(
         { role: "user", content: messages.user },
       ],
       temperature: 0.7,
+      max_tokens: AI_MAX_OUTPUT_TOKENS,
     }),
   });
 
@@ -706,6 +777,7 @@ async function generateWithOpenAICompatible(
         { role: "user", content: messages.user },
       ],
       temperature: 0.7,
+      max_tokens: AI_MAX_OUTPUT_TOKENS,
     }),
   });
 
@@ -756,6 +828,7 @@ async function generateWithGemini(
         generationConfig: {
           temperature: 0.7,
           responseMimeType: "application/json",
+          maxOutputTokens: AI_MAX_OUTPUT_TOKENS,
         },
       }),
     }
@@ -795,6 +868,7 @@ async function generateWithCohere(
         { role: "user", content: messages.user },
       ],
       response_format: { type: "json_object" },
+      max_tokens: AI_MAX_OUTPUT_TOKENS,
     }),
   });
 
@@ -811,6 +885,7 @@ async function generateWithCohere(
           { role: "system", content: messages.system },
           { role: "user", content: messages.user },
         ],
+        max_tokens: AI_MAX_OUTPUT_TOKENS,
       }),
     });
 
@@ -1400,10 +1475,17 @@ export function normalizeTaglinesResult(
 
 export function normalizeSocialResult(
   payload: Record<string, unknown>,
-  count: number
+  count: number,
+  platform?: string
 ): { titles: string[]; descriptions: string[]; hashtags: string[] } {
-  const titles = cleanStringList(payload.titles, count);
-  const descriptions = cleanStringList(payload.descriptions, count);
+  const spec = getPlatformContentSpec(platform || "youtube");
+  const titles = cleanStringList(payload.titles, count).map((title) => truncateTitleToChars(title, spec.titleMaxChars));
+  // Descriptions are intentionally NOT word-truncated (broad is the goal);
+  // only guard against absurdly long output beyond a generous char ceiling.
+  const descCharCeiling = Math.max(600, spec.descWordsMax * 9);
+  const descriptions = cleanStringList(payload.descriptions, count).map((desc) =>
+    desc.length > descCharCeiling ? desc.slice(0, descCharCeiling).trim() : desc
+  );
   const hashtags = cleanStringList(payload.hashtags, Math.min(Math.max(count * 3, 10), 40), true);
 
   if (titles.length === 0 || descriptions.length === 0 || hashtags.length === 0) {

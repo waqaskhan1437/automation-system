@@ -8,6 +8,7 @@ import { api, ApiError } from "@/lib/api";
 import BasicTab from "./BasicTab";
 import VideoTab from "./tabs/VideoTab";
 import TaglinesTab from "./tabs/TaglinesTab";
+import OverlaysTab from "./tabs/OverlaysTab";
 import SocialTab from "./tabs/SocialTab";
 import CaptionsTab from "./tabs/CaptionsTab";
 import PublishTab from "./PublishTab";
@@ -49,6 +50,7 @@ const tabs = [
   { id: "basic", label: "Basic", icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
   { id: "video", label: "Video", icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" },
   { id: "taglines", label: "Taglines", icon: "M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" },
+  { id: "overlays", label: "Overlays", icon: "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" },
   { id: "social", label: "Social", icon: "M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" },
   { id: "captions", label: "Captions", icon: "M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" },
   { id: "publish", label: "Publish", icon: "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" },
@@ -662,6 +664,7 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
           />
         );
       }
+      case "overlays": return <OverlaysTab data={data} onChange={onChange} />;
       case "captions": return <CaptionsTab data={data} onChange={onChange} />;
       case "publish": return <PublishTab data={data} onChange={onChange} />;
       default: return null;

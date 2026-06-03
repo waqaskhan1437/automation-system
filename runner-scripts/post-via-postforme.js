@@ -436,6 +436,15 @@ async function main() {
   const bottomTagline = getRandomFromArray(bottomTaglines);
   const title = getRandomFromArray(titles);
   const description = getRandomFromArray(descriptions);
+
+  // Gate: never auto-post when real social content is missing. The video is
+  // still produced/uploaded and a draft is kept for review, but no live post
+  // goes out with empty/wrong metadata.
+  const hasSocialContent = cleanString(title).length > 0 && cleanString(description).length > 0;
+  if (autoPublish && !hasSocialContent) {
+    console.log("[POST] Social content empty (title/description missing) → skipping auto-post (video still produced, draft kept for review)");
+  }
+
   const normalizedHashtags = normalizeHashtags(hashtags);
   const hashtagsStr = normalizedHashtags.join(" ");
   const caption = [topTagline, title, description, hashtagsStr, bottomTagline]
@@ -465,7 +474,9 @@ async function main() {
   let livePostIds = [];
 
   try {
-    const publishingPlan = buildPublishingPlan(config, socialAccounts);
+    // When social content is missing, force auto-publish off so no live post is created.
+    const effectiveConfig = hasSocialContent ? config : { ...config, auto_publish: false };
+    const publishingPlan = buildPublishingPlan(effectiveConfig, socialAccounts);
     postStatus = publishingPlan.postStatus;
     scheduledAt = publishingPlan.scheduledAt;
     scheduledAccounts = publishingPlan.scheduledAccounts;

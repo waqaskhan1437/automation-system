@@ -16,7 +16,7 @@
  * ============================================================================
  */
 
-const { execSync } = require("child_process");
+const { execSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -30,6 +30,7 @@ const INPUT_FILE = process.env.INPUT_FILE_PATH ? path.resolve(process.env.INPUT_
 const OUTPUT_FILE = process.env.OUTPUT_FILE_PATH ? path.resolve(process.env.OUTPUT_FILE_PATH) : path.join(OUTPUT_DIR, "processed-video.mp4");
 const TEMP_FILE = process.env.TEMP_FILE_PATH ? path.resolve(process.env.TEMP_FILE_PATH) : path.join(OUTPUT_DIR, "temp-noaudio.mp4");
 const SPEED_FILE = process.env.SPEED_FILE_PATH ? path.resolve(process.env.SPEED_FILE_PATH) : path.join(OUTPUT_DIR, "temp-speed.mp4");
+const OVERLAY_FILE = process.env.OVERLAY_FILE_PATH ? path.resolve(process.env.OVERLAY_FILE_PATH) : path.join(OUTPUT_DIR, "temp-overlay.mp4");
 
 function getCommandCandidates(name) {
   const isWin = process.platform === "win32";
@@ -729,6 +730,329 @@ function remuxWithFaststart(inputFile, outputFile, codecArgs) {
 }
 
 /**
+ * ============================================================================
+ * Multi-Overlay System (image / video / logo overlays)
+ * ============================================================================
+ * Applies an array of image/video/logo overlays in a dedicated FFmpeg pass
+ * (run AFTER the main scale/crop+drawtext pass, BEFORE audio muting).
+ *
+ * Each overlay (config.overlays[i]):
+ *   url, start_seconds, duration_seconds | full_video, position, scale_percent,
+ *   animation (none|rotation|move|fade), rotation_period_sec, move_direction,
+ *   fade_seconds, opacity
+ *
+ * Assets are referenced by URL and downloaded via curl to local temp files
+ * (FFmpeg overlay inputs must be local files). Per-overlay failures are
+ * isolated — a bad overlay is skipped, the job still completes.
+ * ============================================================================
+ */
+
+const OVERLAY_MARGIN = 30;
+const MAX_OVERLAYS = 10;
+
+// Raw (unquoted) resolved binaries for arg-array spawnSync calls.
+const FFMPEG_BIN = resolveCommand("ffmpeg");
+const CURL_BIN = resolveCommand("curl");
+
+function detectOverlayKind(fileOrUrl) {
+  const ext = String(fileOrUrl || "").toLowerCase().replace(/[?#].*$/, "").match(/\.([a-z0-9]+)$/);
+  const e = ext ? ext[1] : "";
+  if (e === "gif") return "gif";
+  if (["png", "jpg", "jpeg", "webp", "bmp"].includes(e)) return "image";
+  if (["mp4", "mov", "webm", "mkv", "m4v", "avi"].includes(e)) return "video";
+  // Default unknown extensions to image (safest: single decoded frame, looped).
+  return "image";
+}
+
+function overlayExtForKind(url, kind) {
+  const m = String(url || "").toLowerCase().replace(/[?#].*$/, "").match(/\.([a-z0-9]+)$/);
+  if (m) return m[1];
+  return kind === "video" ? "mp4" : kind === "gif" ? "gif" : "png";
+}
+
+function downloadOverlayAsset(url, destPath) {
+  const args = [
+    "-L", "--fail",
+    "--connect-timeout", "10",
+    "--max-time", "60",
+    "-o", destPath,
+    url,
+  ];
+  try {
+    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+  } catch {}
+  const result = spawnSync(CURL_BIN, args, { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8", timeout: 90000 });
+  if (result.error) {
+    throw new Error(`curl failed: ${result.error.message}`);
+  }
+  if (typeof result.status === "number" && result.status !== 0) {
+    const tail = String(result.stderr || "").trim().split("\n").slice(-2).join(" | ");
+    throw new Error(`curl exited ${result.status}${tail ? `: ${tail}` : ""}`);
+  }
+  if (!fs.existsSync(destPath) || fs.statSync(destPath).size <= 0) {
+    throw new Error("downloaded overlay asset is empty");
+  }
+  return destPath;
+}
+
+function buildOverlayInputArgs(kind, fullVideo, filePath) {
+  if (kind === "image") {
+    return ["-loop", "1", "-i", filePath];
+  }
+  if (kind === "gif") {
+    return ["-ignore_loop", "0", "-i", filePath];
+  }
+  // video
+  if (fullVideo) {
+    return ["-stream_loop", "-1", "-i", filePath];
+  }
+  return ["-i", filePath];
+}
+
+function getOverlayPositionExpr(position, margin) {
+  const m = margin;
+  switch (String(position || "bottom-right")) {
+    case "center": return { x: "(W-w)/2", y: "(H-h)/2" };
+    case "top": return { x: "(W-w)/2", y: `${m}` };
+    case "bottom": return { x: "(W-w)/2", y: `H-h-${m}` };
+    case "left": return { x: `${m}`, y: "(H-h)/2" };
+    case "right": return { x: `W-w-${m}`, y: "(H-h)/2" };
+    case "top-left": return { x: `${m}`, y: `${m}` };
+    case "top-right": return { x: `W-w-${m}`, y: `${m}` };
+    case "bottom-left": return { x: `${m}`, y: `H-h-${m}` };
+    case "bottom-right": return { x: `W-w-${m}`, y: `H-h-${m}` };
+    default: return { x: `W-w-${m}`, y: `H-h-${m}` };
+  }
+}
+
+function num(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Build the prep sub-chain for one overlay and its overlay= placement params.
+ * Returns { prep, x, y, enable } or null when the overlay should be skipped.
+ */
+function buildSingleOverlayChain(overlay, inputIndex, width, height, baseDuration) {
+  const start = Math.max(0, num(overlay.start_seconds, 0));
+  if (baseDuration && start >= baseDuration) {
+    return null; // starts after the video ends
+  }
+  const fullVideo = overlay.full_video === true || overlay.full_video === "true";
+  const dur = fullVideo
+    ? (baseDuration || 0) - start
+    : Math.max(0.1, num(overlay.duration_seconds, 5));
+  const end = baseDuration ? Math.min(start + dur, baseDuration) : start + dur;
+  const effDur = Math.max(0.1, end - start);
+
+  const position = String(overlay.position || "bottom-right");
+  const animation = String(overlay.animation || "none");
+  const opacity = Math.max(0, Math.min(100, num(overlay.opacity, 100))) / 100;
+  const scalePercent = Math.max(1, num(overlay.scale_percent, 20));
+
+  const filters = ["format=rgba"];
+
+  // Scale (precomputed pixel size — overlay's own scale can't reference main_w).
+  if (position === "full_cover") {
+    filters.push(`scale=${width}:${height}`);
+  } else {
+    const targetW = Math.max(2, Math.round(width * (scalePercent / 100)));
+    filters.push(`scale=${targetW}:-2`);
+  }
+
+  // Align overlay clock to the main timeline so t-based exprs use absolute seconds.
+  filters.push(start > 0 ? `setpts=PTS-STARTPTS+${start}/TB` : "setpts=PTS-STARTPTS");
+
+  // Rotation (continuous spin). Escape commas inside hypot() for the filtergraph parser.
+  if (animation === "rotation") {
+    const period = Math.max(0.2, num(overlay.rotation_period_sec, 4));
+    filters.push(`rotate=2*PI*(t-${start})/${period}:c=none:ow=hypot(iw\\,ih):oh=hypot(iw\\,ih)`);
+  }
+
+  // Opacity (constant alpha multiplier) applied before fade.
+  if (opacity < 1) {
+    filters.push(`colorchannelmixer=aa=${opacity.toFixed(3)}`);
+  }
+
+  // Fade in + out (alpha) within the active window.
+  if (animation === "fade") {
+    const fade = Math.max(0.1, Math.min(num(overlay.fade_seconds, 1), effDur / 2));
+    filters.push(`fade=t=in:st=${start}:d=${fade}:alpha=1`);
+    filters.push(`fade=t=out:st=${(end - fade).toFixed(3)}:d=${fade}:alpha=1`);
+  }
+
+  const label = `ov${inputIndex}`;
+  const prep = `[${inputIndex}:v]${filters.join(",")}[${label}]`;
+
+  // Position / movement.
+  let x;
+  let y;
+  if (position === "full_cover") {
+    x = "0";
+    y = "0";
+  } else {
+    const pos = getOverlayPositionExpr(position, OVERLAY_MARGIN);
+    x = pos.x;
+    y = pos.y;
+    if (animation === "move") {
+      const dir = String(overlay.move_direction || "left_right");
+      if (dir === "left_right") x = `-w+(W+w)*(t-${start})/${effDur.toFixed(3)}`;
+      else if (dir === "right_left") x = `W-(W+w)*(t-${start})/${effDur.toFixed(3)}`;
+      else if (dir === "top_bottom") y = `-h+(H+h)*(t-${start})/${effDur.toFixed(3)}`;
+      else if (dir === "bottom_top") y = `H-(H+h)*(t-${start})/${effDur.toFixed(3)}`;
+    }
+  }
+
+  // full_video overlays don't need a timing gate; others use between(t,start,end).
+  const enable = fullVideo ? null : `between(t,${start},${end.toFixed(3)})`;
+
+  return { prep, label, x, y, enable };
+}
+
+/**
+ * Assemble the complete filter_complex graph + per-overlay input args.
+ * Returns { filterComplex, inputArgs } or null when nothing usable.
+ */
+function buildOverlayFilterComplex(validOverlays, width, height, baseDuration) {
+  const preps = [];
+  const inputArgs = [];
+  const placements = [];
+
+  validOverlays.forEach((entry, i) => {
+    const inputIndex = i + 1; // input 0 is the base video
+    const chain = buildSingleOverlayChain(entry.overlay, inputIndex, width, height, baseDuration);
+    if (!chain) {
+      console.log(`[OVERLAY] skipping #${entry.originalIndex} — outside video timeline`);
+      return;
+    }
+    inputArgs.push(...buildOverlayInputArgs(entry.kind, entry.fullVideo, entry.filePath));
+    preps.push(chain.prep);
+    placements.push(chain);
+  });
+
+  if (placements.length === 0) {
+    return null;
+  }
+
+  const steps = [];
+  let current = "[0:v]";
+  placements.forEach((p, idx) => {
+    const outLabel = idx === placements.length - 1 ? "[vout]" : `[t${idx}]`;
+    const enablePart = p.enable ? `:enable='${p.enable}'` : "";
+    steps.push(`${current}[${p.label}]overlay=x=${p.x}:y=${p.y}${enablePart}:eof_action=pass${outLabel}`);
+    current = outLabel;
+  });
+
+  const filterComplex = [...preps, ...steps].join(";");
+  return { filterComplex, inputArgs };
+}
+
+function runOverlayFfmpeg(inFile, outFile, inputArgs, filterComplex, config) {
+  const encodeArgs = getOutputEncodeArgs(config).split(/\s+/).filter(Boolean);
+  const baseArgs = [
+    "-y",
+    "-i", inFile,
+    ...inputArgs,
+    "-filter_complex", filterComplex,
+    "-map", "[vout]",
+    "-map", "0:a?",
+    ...encodeArgs,
+    "-movflags", "+faststart",
+    "-shortest",
+    outFile,
+  ];
+  console.log("[OVERLAY] FFmpeg filter_complex:", filterComplex);
+  let result = spawnSync(FFMPEG_BIN, baseArgs, { stdio: "inherit", timeout: 600000 });
+  if (!result.error && result.status === 0 && fs.existsSync(outFile)) {
+    return true;
+  }
+  // Fallback: force libx264 CPU encode (HW encoder may reject the rgba graph).
+  console.log("[OVERLAY] HW/primary encode failed, retrying with libx264...");
+  const fallbackArgs = [
+    "-y",
+    "-i", inFile,
+    ...inputArgs,
+    "-filter_complex", filterComplex,
+    "-map", "[vout]",
+    "-map", "0:a?",
+    "-c:v", "libx264", "-profile:v", "high", "-level:v", "4.1", "-g", "48",
+    "-preset", "veryfast", "-crf", "24",
+    "-c:a", "aac", "-b:a", "96k", "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart",
+    "-shortest",
+    outFile,
+  ];
+  result = spawnSync(FFMPEG_BIN, fallbackArgs, { stdio: "inherit", timeout: 900000 });
+  return !result.error && result.status === 0 && fs.existsSync(outFile);
+}
+
+/**
+ * Orchestrator: download assets, build graph, run overlay pass.
+ * Returns true if outFile was produced; false to fall back to the un-overlaid input.
+ */
+function applyOverlays(inFile, outFile, overlays, config, width, height) {
+  console.log("=== APPLY OVERLAYS ===");
+  const list = Array.isArray(overlays) ? overlays.slice(0, MAX_OVERLAYS) : [];
+  if (list.length === 0) {
+    return false;
+  }
+
+  const baseDuration = getVideoDuration(inFile) || 0;
+  console.log(`[OVERLAY] base duration: ${baseDuration}s, overlays requested: ${list.length}`);
+
+  const downloaded = [];
+  const validOverlays = [];
+
+  try {
+    list.forEach((overlay, i) => {
+      const url = String(overlay && overlay.url || "").trim();
+      if (!url) {
+        console.log(`[OVERLAY] skipping #${i} — no url`);
+        return;
+      }
+      const kind = detectOverlayKind(url);
+      const fullVideo = overlay.full_video === true || overlay.full_video === "true";
+      const destPath = path.join(OUTPUT_DIR, `overlay_${i}.${overlayExtForKind(url, kind)}`);
+      try {
+        downloadOverlayAsset(url, destPath);
+        downloaded.push(destPath);
+        validOverlays.push({ overlay, kind, fullVideo, filePath: destPath, originalIndex: i });
+        console.log(`[OVERLAY] #${i} downloaded (${kind}): ${url}`);
+      } catch (err) {
+        console.log(`[OVERLAY] skipping #${i} — download failed: ${err.message}`);
+      }
+    });
+
+    if (validOverlays.length === 0) {
+      console.log("[OVERLAY] no usable overlays, skipping overlay pass");
+      return false;
+    }
+
+    const graph = buildOverlayFilterComplex(validOverlays, width, height, baseDuration);
+    if (!graph) {
+      console.log("[OVERLAY] no valid overlay placements, skipping overlay pass");
+      return false;
+    }
+
+    const ok = runOverlayFfmpeg(inFile, outFile, graph.inputArgs, graph.filterComplex, config);
+    if (ok) {
+      console.log("✅ Overlays applied successfully!");
+      return true;
+    }
+    console.log("[OVERLAY] overlay pass failed, falling back to un-overlaid video");
+    return false;
+  } catch (err) {
+    console.error("[OVERLAY] Unexpected error:", err.message);
+    return false;
+  } finally {
+    for (const file of downloaded) {
+      try { fs.unlinkSync(file); } catch {}
+    }
+  }
+}
+
+/**
  * Speed Control Functions using FFmpeg
  * Supports multiple speed modes:
  * - none: No speed change
@@ -1321,18 +1645,36 @@ function main() {
   }
   console.log("TEMP_FILE created successfully:", TEMP_FILE);
 
+  // === OVERLAY PASS (image / video / logo overlays) ===
+  // Applied after the main scale/crop+drawtext pass, before audio muting.
+  // Backward compatible: empty/undefined overlays leaves output unchanged.
+  let stageFile = TEMP_FILE;
+  let overlays = config.overlays;
+  if (typeof overlays === "string") {
+    try { overlays = JSON.parse(overlays); } catch { overlays = []; }
+  }
+  if (Array.isArray(overlays) && overlays.length > 0) {
+    const overlaid = applyOverlays(TEMP_FILE, OVERLAY_FILE, overlays, config, width, height);
+    if (overlaid) {
+      stageFile = OVERLAY_FILE;
+    }
+  } else {
+    console.log("Overlays: none");
+  }
+
   // Apply advanced audio muting
   if (muteMode !== "none") {
     console.log("Applying audio muting...");
-    applyAdvancedAudioMuting(TEMP_FILE, OUTPUT_FILE, config);
+    applyAdvancedAudioMuting(stageFile, OUTPUT_FILE, config);
   } else {
     console.log("Audio Processing: Original (no muting)");
-    console.log("TEMP_FILE already has faststart, copying directly to OUTPUT_FILE...");
-    fs.copyFileSync(TEMP_FILE, OUTPUT_FILE);
+    console.log("Staged file already has faststart, copying directly to OUTPUT_FILE...");
+    fs.copyFileSync(stageFile, OUTPUT_FILE);
   }
 
   try { fs.unlinkSync(TEMP_FILE); } catch (e) {}
   try { fs.unlinkSync(SPEED_FILE); } catch (e) {}
+  try { fs.unlinkSync(OVERLAY_FILE); } catch (e) {}
 
   if (!fs.existsSync(OUTPUT_FILE)) {
     console.error("ERROR: OUTPUT_FILE not created!");
