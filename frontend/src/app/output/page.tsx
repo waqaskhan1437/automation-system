@@ -159,7 +159,8 @@ function extractOutputItems(jobs: Array<Record<string, unknown>>): OutputMediaIt
 
     const processedVideos = Array.isArray(output.processed_videos) ? output.processed_videos : [];
     if (processedVideos.length > 0) {
-      for (let index = 0; index < processedVideos.length; index += 1) {
+      const totalVideos = processedVideos.length;
+      for (let index = 0; index < totalVideos; index += 1) {
         const record = asRecord(processedVideos[index]);
         const videoUrl = typeof record.video_url === "string" ? record.video_url : "";
         // Check for dubbing report final video in processed_videos
@@ -180,7 +181,7 @@ function extractOutputItems(jobs: Array<Record<string, unknown>>): OutputMediaIt
           kind: "video",
           primaryUrl: effectiveUrl,
           urls: [effectiveUrl],
-          date,
+          date: `${date} — Short ${index + 1}/${totalVideos}`,
           mode: "video",
           resolution,
           aspectRatio,

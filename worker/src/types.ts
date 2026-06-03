@@ -161,6 +161,7 @@ export interface Job {
   id?: number;
   user_id?: number;
   automation_id: number;
+  automation_name?: string | null;
   status: "queued" | "pending" | "running" | "success" | "failed" | "cancelled";
   github_run_id: number | null;
   github_run_url: string | null;

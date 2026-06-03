@@ -475,7 +475,7 @@ function extractSegment(inputFile, outputFile, start, end) {
   }
 }
 
-function processSegmentDirect(segmentFile, duration, aspectRatio, config, segmentIndex) {
+function processSegmentDirect(segmentFile, duration, aspectRatio, config, segmentIndex, totalSegments) {
   const outputFile = path.join(OUTPUT_DIR, 'processed-video.mp4');
   console.log(`[SEGMENT-PROCESS] Running processor for segment ${segmentIndex + 1} (${duration}s @ ${aspectRatio})...`);
 
@@ -491,6 +491,8 @@ function processSegmentDirect(segmentFile, duration, aspectRatio, config, segmen
         TEMP_FILE_PATH: path.join(OUTPUT_DIR, `segment-temp-${segmentIndex}.mp4`),
         SPEED_FILE_PATH: path.join(OUTPUT_DIR, `segment-speed-${segmentIndex}.mp4`),
         OUTPUT_DIR,
+        SEGMENT_INDEX: String(segmentIndex),
+        SEGMENT_TOTAL: String(totalSegments || 1),
         ...(retry ? { FFMPEG_FALLBACK: 'ultrafast' } : {}),
       }
     });
@@ -615,7 +617,7 @@ async function main() {
 
             const duration = Math.max(1, Math.round(Number(seg.duration) || parseInt(segmentConfig.short_duration || "60", 10) || 60));
             const aspectRatio = segmentConfig.aspect_ratio || "9:16";
-            processSegmentDirect(segOutputFile, duration, aspectRatio, segmentConfig, seg.index);
+            processSegmentDirect(segOutputFile, duration, aspectRatio, segmentConfig, seg.index, segments.length);
             const processedSegmentFile = path.join(OUTPUT_DIR, `processed-segment-${i}-${seg.index}.mp4`);
             fs.copyFileSync(path.join(OUTPUT_DIR, 'processed-video.mp4'), processedSegmentFile);
             result.filePath = processedSegmentFile;

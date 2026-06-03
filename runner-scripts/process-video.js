@@ -1204,6 +1204,27 @@ function main() {
     }
   }
 
+  // Job info overlay — bottom-right corner
+  const jobId = process.env.JOB_ID;
+  const automationId = process.env.AUTOMATION_ID;
+  const segIndex = process.env.SEGMENT_INDEX;
+  const segTotal = process.env.SEGMENT_TOTAL;
+  if (jobId || automationId) {
+    let overlayText = `Job #${jobId || '?'}`;
+    if (automationId) overlayText += ` | Auto #${automationId}`;
+    const jobInfoFilter = `drawtext=text='${overlayText}':fontsize=16:fontcolor=white@0.6:x=(w-text_w-20):y=(h-text_h-20):borderw=1:bordercolor=black@0.4`;
+    filters.push(jobInfoFilter);
+    console.log("[PROCESS] Job info overlay:", overlayText);
+  }
+
+  // Short counter overlay — top-right corner (for segment mode)
+  if (segIndex !== undefined && segTotal !== undefined && Number(segTotal) > 1) {
+    const shortLabel = `Short ${Number(segIndex) + 1}/${segTotal}`;
+    const shortFilter = `drawtext=text='${shortLabel}':fontsize=18:fontcolor=white@0.7:x=(w-text_w-20):y=20:borderw=1:bordercolor=black@0.4`;
+    filters.push(shortFilter);
+    console.log("[PROCESS] Short counter overlay:", shortLabel);
+  }
+
   const splitMode = config.split_mode || "chunk";
   const splitEnabled = config.split_enabled === true || config.split_enabled === "true";
   let splitSelectExpr = null;

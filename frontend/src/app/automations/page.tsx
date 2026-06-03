@@ -25,6 +25,7 @@ interface DashboardSummaryEntry {
   post_stats?: AutomationPostStats;
   scheduled_summary?: { posts: number; accounts: number };
   latest_active_job?: DashboardActiveJob | null;
+  latest_failed_error?: string | null;
   link_queue?: LinkQueueStatus;
 }
 
@@ -162,6 +163,7 @@ export default function AutomationsPage() {
   const [showLogs, setShowLogs] = useState<{ autoId: number; job: RunningJob } | null>(null);
   const [showScheduledPosts, setShowScheduledPosts] = useState<{ automationId: number; automationName: string } | null>(null);
   const [linkQueues, setLinkQueues] = useState<Record<number, LinkQueueStatus>>({});
+  const [failedErrors, setFailedErrors] = useState<Record<number, string | null>>({});
   const [now, setNow] = useState(() => Date.now());
   const [jobStats, setJobStats] = useState<Record<number, AutomationStats>>({});
   const [scheduledUploadsByAutomation, setScheduledUploadsByAutomation] = useState<Record<number, AutomationScheduledSummary>>({});
@@ -195,6 +197,7 @@ export default function AutomationsPage() {
       setAutomations(nextAutomations);
 
       const nextLinkQueues: Record<number, LinkQueueStatus> = {};
+      const nextFailedErrors: Record<number, string | null> = {};
       const nextJobStats: Record<number, AutomationStats> = {};
       const nextAutomationStats: Record<number, AutomationPostStats> = {};
       const nextScheduledUploads: Record<number, AutomationScheduledSummary> = {};
@@ -202,6 +205,7 @@ export default function AutomationsPage() {
 
       for (const automation of nextAutomations) {
         const summary = summaries[String(automation.id)] || {};
+        nextFailedErrors[automation.id] = summary.latest_failed_error || null;
         nextLinkQueues[automation.id] = summary.link_queue || {
           totalLinks: 0,
           processedLinks: 0,
@@ -231,6 +235,7 @@ export default function AutomationsPage() {
       }
 
       setLinkQueues(nextLinkQueues);
+      setFailedErrors(nextFailedErrors);
       setJobStats(nextJobStats);
       setAutomationStats(nextAutomationStats);
       setScheduledUploadsByAutomation(nextScheduledUploads);
@@ -763,6 +768,15 @@ export default function AutomationsPage() {
                       <div className="text-[10px] text-[#6b7280] mt-1">
                         {stats.posted} posted
                       </div>
+                      {jobs.failedJobs > 0 && failedErrors[auto.id] && (
+                        <div className="mt-2 p-2 rounded-lg bg-[rgba(239,68,68,0.1)]">
+                          <p className="text-[10px] text-[#ef4444] leading-relaxed break-words">
+                            {(failedErrors[auto.id] || '').length > 120
+                              ? (failedErrors[auto.id] || '').slice(0, 120) + '...'
+                              : failedErrors[auto.id]}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

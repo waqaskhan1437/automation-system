@@ -271,6 +271,18 @@ export async function handleAutomationsRoutes(
        ORDER BY automation_id ASC, id DESC`
     ).bind(userId).all<AutomationActiveJobRow>();
 
+    const failedJobsResult = await env.DB.prepare(
+      `SELECT
+         id,
+         automation_id,
+         error_message
+       FROM jobs
+       WHERE user_id = ?
+         AND status = 'failed'
+         AND error_message IS NOT NULL
+       ORDER BY completed_at DESC`
+    ).bind(userId).all<{ id: number; automation_id: number; error_message: string }>();
+
     const summaries: Record<number, {
       job_stats: {
         totalJobs: number;
@@ -295,6 +307,7 @@ export async function handleAutomationsRoutes(
         githubRunUrl: string | null;
         error: string | null;
       } | null;
+      latest_failed_error: string | null;
       link_queue: Awaited<ReturnType<typeof getLinkQueueStatus>>;
     }> = {};
 
@@ -322,6 +335,7 @@ export async function handleAutomationsRoutes(
             accounts: 0,
           },
           latest_active_job: null,
+          latest_failed_error: null,
           link_queue: await safeGetLinkQueueStatus(env, automation.id, userId),
         };
       }
@@ -357,6 +371,16 @@ export async function handleAutomationsRoutes(
         summaries[row.automation_id].scheduled_summary.accounts += getScheduledAccountCount(row.post_metadata);
       } else if (row.post_status === "posted") {
         summaries[row.automation_id].post_stats.posted += 1;
+      }
+    }
+
+    for (const row of failedJobsResult.results || []) {
+      if (!row.automation_id || !summaries[row.automation_id]) {
+        continue;
+      }
+
+      if (!summaries[row.automation_id].latest_failed_error) {
+        summaries[row.automation_id].latest_failed_error = row.error_message || null;
       }
     }
 

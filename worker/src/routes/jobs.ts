@@ -268,7 +268,7 @@ export async function handleJobsRoutes(
     const status = url.searchParams.get("status");
     const limit = parseInt(url.searchParams.get("limit") || "50");
 
-    let query = "SELECT * FROM jobs WHERE user_id = ?";
+    let query = "SELECT j.*, a.name AS automation_name FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.user_id = ?";
     const params: (string | number)[] = [userId];
 
     if (automationId) {
@@ -292,7 +292,7 @@ export async function handleJobsRoutes(
   if (id && !action) {
     // GET /api/jobs/:id
     if (method === "GET") {
-      const result = await env.DB.prepare("SELECT * FROM jobs WHERE id = ? AND user_id = ?").bind(id, userId).first<Job>();
+      const result = await env.DB.prepare("SELECT j.*, a.name AS automation_name FROM jobs j LEFT JOIN automations a ON a.id = j.automation_id WHERE j.id = ? AND j.user_id = ?").bind(id, userId).first<Job>();
       if (!result) {
         return jsonResponse({ success: false, error: "Job not found" }, 404);
       }

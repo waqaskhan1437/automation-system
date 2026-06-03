@@ -6,6 +6,7 @@ import { getVideoUrl, getAllVideoUrls, getVideoUrls, getFetchStats, getLocalVide
 interface Job {
   id: number;
   automation_id: number;
+  automation_name?: string | null;
   status: "queued" | "running" | "success" | "failed" | "cancelled";
   github_run_id: number | null;
   github_run_url: string | null;
@@ -141,6 +142,11 @@ export default function JobsPage() {
                       <p className="font-medium">Job #{job.id}</p>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <span className={`badge badge-${job.status}`}>{job.status}</span>
+                        {job.automation_name && (
+                          <span className="text-xs px-2 py-0.5 rounded bg-[rgba(99,102,241,0.15)] text-[#818cf8]">
+                            {job.automation_name}
+                          </span>
+                        )}
                         {(() => {
                           const execMode = (() => { try { const d = JSON.parse(job.input_data || '{}'); return d.execution_mode; } catch { return null; } })();
                           const isGithub = job.github_run_id || execMode === "github";
@@ -212,7 +218,7 @@ export default function JobsPage() {
                   <div className="mt-4 flex flex-wrap gap-4 justify-center">
                     {previewUrls.map((url, idx) => (
                       <div key={idx} className="flex flex-col items-center">
-                        <span className="text-xs text-[#a1a1aa] mb-1">Video {idx + 1}</span>
+                        <span className="text-xs text-[#a1a1aa] mb-1">Short {idx + 1}/{previewUrls.length}</span>
                         <VideoPlayer videoUrl={url} />
                       </div>
                     ))}
