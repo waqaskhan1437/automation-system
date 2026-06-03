@@ -6,6 +6,7 @@ const http = require('http');
 const https = require('https');
 
 const RUNNER_STATE_PATH = path.join(__dirname, 'runner-state.json');
+const RUNNER_LOCK_PATH = path.join(__dirname, 'runner.lock');
 const FFMPEG_EXE = path.join(__dirname, 'tools', 'ffmpeg', 'bin', 'ffmpeg.exe');
 const YTDLP_EXE = path.join(__dirname, 'tools', 'yt-dlp', 'yt-dlp.exe');
 const UPDATE_MANIFEST_PATH = path.join(__dirname, 'update-manifest.json');
@@ -96,6 +97,10 @@ let currentRunnerCommand = null;
 let remoteAccessSnapshot = null;
 let remoteAccessSnapshotAt = 0;
 
+const RUNNER_LOCK_MAX_STALE_MS = 120_000;
+const MAX_TRANSIENT_RETRIES = 3;
+const TRANSIENT_RETRY_DELAY_MS = 10_000;
+
 const REMOTE_ACCESS_CACHE_MS = 60_000;
 const RUNNER_VERSION = (() => {
   try {
@@ -110,6 +115,81 @@ function getRunnerAuthToken() {
   return config.runnerToken || '';
 }
 
+function acquireRunnerLock() {
+  const currentPid = process.pid;
+  try {
+    if (fs.existsSync(RUNNER_LOCK_PATH)) {
+      const raw = fs.readFileSync(RUNNER_LOCK_PATH, 'utf8').trim();
+      const parts = raw.split('\n');
+      const pid = Number.parseInt(parts[0], 10);
+      const timestamp = Number.parseInt(parts[1], 10);
+      if (Number.isFinite(pid) && pid > 0 && Number.isFinite(timestamp)) {
+        if (pid === currentPid) {
+          fs.writeFileSync(RUNNER_LOCK_PATH, `${currentPid}\n${Date.now()}`, 'utf8');
+          return true;
+        }
+        try {
+          process.kill(pid, 0);
+          if (Date.now() - timestamp < RUNNER_LOCK_MAX_STALE_MS) {
+            console.error(`[LOCK] Another runner is already running (PID ${pid}). Exiting.`);
+            process.exit(1);
+          }
+          console.warn(`[LOCK] Stale lock from PID ${pid} (${Date.now() - timestamp}ms old). Taking over.`);
+        } catch {
+          console.warn(`[LOCK] Stale lock from PID ${pid} (process dead). Taking over.`);
+        }
+      }
+    }
+    fs.writeFileSync(RUNNER_LOCK_PATH, `${currentPid}\n${Date.now()}`, 'utf8');
+    return true;
+  } catch (error) {
+    console.error(`[LOCK] Failed to acquire lock: ${error.message}`);
+    return false;
+  }
+}
+
+function releaseRunnerLock() {
+  try {
+    if (fs.existsSync(RUNNER_LOCK_PATH)) {
+      const raw = fs.readFileSync(RUNNER_LOCK_PATH, 'utf8').trim();
+      const pid = Number.parseInt(raw.split('\n')[0], 10);
+      if (pid === process.pid) {
+        fs.rmSync(RUNNER_LOCK_PATH, { force: true });
+      }
+    }
+  } catch {}
+}
+
+function refreshRunnerLock() {
+  try {
+    if (fs.existsSync(RUNNER_LOCK_PATH)) {
+      const raw = fs.readFileSync(RUNNER_LOCK_PATH, 'utf8').trim();
+      const pid = Number.parseInt(raw.split('\n')[0], 10);
+      if (pid === process.pid) {
+        fs.writeFileSync(RUNNER_LOCK_PATH, `${process.pid}\n${Date.now()}`, 'utf8');
+      }
+    }
+  } catch {}
+}
+
+function isTransientError(error) {
+  if (!error) return false;
+  const message = String(error.message || error || '').toLowerCase();
+  return /etimedout|econnrefused|econnreset|eai_again|enotfound|timeout|rate.limit|429|503|503|service.unavailable|temporary|dns.|network|reset|busy|ebusy|eperm|eacces|lock/.test(message);
+}
+
+async function getQueuedJobCount() {
+  try {
+    const response = await httpRequest(`/api/runner/queue-count?token=${encodeURIComponent(getRunnerAuthToken())}`, 'GET');
+    if (response && response.success && typeof response.data === 'number') {
+      return response.data;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 function writeRunnerState(nextState) {
   const state = {
     status: 'idle',
@@ -119,6 +199,8 @@ function writeRunnerState(nextState) {
     updatedAt: new Date().toISOString(),
     lastHeartbeatAt: new Date(lastHeartbeat).toISOString(),
     lastError: '',
+    queuedJobs: 0,
+    lockStatus: 'ok',
     ...nextState
   };
 
@@ -1402,6 +1484,8 @@ async function sendHeartbeat() {
       ssh: remoteAccess.ssh,
     });
     lastHeartbeat = Date.now();
+    refreshRunnerLock();
+    const queuedCount = await getQueuedJobCount();
     writeRunnerState({
       status: runnerStatus,
       message: getRunnerActivityMessage(),
@@ -1411,6 +1495,7 @@ async function sendHeartbeat() {
       processedVideos,
       lastError: '',
       remoteAccess,
+      queuedJobs: queuedCount,
     });
   } catch (e) {
     console.error('[HEARTBEAT] Error:', e.message);
@@ -1423,6 +1508,7 @@ async function sendHeartbeat() {
       processedVideos,
       lastError: e.message,
       remoteAccess: collectRemoteAccessSnapshot(),
+      queuedJobs: 0,
     });
   }
 }
@@ -1641,6 +1727,17 @@ async function mainLoop() {
   console.log('[RUNNER] Starting automation runner...');
   console.log('[RUNNER] Server:', config.serverUrl);
   console.log('[RUNNER] Authenticating with runner token');
+
+  if (!acquireRunnerLock()) {
+    console.error('[RUNNER] Could not acquire lock. Exiting.');
+    process.exit(1);
+  }
+
+  const lockRefreshInterval = setInterval(refreshRunnerLock, 30000);
+  process.on('exit', releaseRunnerLock);
+  process.on('SIGINT', () => { releaseRunnerLock(); process.exit(0); });
+  process.on('SIGTERM', () => { releaseRunnerLock(); process.exit(0); });
+
   writeRunnerState({
     status: 'starting',
     message: 'Runner process started'
@@ -1685,78 +1782,134 @@ async function mainLoop() {
             continue;
           }
 
-          console.log(`[JOB] Found job ${job.id}`);
+          const queuedCount = await getQueuedJobCount();
+          console.log(`[JOB] Found job ${job.id} (${queuedCount} other jobs in queue)`);
           isProcessing = true;
           currentJob = job;
           writeRunnerState({
             status: 'processing',
             message: `Processing job ${job.id}`,
             currentJobId: job.id,
-            lastError: ''
+            lastError: '',
+            queuedJobs: queuedCount,
           });
 
-          try {
-            if (job.automation_type === 'image') {
-              const processedCount = await runImageRunnerScriptsJob(job);
-              const imageResult = readImageResultFromRunnerScripts();
-              processedVideos += processedCount;
+          let jobCompleted = false;
+          let transientRetriesLeft = MAX_TRANSIENT_RETRIES;
+          while (!jobCompleted && transientRetriesLeft >= 0) {
+            try {
+              if (job.automation_type === 'image') {
+                const processedCount = await runImageRunnerScriptsJob(job);
+                const imageResult = readImageResultFromRunnerScripts();
+                processedVideos += processedCount;
 
-              await completeJob(job.id, {
-                token: getRunnerAuthToken(),
-                success: true,
-                result: imageResult || { processed_count: processedCount },
-                video_url: typeof imageResult?.media_url === 'string' ? imageResult.media_url : null,
-                aspect_ratio: typeof imageResult?.aspect_ratio === 'string' ? imageResult.aspect_ratio : null,
-              });
+                await completeJob(job.id, {
+                  token: getRunnerAuthToken(),
+                  success: true,
+                  result: imageResult || { processed_count: processedCount },
+                  video_url: typeof imageResult?.media_url === 'string' ? imageResult.media_url : null,
+                  aspect_ratio: typeof imageResult?.aspect_ratio === 'string' ? imageResult.aspect_ratio : null,
+                });
 
-              writeRunnerState({
-                status: 'idle',
-                message: `Job ${job.id} completed`,
-                currentJobId: null,
-                processedVideos,
-                lastError: ''
-              });
+                writeRunnerState({
+                  status: 'idle',
+                  message: `Job ${job.id} completed`,
+                  currentJobId: null,
+                  processedVideos,
+                  lastError: ''
+                });
 
-              console.log(`[JOB] Image job ${job.id} completed via image pipeline (${processedCount} output(s))`);
-              continue;
-            }
+                console.log(`[JOB] Image job ${job.id} completed via image pipeline (${processedCount} output(s))`);
+                jobCompleted = true;
+                break;
+              }
 
-            const workflow = String(job?.config?.workflow || job?.input_data?.workflow || '').trim().toLowerCase();
-            if (workflow === 'dubbing') {
-              const rawDubbingSource = String(
-                job?.input_data?.source_value
-                || job?.config?.source_value
-                || job?.input_data?.video_url
-                || job?.video_url
-                || ''
-              ).trim();
+              const workflow = String(job?.config?.workflow || job?.input_data?.workflow || '').trim().toLowerCase();
+              if (workflow === 'dubbing') {
+                const rawDubbingSource = String(
+                  job?.input_data?.source_value
+                  || job?.config?.source_value
+                  || job?.input_data?.video_url
+                  || job?.video_url
+                  || ''
+                ).trim();
 
-              const sourceUrls = expandLocalDirectorySources([rawDubbingSource].filter(Boolean));
+                const sourceUrls = expandLocalDirectorySources([rawDubbingSource].filter(Boolean));
+                if (!sourceUrls.length) {
+                  throw new Error('Dubbing job does not contain a usable source');
+                }
+
+                const runResult = await runRunnerScriptsJob(job, sourceUrls);
+                const processedCount = runResult.processedCount;
+                const localOutputMedia = findLatestLocalOutputMedia(job);
+                processedVideos += processedCount;
+                const dubbingReport = runResult.dubbingReport || readDubbingReportFromRunnerScripts();
+                const finalVideoPath = dubbingReport?.final_video || null;
+
+                await completeJob(job.id, {
+                  token: getRunnerAuthToken(),
+                  success: true,
+                  result: {
+                    workflow: 'dubbing',
+                    processed_count: processedCount,
+                    processed_videos: Array.isArray(runResult.processedVideos) ? runResult.processedVideos : [],
+                    source_urls: sourceUrls,
+                    source_value: rawDubbingSource,
+                    local_output_media: finalVideoPath || localOutputMedia,
+                    dubbing_report: dubbingReport,
+                    skip_upload: true,
+                  },
+                  video_url: finalVideoPath || null,
+                  source_video_url: sourceUrls[0] || null,
+                  aspect_ratio: job?.config?.aspect_ratio || job?.input_data?.aspect_ratio || null,
+                });
+
+                writeRunnerState({
+                  status: 'idle',
+                  message: `Job ${job.id} completed`,
+                  currentJobId: null,
+                  processedVideos,
+                  lastError: ''
+                });
+
+                console.log(`[JOB] Dubbing job ${job.id} completed via dubbing pipeline (${processedCount} output(s))`);
+                jobCompleted = true;
+                break;
+              }
+
+              const videosPerRun = parseInt(
+                String(job?.input_data?.videos_per_run || job?.config?.videos_per_run || '1'),
+                10
+              ) || 1;
+
+              const rawSourceUrls = job?.config?.video_source === 'local_folder'
+                ? await pickLocalFolderVideos(job, videosPerRun)
+                : Array.isArray(job?.input_data?.video_urls) && job.input_data.video_urls.length > 0
+                ? job.input_data.video_urls
+                : [job?.input_data?.video_url || job.video_url].filter(Boolean);
+
+              const sourceUrls = expandLocalDirectorySources(rawSourceUrls);
+
               if (!sourceUrls.length) {
-                throw new Error('Dubbing job does not contain a usable source');
+                throw new Error('Job does not contain a usable video source');
               }
 
               const runResult = await runRunnerScriptsJob(job, sourceUrls);
               const processedCount = runResult.processedCount;
               const localOutputMedia = findLatestLocalOutputMedia(job);
               processedVideos += processedCount;
-              const dubbingReport = runResult.dubbingReport || readDubbingReportFromRunnerScripts();
-              const finalVideoPath = dubbingReport?.final_video || null;
 
               await completeJob(job.id, {
                 token: getRunnerAuthToken(),
                 success: true,
                 result: {
-                  workflow: 'dubbing',
                   processed_count: processedCount,
                   processed_videos: Array.isArray(runResult.processedVideos) ? runResult.processedVideos : [],
                   source_urls: sourceUrls,
-                  source_value: rawDubbingSource,
-                  local_output_media: finalVideoPath || localOutputMedia,
-                  dubbing_report: dubbingReport,
-                  skip_upload: true,
+                  local_output_media: localOutputMedia,
+                  skip_upload: job?.config?.skip_upload === true || job?.input_data?.skip_upload === true,
                 },
-                video_url: finalVideoPath || null,
+                video_url: runResult.primaryVideoUrl || localOutputMedia,
                 source_video_url: sourceUrls[0] || null,
                 aspect_ratio: job?.config?.aspect_ratio || job?.input_data?.aspect_ratio || null,
               });
@@ -1769,99 +1922,84 @@ async function mainLoop() {
                 lastError: ''
               });
 
-              console.log(`[JOB] Dubbing job ${job.id} completed via dubbing pipeline (${processedCount} output(s))`);
-              continue;
+              console.log(`[JOB] Job ${job.id} completed successfully via shared pipeline (${processedCount} output(s))`);
+              jobCompleted = true;
+              break;
+            } catch (e) {
+              if (isLocalFolderExhaustedError(e)) {
+                console.log(`[JOB] Job ${job.id} completed with no new local-folder videos remaining.`);
+                await completeJob(job.id, {
+                  success: true,
+                  skipped: true,
+                  processed_count: 0,
+                  all_links_processed: true,
+                  all_source_videos_processed: true,
+                  completion_label: 'All local folder videos processed',
+                  exhausted_source: 'local_folder',
+                  source_folder: e.folderPath || null,
+                  message: 'All local folder videos were already processed. History was preserved.',
+                });
+                jobCompleted = true;
+                break;
+              }
+
+              if (transientRetriesLeft > 0 && isTransientError(e)) {
+                transientRetriesLeft--;
+                const attemptNum = MAX_TRANSIENT_RETRIES - transientRetriesLeft;
+                console.warn(`[JOB] Transient error on job ${job.id}, retrying (${attemptNum}/${MAX_TRANSIENT_RETRIES}): ${e.message}`);
+                writeRunnerState({
+                  status: 'processing',
+                  message: `Retrying job ${job.id} (${attemptNum}/${MAX_TRANSIENT_RETRIES})`,
+                  currentJobId: job.id,
+                  lastError: e.message,
+                  queuedJobs: queuedCount,
+                });
+                await sleep(TRANSIENT_RETRY_DELAY_MS);
+                continue;
+              }
+
+              console.error(`[JOB] Job ${job.id} failed:`, e.message);
+              writeRunnerState({
+                status: 'error',
+                message: `Job ${job.id} failed`,
+                currentJobId: job.id,
+                lastError: e.message,
+                queuedJobs: queuedCount,
+              });
+
+              await httpRequest(`/api/runner/jobs/${job.id}/complete`, 'POST', {
+                token: getRunnerAuthToken(),
+                success: false,
+                error: e.message
+              });
+              jobCompleted = true;
+              break;
             }
-
-            const videosPerRun = parseInt(
-              String(job?.input_data?.videos_per_run || job?.config?.videos_per_run || '1'),
-              10
-            ) || 1;
-
-            const rawSourceUrls = job?.config?.video_source === 'local_folder'
-              ? await pickLocalFolderVideos(job, videosPerRun)
-              : Array.isArray(job?.input_data?.video_urls) && job.input_data.video_urls.length > 0
-              ? job.input_data.video_urls
-              : [job?.input_data?.video_url || job.video_url].filter(Boolean);
-
-            const sourceUrls = expandLocalDirectorySources(rawSourceUrls);
-
-            if (!sourceUrls.length) {
-              throw new Error('Job does not contain a usable video source');
-            }
-
-            const runResult = await runRunnerScriptsJob(job, sourceUrls);
-            const processedCount = runResult.processedCount;
-            const localOutputMedia = findLatestLocalOutputMedia(job);
-            processedVideos += processedCount;
-
-            await completeJob(job.id, {
-              token: getRunnerAuthToken(),
-              success: true,
-              result: {
-                processed_count: processedCount,
-                processed_videos: Array.isArray(runResult.processedVideos) ? runResult.processedVideos : [],
-                source_urls: sourceUrls,
-                local_output_media: localOutputMedia,
-                skip_upload: job?.config?.skip_upload === true || job?.input_data?.skip_upload === true,
-              },
-              video_url: runResult.primaryVideoUrl || localOutputMedia,
-              source_video_url: sourceUrls[0] || null,
-              aspect_ratio: job?.config?.aspect_ratio || job?.input_data?.aspect_ratio || null,
-            });
-
+          }
+          isProcessing = false;
+          currentJob = null;
+          cleanupOldMediaFiles();
+        } else {
+          const queueCheck = await getQueuedJobCount();
+          if (queueCheck > 0) {
+            console.log(`[WAIT] No new jobs assigned, but ${queueCheck} jobs are queued. Waiting...`);
             writeRunnerState({
               status: 'idle',
-              message: `Job ${job.id} completed`,
+              message: `${queueCheck} job(s) queued. Waiting for next poll.`,
               currentJobId: null,
               processedVideos,
-              lastError: ''
+              queuedJobs: queueCheck,
             });
-
-            console.log(`[JOB] Job ${job.id} completed successfully via shared pipeline (${processedCount} output(s))`);
-          } catch (e) {
-            if (isLocalFolderExhaustedError(e)) {
-              console.log(`[JOB] Job ${job.id} completed with no new local-folder videos remaining.`);
-              await completeJob(job.id, {
-                success: true,
-                skipped: true,
-                processed_count: 0,
-                all_links_processed: true,
-                all_source_videos_processed: true,
-                completion_label: 'All local folder videos processed',
-                exhausted_source: 'local_folder',
-                source_folder: e.folderPath || null,
-                message: 'All local folder videos were already processed. History was preserved.',
-              });
-              continue;
-            }
-
-            console.error(`[JOB] Job ${job.id} failed:`, e.message);
+          } else {
+            console.log('[WAIT] No pending jobs, waiting...');
             writeRunnerState({
-              status: 'error',
-              message: `Job ${job.id} failed`,
-              currentJobId: job.id,
-              lastError: e.message
+              status: 'idle',
+              message: 'No pending jobs. Waiting for next poll.',
+              currentJobId: null,
+              processedVideos,
+              queuedJobs: 0,
             });
-
-            await httpRequest(`/api/runner/jobs/${job.id}/complete`, 'POST', {
-              token: getRunnerAuthToken(),
-              success: false,
-              error: e.message
-            });
-          } finally {
-            isProcessing = false;
-            currentJob = null;
-            cleanupOldMediaFiles();
           }
-        } else {
-          console.log('[WAIT] No pending jobs, waiting...');
-          writeRunnerState({
-            status: 'idle',
-            message: 'No pending jobs. Waiting for next poll.',
-            currentJobId: null,
-            processedVideos
-          });
         }
       }
     } catch (e) {

@@ -2448,6 +2448,36 @@ async function handleLocalAutomationRun(req, res, config) {
     return;
   }
 
+  // Check for queued or in-progress jobs using local state (no body read needed)
+  const runnerStatus = readRunnerState();
+  const { currentJobId, status, queuedJobs } = runnerStatus;
+  const hasActiveJob = currentJobId !== null && (status === "processing" || status === "error");
+  const queueCount = queuedJobs || 0;
+
+  if (hasActiveJob || queueCount > 0) {
+    const warningParts = [];
+    if (hasActiveJob) warningParts.push(`Job #${currentJobId} is currently running`);
+    if (queueCount > 0) warningParts.push(`${queueCount} job(s) are queued`);
+    const warningMsg = warningParts.join(", ") + ". Starting a new automation will cancel existing jobs.";
+
+    // Check for confirm=true query param (added by frontend after user confirmation)
+    const confirmParam = requestUrl.searchParams.get("confirm");
+    if (confirmParam !== "true" && confirmParam !== "1") {
+      sendJson(res, 409, {
+        success: false,
+        error: warningMsg,
+        code: "LOCAL_RUNNER_JOBS_QUEUED",
+        data: {
+          currentJobId,
+          queueCount,
+          hasActiveJob,
+          needsConfirmation: true,
+        },
+      });
+      return;
+    }
+  }
+
   writeRunnerState({
     status: "restarting",
     message: "Stopping previous local runner before starting the latest automation run.",
@@ -2596,6 +2626,20 @@ const server = http.createServer((req, res) => {
         success: false,
         error: error instanceof Error ? error.message : String(error),
       });
+    });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/runner/queue-count") {
+    const bearerToken = extractBearerToken(req) || config.ACCESS_TOKEN || "";
+    const targetUrl = new URL(`/api/runner/queue-count`, config.SERVER_URL || DEFAULTS.SERVER_URL);
+    targetUrl.searchParams.set("token", config.RUNNER_TOKEN || "");
+    void requestJson(targetUrl.toString(), {
+      headers: buildApiHeaders(bearerToken),
+    }).then((payload) => {
+      sendJson(res, 200, payload);
+    }).catch((error) => {
+      sendJson(res, 200, { success: true, data: 0 });
     });
     return;
   }

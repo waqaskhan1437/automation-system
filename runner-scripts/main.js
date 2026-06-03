@@ -47,6 +47,32 @@ function quoteCommand(command) {
 const FFMPEG = quoteCommand(resolveCommand('ffmpeg'));
 const FFPROBE = quoteCommand(resolveCommand('ffprobe'));
 
+function isTransientError(error) {
+  if (!error) return false;
+  const message = String(error.message || error || '').toLowerCase();
+  return /etimedout|econnrefused|econnreset|eai_again|enotfound|timeout|rate.limit|429|503|503|service.unavailable|temporary|dns|network|reset|busy|ebusy|eperm|eacces/.test(message);
+}
+
+async function withRetry(fn, options = {}) {
+  const maxRetries = options.maxRetries || 2;
+  const delayMs = options.delayMs || 5000;
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries && isTransientError(error)) {
+        console.warn(`[RETRY] Transient error (${attempt + 1}/${maxRetries}), retrying in ${delayMs}ms: ${error.message}`);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 function writeFailureReport(payload) {
   try {
     fs.writeFileSync(FAILURE_REPORT_PATH, JSON.stringify(payload, null, 2), 'utf8');
@@ -510,7 +536,7 @@ async function main() {
     console.log('='.repeat(50));
 
     try {
-      await download(url);
+      await withRetry(() => download(url), { maxRetries: 2, delayMs: 5000 });
 
       if (explicitSegments.length > 0 || (segmentInfo && segmentInfo.segmentCount > 1)) {
         const inputFile = path.join(OUTPUT_DIR, 'input-video.mp4');
@@ -561,12 +587,12 @@ async function main() {
             }));
             successCount++;
           } else {
-            uploadUrl = await upload(processedSegmentFile);
+            uploadUrl = await withRetry(() => upload(processedSegmentFile), { maxRetries: 2, delayMs: 5000 });
           }
 
           if (uploadUrl) {
             writeConfig(segmentConfig);
-            await post(uploadUrl);
+            await withRetry(() => post(uploadUrl), { maxRetries: 2, delayMs: 5000 });
             const postResult = readPostResult();
             if (postResult) {
               lastPostResult = postResult;
@@ -610,8 +636,8 @@ async function main() {
             mergedUrl = saveLocalFinalMedia(config, '-merged.mp4', builtMergedFile);
           } else {
             writeConfig(config);
-            mergedUrl = await upload(builtMergedFile);
-            await post(mergedUrl);
+            mergedUrl = await withRetry(() => upload(builtMergedFile), { maxRetries: 2, delayMs: 5000 });
+            await withRetry(() => post(mergedUrl), { maxRetries: 2, delayMs: 5000 });
             const mergedPostResult = readPostResult();
             if (mergedPostResult) {
               lastPostResult = mergedPostResult;
@@ -651,11 +677,11 @@ async function main() {
           lastUrl = localPath;
           allProcessedVideos.push({ video_url: localPath, original_url: url });
         } else {
-          uploadUrl = await upload();
+          uploadUrl = await withRetry(() => upload(), { maxRetries: 2, delayMs: 5000 });
         }
 
         if (uploadUrl) {
-          await post(uploadUrl);
+          await withRetry(() => post(uploadUrl), { maxRetries: 2, delayMs: 5000 });
           const postResult = readPostResult();
           if (postResult) {
             lastPostResult = postResult;

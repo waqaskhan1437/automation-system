@@ -837,6 +837,28 @@ export async function handleRunnerRoutes(
     return jsonResponse({ success: true, message: "Heartbeat received", data: { status: body.status || "online" } });
   }
 
+  if (path === "/api/runner/queue-count" && method === "GET") {
+    const url = new URL(request.url);
+    const token = url.searchParams.get("token") || "";
+    const identity = await loadRunnerUser(env, token);
+    if (!identity.user) {
+      return jsonResponse({ success: true, data: 0 });
+    }
+
+    try {
+      const result = await env.DB.prepare(
+        `SELECT COUNT(*) as count FROM jobs
+         WHERE user_id = ?
+           AND status IN ('pending', 'queued')
+           AND github_run_id IS NULL`
+      ).bind(identity.user.id).first<{ count: number }>();
+
+      return jsonResponse({ success: true, data: result?.count || 0 });
+    } catch (error) {
+      return jsonResponse({ success: true, data: 0 });
+    }
+  }
+
   if (path === "/api/runner/commands" && method === "GET") {
     const url = new URL(request.url);
     const token = url.searchParams.get("token") || "";

@@ -6,6 +6,49 @@ const TRANSCRIPTION_JSON = path.join(OUTPUT_DIR, 'transcription.json');
 const SRT_FILE = path.join(OUTPUT_DIR, 'captions.srt');
 const CAPTIONED_FILE = path.join(OUTPUT_DIR, 'captioned-video.mp4');
 
+function resolveTool(name) {
+  const isWin = process.platform === 'win32';
+  const ext = isWin ? '.exe' : '';
+  const candidates = [
+    path.resolve(__dirname, '..', '..', 'local-runner', 'tools', 'ffmpeg', 'bin', `${name}${ext}`),
+    path.resolve(__dirname, '..', 'tools', 'ffmpeg', 'bin', `${name}${ext}`),
+    path.resolve(process.cwd(), `${name}${ext}`),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  if (isWin) {
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+      if (!dir || /[\\/]WindowsApps([\\/]|$)/i.test(dir)) continue;
+      const full = path.join(dir, `${name}.exe`);
+      if (fs.existsSync(full)) return full;
+    }
+  }
+  return name;
+}
+
+function quotePath(value) {
+  return value.includes(' ') || value.includes('\\') ? `"${value}"` : value;
+}
+
+let _pythonCmd = null;
+function getPythonCommand() {
+  if (_pythonCmd) return _pythonCmd;
+  if (process.platform !== 'win32') { _pythonCmd = 'python3'; return _pythonCmd; }
+  const candidates = ['python', 'py', 'python3'];
+  for (const cmd of candidates) {
+    try {
+      execSync(`${cmd} --version`, { stdio: 'ignore', timeout: 5000 });
+      _pythonCmd = cmd;
+      return cmd;
+    } catch {}
+  }
+  _pythonCmd = 'python';
+  return _pythonCmd;
+}
+
+const FFMPEG = quotePath(resolveTool('ffmpeg'));
+
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
@@ -73,7 +116,7 @@ module.exports = async function caption() {
     fs.unlinkSync(CAPTION_AUDIO);
   } catch {}
   execSync(
-    `ffmpeg -y -i "${inputVideo}" -vn -acodec pcm_s16le -ar 16000 -ac 1 "${CAPTION_AUDIO}"`,
+    `${FFMPEG} -y -i "${inputVideo}" -vn -acodec pcm_s16le -ar 16000 -ac 1 "${CAPTION_AUDIO}"`,
     { stdio: 'inherit', timeout: 120000 }
   );
   if (!fs.existsSync(CAPTION_AUDIO) || fs.statSync(CAPTION_AUDIO).size < 1000) {
@@ -90,8 +133,9 @@ module.exports = async function caption() {
     fs.unlinkSync(TRANSCRIPTION_JSON);
   } catch {}
 
+  const PYTHON = getPythonCommand();
   const whisperResult = execSync(
-    `python3 "${transcribeScript}" --input "${CAPTION_AUDIO}" --output "${TRANSCRIPTION_JSON}" --language "${language}"`,
+    `${PYTHON} "${transcribeScript}" --input "${CAPTION_AUDIO}" --output "${TRANSCRIPTION_JSON}" --language "${language}"`,
     { stdio: 'inherit', timeout: 600000 }
   );
 
@@ -125,7 +169,7 @@ module.exports = async function caption() {
   } catch {}
 
   execSync(
-    `ffmpeg -y -i "${inputVideo}" -vf "subtitles='${SRT_FILE}':force_style='${style}'" -c:a copy "${CAPTIONED_FILE}"`,
+    `${FFMPEG} -y -i "${inputVideo}" -vf "subtitles='${SRT_FILE}':force_style='${style}'" -c:a copy "${CAPTIONED_FILE}"`,
     { stdio: 'inherit', timeout: 300000 }
   );
 
