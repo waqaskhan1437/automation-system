@@ -54,6 +54,12 @@ function isTransientError(error) {
   return /etimedout|econnrefused|econnreset|eai_again|enotfound|timeout|rate.limit|429|503|503|service.unavailable|temporary|dns|network|reset|busy|ebusy|eperm|eacces/.test(message);
 }
 
+function isSignalAbortError(error) {
+  if (!error) return false;
+  const message = String(error.message || error || '').toLowerCase();
+  return /signal is aborted without reason|abortcontroller|abortsignal|this operation was aborted|abort_error/i.test(message);
+}
+
 async function withRetry(fn, options = {}) {
   const maxRetries = options.maxRetries || 2;
   const delayMs = options.delayMs || 5000;
@@ -787,12 +793,15 @@ async function main() {
 }
 
 main().catch(async (e) => {
-  console.error('[MAIN] FATAL:', e.message);
-  appendErrorLog(`[FATAL] ${e.message}`);
+  const cleanMsg = isSignalAbortError(e)
+    ? 'GitHub Actions step/job timeout reached or workflow was cancelled. The process was killed before completing. Increase timeout-minutes in the workflow or split the work into smaller batches.'
+    : e.message;
+  console.error('[MAIN] FATAL:', cleanMsg);
+  appendErrorLog(`[FATAL] ${cleanMsg}`);
   writeFailureReport({
     ok: false,
     type: 'fatal',
-    last_error: e.message || 'Unknown fatal error',
+    last_error: cleanMsg || 'Unknown fatal error',
     failed_at: new Date().toISOString(),
   });
   await webhook.final(0, 0, false, null, []);
