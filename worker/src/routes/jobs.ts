@@ -288,6 +288,41 @@ export async function handleJobsRoutes(
     return jsonResponse({ success: true, data: jobs });
   }
 
+  // GET /api/jobs/stats - Database usage statistics
+  if (path === "/api/jobs/stats" && method === "GET") {
+    const jobStats = await env.DB.prepare(`
+      SELECT
+        COUNT(*) AS total_jobs,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_jobs,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_jobs,
+        SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_jobs,
+        SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued_jobs,
+        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_jobs,
+        SUM(CASE WHEN status NOT IN ('success','failed','running','queued','cancelled') THEN 1 ELSE 0 END) AS other_jobs,
+        MIN(created_at) AS oldest_job_date,
+        SUM(CASE WHEN status IN ('success','failed','cancelled') AND completed_at IS NOT NULL AND completed_at < datetime('now', '-7 days') THEN 1 ELSE 0 END) AS completed_before_7d,
+        SUM(CASE WHEN status IN ('success','failed','cancelled') AND completed_at IS NOT NULL AND completed_at < datetime('now', '-30 days') THEN 1 ELSE 0 END) AS completed_before_30d
+      FROM jobs WHERE user_id = ?
+    `).bind(userId).first();
+
+    const processedVideosCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM processed_videos WHERE user_id = ?"
+    ).bind(userId).first<{count: number}>();
+
+    const videoUploadsCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM video_uploads WHERE user_id = ?"
+    ).bind(userId).first<{count: number}>();
+
+    return jsonResponse({
+      success: true,
+      data: {
+        ...jobStats,
+        total_processed_videos: processedVideosCount?.count || 0,
+        total_video_uploads: videoUploadsCount?.count || 0,
+      },
+    });
+  }
+
   // Single job routes
   if (id && !action) {
     // GET /api/jobs/:id
@@ -589,10 +624,45 @@ export async function handleJobsRoutes(
 
   // DELETE /api/jobs - Delete all jobs
   if (path === "/api/jobs" && method === "DELETE") {
-    // Delete video_uploads first due to foreign key constraint
+    await env.DB.prepare("DELETE FROM processed_videos WHERE user_id = ?").bind(userId).run();
     await env.DB.prepare("DELETE FROM video_uploads WHERE user_id = ?").bind(userId).run();
     await env.DB.prepare("DELETE FROM jobs WHERE user_id = ?").bind(userId).run();
     return jsonResponse({ success: true, message: "All jobs deleted" });
+  }
+
+  // DELETE /api/jobs/completed - Delete all completed/failed/cancelled jobs
+  if (path === "/api/jobs/completed" && method === "DELETE") {
+    const completedRows = await env.DB.prepare(
+      "SELECT id FROM jobs WHERE user_id = ? AND status IN ('success', 'failed', 'cancelled')"
+    ).bind(userId).all<{id: number}>();
+    const ids = (completedRows.results || []).map(r => r.id);
+    if (ids.length > 0) {
+      const placeholders = ids.map(() => "?").join(",");
+      await env.DB.prepare(`DELETE FROM processed_videos WHERE job_id IN (${placeholders}) AND user_id = ?`).bind(...ids, userId).run();
+      await env.DB.prepare(`DELETE FROM video_uploads WHERE job_id IN (${placeholders}) AND user_id = ?`).bind(...ids, userId).run();
+      await env.DB.prepare(`DELETE FROM jobs WHERE id IN (${placeholders}) AND user_id = ?`).bind(...ids, userId).run();
+    }
+    return jsonResponse({ success: true, message: `${ids.length} completed job(s) deleted`, data: { deleted: ids.length } });
+  }
+
+  // DELETE /api/jobs/old - Delete jobs completed before a date (ISO date string)
+  if (path === "/api/jobs/old" && method === "DELETE") {
+    const url = new URL(request.url);
+    const before = url.searchParams.get("before");
+    if (!before) {
+      return jsonResponse({ success: false, error: "Query parameter 'before' (ISO date, e.g. 2026-01-01) is required" }, 400);
+    }
+    const oldRows = await env.DB.prepare(
+      "SELECT id FROM jobs WHERE user_id = ? AND completed_at IS NOT NULL AND completed_at < ?"
+    ).bind(userId, before).all<{id: number}>();
+    const ids = (oldRows.results || []).map(r => r.id);
+    if (ids.length > 0) {
+      const placeholders = ids.map(() => "?").join(",");
+      await env.DB.prepare(`DELETE FROM processed_videos WHERE job_id IN (${placeholders}) AND user_id = ?`).bind(...ids, userId).run();
+      await env.DB.prepare(`DELETE FROM video_uploads WHERE job_id IN (${placeholders}) AND user_id = ?`).bind(...ids, userId).run();
+      await env.DB.prepare(`DELETE FROM jobs WHERE id IN (${placeholders}) AND user_id = ?`).bind(...ids, userId).run();
+    }
+    return jsonResponse({ success: true, message: `${ids.length} old job(s) deleted`, data: { deleted: ids.length } });
   }
 
   // DELETE /api/jobs/:id - Delete single job
@@ -601,7 +671,7 @@ export async function handleJobsRoutes(
     if (!job) {
       return jsonResponse({ success: false, error: "Job not found" }, 404);
     }
-    // Delete video_uploads first due to foreign key constraint
+    await env.DB.prepare("DELETE FROM processed_videos WHERE job_id = ? AND user_id = ?").bind(id, userId).run();
     await env.DB.prepare("DELETE FROM video_uploads WHERE job_id = ? AND user_id = ?").bind(id, userId).run();
     await env.DB.prepare("DELETE FROM jobs WHERE id = ? AND user_id = ?").bind(id, userId).run();
     return jsonResponse({ success: true, message: "Job deleted" });
