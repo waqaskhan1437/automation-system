@@ -127,16 +127,20 @@ export default function JobsPage() {
                       <p className="font-medium">Job #{job.id}</p>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <span className={`badge badge-${job.status}`}>{job.status}</span>
-                        {job.status === "running" && !job.github_run_id && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-[rgba(245,158,11,0.15)] text-[#f59e0b]">
-                            Local runner processing on this PC
-                          </span>
-                        )}
-                        {job.status === "queued" && !job.github_run_id && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-[rgba(99,102,241,0.15)] text-[#818cf8]">
-                            Waiting for local runner
-                          </span>
-                        )}
+                        {(() => {
+                          const execMode = (() => { try { const d = JSON.parse(job.input_data || '{}'); return d.execution_mode; } catch { return null; } })();
+                          const isGithub = job.github_run_id || execMode === "github";
+                          if (isGithub) {
+                            return <span className="text-xs px-2 py-0.5 rounded bg-[rgba(59,130,246,0.15)] text-[#3b82f6]">GitHub Actions runner</span>;
+                          }
+                          if (job.status === "running") {
+                            return <span className="text-xs px-2 py-0.5 rounded bg-[rgba(245,158,11,0.15)] text-[#f59e0b]">Local runner processing on this PC</span>;
+                          }
+                          if (job.status === "queued") {
+                            return <span className="text-xs px-2 py-0.5 rounded bg-[rgba(99,102,241,0.15)] text-[#818cf8]">Waiting for local runner</span>;
+                          }
+                          return null;
+                        })()}
                         {(videoUrl || localVideoUrl) && (
                           <span className="text-xs text-[#22c55e]">
                             {hasLocalPreview ? "Local video ready" : (previewUrls.length > 1 ? previewUrls.length + " videos" : "Video ready")}

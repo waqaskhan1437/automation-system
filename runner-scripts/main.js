@@ -3,6 +3,7 @@
  */
 const { fs, path, execSync } = require('./lib/core');
 const crypto = require('crypto');
+const os = require('os');
 const { OUTPUT_DIR, CONFIG_PATH } = require('./lib/paths');
 
 const download = require('./steps/download');
@@ -491,6 +492,23 @@ function processSegmentDirect(segmentFile, duration, aspectRatio, config, segmen
   console.log(`[SEGMENT-PROCESS] Created: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 }
 
+async function runWithConcurrencyLimit(tasks, limit) {
+  const results = [];
+  const executing = [];
+  for (const [index, task] of tasks.entries()) {
+    const p = Promise.resolve().then(() => task(index));
+    results.push(p);
+    if (limit <= tasks.length) {
+      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
+      executing.push(e);
+      if (executing.length >= limit) {
+        await Promise.race(executing);
+      }
+    }
+  }
+  return Promise.all(results);
+}
+
 async function main() {
   console.log('[MAIN] Starting...');
   const config = loadConfig();
@@ -551,71 +569,86 @@ async function main() {
 
         console.log(`[VIDEO ${i + 1}] Splitting into ${segments.length} segments`);
 
-        for (const seg of segments) {
-          console.log(`\n${'-'.repeat(40)}`);
-          console.log(`[SEGMENT ${seg.index + 1}/${segments.length}] ${seg.start.toFixed(1)}s → ${seg.end.toFixed(1)}s`);
-          console.log('-'.repeat(40));
+        const concurrencyLimit = Math.max(1, os.cpus().length - 1);
+        const segTasks = segments.map((seg) => async () => {
+          const result = { seg, uploadUrl: null, record: null, error: null };
+          try {
+            console.log(`\n${'-'.repeat(40)}`);
+            console.log(`[SEGMENT ${seg.index + 1}/${segments.length}] ${seg.start.toFixed(1)}s → ${seg.end.toFixed(1)}s`);
+            console.log('-'.repeat(40));
 
-          const segOutputFile = path.join(OUTPUT_DIR, `segment-${i}-${seg.index}.mp4`);
-          extractSegment(inputFile, segOutputFile, seg.start, seg.end);
+            const segOutputFile = path.join(OUTPUT_DIR, `segment-${i}-${seg.index}.mp4`);
+            extractSegment(inputFile, segOutputFile, seg.start, seg.end);
 
-          const segmentConfig = buildSegmentRuntimeConfig(config, seg);
-          writeConfig(segmentConfig);
-
-          const duration = Math.max(1, Math.round(Number(seg.duration) || parseInt(segmentConfig.short_duration || "60", 10) || 60));
-          const aspectRatio = segmentConfig.aspect_ratio || "9:16";
-          processSegmentDirect(segOutputFile, duration, aspectRatio, segmentConfig, seg.index);
-          const processedSegmentFile = path.join(OUTPUT_DIR, `processed-segment-${i}-${seg.index}.mp4`);
-          fs.copyFileSync(path.join(OUTPUT_DIR, 'processed-video.mp4'), processedSegmentFile);
-          segmentOutputFiles.push(processedSegmentFile);
-
-          if (shouldMergeSegments) {
-            continue;
-          }
-
-          await caption();
-
-          let uploadUrl = null;
-          if (config.skip_upload === true) {
-            const localPath = saveLocalFinalMedia(segmentConfig, `-seg${seg.index}.mp4`, processedSegmentFile);
-            lastUrl = localPath;
-            allProcessedVideos.push(buildProcessedVideoRecord({
-              videoUrl: localPath,
-              originalUrl: url,
-              aspectRatio,
-              segment: seg,
-            }));
-            successCount++;
-          } else {
-            uploadUrl = await withRetry(() => upload(processedSegmentFile), { maxRetries: 2, delayMs: 5000 });
-          }
-
-          if (uploadUrl) {
+            const segmentConfig = buildSegmentRuntimeConfig(config, seg);
             writeConfig(segmentConfig);
-            await withRetry(() => post(uploadUrl), { maxRetries: 2, delayMs: 5000 });
-            const postResult = readPostResult();
-            if (postResult) {
-              lastPostResult = postResult;
-              // Use PostForMe media URL if available (real HTTPS URL instead of local path)
-              if (postResult.media_url) {
-                uploadUrl = postResult.media_url;
+
+            const duration = Math.max(1, Math.round(Number(seg.duration) || parseInt(segmentConfig.short_duration || "60", 10) || 60));
+            const aspectRatio = segmentConfig.aspect_ratio || "9:16";
+            processSegmentDirect(segOutputFile, duration, aspectRatio, segmentConfig, seg.index);
+            const processedSegmentFile = path.join(OUTPUT_DIR, `processed-segment-${i}-${seg.index}.mp4`);
+            fs.copyFileSync(path.join(OUTPUT_DIR, 'processed-video.mp4'), processedSegmentFile);
+            result.filePath = processedSegmentFile;
+
+            if (!shouldMergeSegments) {
+              await caption();
+
+              let uploadUrl = null;
+              if (config.skip_upload === true) {
+                const localPath = saveLocalFinalMedia(segmentConfig, `-seg${seg.index}.mp4`, processedSegmentFile);
+                result.uploadUrl = localPath;
+                result.record = buildProcessedVideoRecord({
+                  videoUrl: localPath,
+                  originalUrl: url,
+                  aspectRatio,
+                  segment: seg,
+                });
+              } else {
+                uploadUrl = await withRetry(() => upload(processedSegmentFile), { maxRetries: 2, delayMs: 5000 });
+                if (uploadUrl) {
+                  writeConfig(segmentConfig);
+                  await withRetry(() => post(uploadUrl), { maxRetries: 2, delayMs: 5000 });
+                  const postResult = readPostResult();
+                  if (postResult && postResult.media_url) {
+                    uploadUrl = postResult.media_url;
+                  }
+                  result.uploadUrl = uploadUrl;
+                  result.record = buildProcessedVideoRecord({
+                    videoUrl: uploadUrl,
+                    originalUrl: url,
+                    aspectRatio,
+                    segment: seg,
+                    postResult,
+                  });
+                }
               }
             }
-
-            lastUrl = uploadUrl;
-            const processedVideoRecord = buildProcessedVideoRecord({
-              videoUrl: uploadUrl,
-              originalUrl: url,
-              aspectRatio,
-              segment: seg,
-              postResult,
-            });
-            allProcessedVideos.push(processedVideoRecord);
-
-            await tracker.markVideoProcessed(url);
-            await tracker.sendProgressUpdate(processedVideoRecord);
-            successCount++;
             console.log(`[SEGMENT ${seg.index + 1}] DONE`);
+          } catch (err) {
+            result.error = err;
+            console.error(`[SEGMENT ${seg.index + 1}] FAILED:`, err.message);
+          }
+          return result;
+        });
+
+        const segResults = await runWithConcurrencyLimit(segTasks, concurrencyLimit);
+
+        for (const result of segResults) {
+          if (result.error) {
+            console.error(`[SEGMENT] Skipping failed segment: ${result.error.message}`);
+            continue;
+          }
+          if (result.filePath) segmentOutputFiles.push(result.filePath);
+          if (result.uploadUrl) {
+            lastUrl = result.uploadUrl;
+            allProcessedVideos.push(result.record);
+            await tracker.markVideoProcessed(url);
+            await tracker.sendProgressUpdate(result.record);
+            successCount++;
+          } else if (config.skip_upload && result.record) {
+            lastUrl = result.uploadUrl;
+            allProcessedVideos.push(result.record);
+            successCount++;
           }
         }
 

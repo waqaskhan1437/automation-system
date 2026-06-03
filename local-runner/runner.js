@@ -6,7 +6,6 @@ const http = require('http');
 const https = require('https');
 
 const RUNNER_STATE_PATH = path.join(__dirname, 'runner-state.json');
-const RUNNER_LOCK_PATH = path.join(__dirname, 'runner.lock');
 const FFMPEG_EXE = path.join(__dirname, 'tools', 'ffmpeg', 'bin', 'ffmpeg.exe');
 const YTDLP_EXE = path.join(__dirname, 'tools', 'yt-dlp', 'yt-dlp.exe');
 const UPDATE_MANIFEST_PATH = path.join(__dirname, 'update-manifest.json');
@@ -97,10 +96,6 @@ let currentRunnerCommand = null;
 let remoteAccessSnapshot = null;
 let remoteAccessSnapshotAt = 0;
 
-const RUNNER_LOCK_MAX_STALE_MS = 120_000;
-const MAX_TRANSIENT_RETRIES = 3;
-const TRANSIENT_RETRY_DELAY_MS = 10_000;
-
 const REMOTE_ACCESS_CACHE_MS = 60_000;
 const RUNNER_VERSION = (() => {
   try {
@@ -115,81 +110,6 @@ function getRunnerAuthToken() {
   return config.runnerToken || '';
 }
 
-function acquireRunnerLock() {
-  const currentPid = process.pid;
-  try {
-    if (fs.existsSync(RUNNER_LOCK_PATH)) {
-      const raw = fs.readFileSync(RUNNER_LOCK_PATH, 'utf8').trim();
-      const parts = raw.split('\n');
-      const pid = Number.parseInt(parts[0], 10);
-      const timestamp = Number.parseInt(parts[1], 10);
-      if (Number.isFinite(pid) && pid > 0 && Number.isFinite(timestamp)) {
-        if (pid === currentPid) {
-          fs.writeFileSync(RUNNER_LOCK_PATH, `${currentPid}\n${Date.now()}`, 'utf8');
-          return true;
-        }
-        try {
-          process.kill(pid, 0);
-          if (Date.now() - timestamp < RUNNER_LOCK_MAX_STALE_MS) {
-            console.error(`[LOCK] Another runner is already running (PID ${pid}). Exiting.`);
-            process.exit(1);
-          }
-          console.warn(`[LOCK] Stale lock from PID ${pid} (${Date.now() - timestamp}ms old). Taking over.`);
-        } catch {
-          console.warn(`[LOCK] Stale lock from PID ${pid} (process dead). Taking over.`);
-        }
-      }
-    }
-    fs.writeFileSync(RUNNER_LOCK_PATH, `${currentPid}\n${Date.now()}`, 'utf8');
-    return true;
-  } catch (error) {
-    console.error(`[LOCK] Failed to acquire lock: ${error.message}`);
-    return false;
-  }
-}
-
-function releaseRunnerLock() {
-  try {
-    if (fs.existsSync(RUNNER_LOCK_PATH)) {
-      const raw = fs.readFileSync(RUNNER_LOCK_PATH, 'utf8').trim();
-      const pid = Number.parseInt(raw.split('\n')[0], 10);
-      if (pid === process.pid) {
-        fs.rmSync(RUNNER_LOCK_PATH, { force: true });
-      }
-    }
-  } catch {}
-}
-
-function refreshRunnerLock() {
-  try {
-    if (fs.existsSync(RUNNER_LOCK_PATH)) {
-      const raw = fs.readFileSync(RUNNER_LOCK_PATH, 'utf8').trim();
-      const pid = Number.parseInt(raw.split('\n')[0], 10);
-      if (pid === process.pid) {
-        fs.writeFileSync(RUNNER_LOCK_PATH, `${process.pid}\n${Date.now()}`, 'utf8');
-      }
-    }
-  } catch {}
-}
-
-function isTransientError(error) {
-  if (!error) return false;
-  const message = String(error.message || error || '').toLowerCase();
-  return /etimedout|econnrefused|econnreset|eai_again|enotfound|timeout|rate.limit|429|503|503|service.unavailable|temporary|dns.|network|reset|busy|ebusy|eperm|eacces|lock/.test(message);
-}
-
-async function getQueuedJobCount() {
-  try {
-    const response = await httpRequest(`/api/runner/queue-count?token=${encodeURIComponent(getRunnerAuthToken())}`, 'GET');
-    if (response && response.success && typeof response.data === 'number') {
-      return response.data;
-    }
-    return 0;
-  } catch {
-    return 0;
-  }
-}
-
 function writeRunnerState(nextState) {
   const state = {
     status: 'idle',
@@ -199,7 +119,6 @@ function writeRunnerState(nextState) {
     updatedAt: new Date().toISOString(),
     lastHeartbeatAt: new Date(lastHeartbeat).toISOString(),
     lastError: '',
-    queuedJobs: 0,
     lockStatus: 'ok',
     ...nextState
   };
@@ -1727,17 +1646,6 @@ async function mainLoop() {
   console.log('[RUNNER] Starting automation runner...');
   console.log('[RUNNER] Server:', config.serverUrl);
   console.log('[RUNNER] Authenticating with runner token');
-
-  if (!acquireRunnerLock()) {
-    console.error('[RUNNER] Could not acquire lock. Exiting.');
-    process.exit(1);
-  }
-
-  const lockRefreshInterval = setInterval(refreshRunnerLock, 30000);
-  process.on('exit', releaseRunnerLock);
-  process.on('SIGINT', () => { releaseRunnerLock(); process.exit(0); });
-  process.on('SIGTERM', () => { releaseRunnerLock(); process.exit(0); });
-
   writeRunnerState({
     status: 'starting',
     message: 'Runner process started'
@@ -1782,23 +1690,18 @@ async function mainLoop() {
             continue;
           }
 
-          const queuedCount = await getQueuedJobCount();
-          console.log(`[JOB] Found job ${job.id} (${queuedCount} other jobs in queue)`);
+          console.log(`[JOB] Found job ${job.id}`);
           isProcessing = true;
           currentJob = job;
           writeRunnerState({
             status: 'processing',
             message: `Processing job ${job.id}`,
             currentJobId: job.id,
-            lastError: '',
-            queuedJobs: queuedCount,
+            lastError: ''
           });
 
-          let jobCompleted = false;
-          let transientRetriesLeft = MAX_TRANSIENT_RETRIES;
-          while (!jobCompleted && transientRetriesLeft >= 0) {
-            try {
-              if (job.automation_type === 'image') {
+          try {
+            if (job.automation_type === 'image') {
                 const processedCount = await runImageRunnerScriptsJob(job);
                 const imageResult = readImageResultFromRunnerScripts();
                 processedVideos += processedCount;
@@ -1820,8 +1723,7 @@ async function mainLoop() {
                 });
 
                 console.log(`[JOB] Image job ${job.id} completed via image pipeline (${processedCount} output(s))`);
-                jobCompleted = true;
-                break;
+                continue;
               }
 
               const workflow = String(job?.config?.workflow || job?.input_data?.workflow || '').trim().toLowerCase();
@@ -1873,8 +1775,7 @@ async function mainLoop() {
                 });
 
                 console.log(`[JOB] Dubbing job ${job.id} completed via dubbing pipeline (${processedCount} output(s))`);
-                jobCompleted = true;
-                break;
+                continue;
               }
 
               const videosPerRun = parseInt(
@@ -1923,8 +1824,7 @@ async function mainLoop() {
               });
 
               console.log(`[JOB] Job ${job.id} completed successfully via shared pipeline (${processedCount} output(s))`);
-              jobCompleted = true;
-              break;
+              continue;
             } catch (e) {
               if (isLocalFolderExhaustedError(e)) {
                 console.log(`[JOB] Job ${job.id} completed with no new local-folder videos remaining.`);
@@ -1939,22 +1839,6 @@ async function mainLoop() {
                   source_folder: e.folderPath || null,
                   message: 'All local folder videos were already processed. History was preserved.',
                 });
-                jobCompleted = true;
-                break;
-              }
-
-              if (transientRetriesLeft > 0 && isTransientError(e)) {
-                transientRetriesLeft--;
-                const attemptNum = MAX_TRANSIENT_RETRIES - transientRetriesLeft;
-                console.warn(`[JOB] Transient error on job ${job.id}, retrying (${attemptNum}/${MAX_TRANSIENT_RETRIES}): ${e.message}`);
-                writeRunnerState({
-                  status: 'processing',
-                  message: `Retrying job ${job.id} (${attemptNum}/${MAX_TRANSIENT_RETRIES})`,
-                  currentJobId: job.id,
-                  lastError: e.message,
-                  queuedJobs: queuedCount,
-                });
-                await sleep(TRANSIENT_RETRY_DELAY_MS);
                 continue;
               }
 
@@ -1964,7 +1848,6 @@ async function mainLoop() {
                 message: `Job ${job.id} failed`,
                 currentJobId: job.id,
                 lastError: e.message,
-                queuedJobs: queuedCount,
               });
 
               await httpRequest(`/api/runner/jobs/${job.id}/complete`, 'POST', {
@@ -1972,36 +1855,21 @@ async function mainLoop() {
                 success: false,
                 error: e.message
               });
-              jobCompleted = true;
-              break;
+              continue;
             }
           }
           isProcessing = false;
           currentJob = null;
           cleanupOldMediaFiles();
         } else {
-          const queueCheck = await getQueuedJobCount();
-          if (queueCheck > 0) {
-            console.log(`[WAIT] No new jobs assigned, but ${queueCheck} jobs are queued. Waiting...`);
-            writeRunnerState({
-              status: 'idle',
-              message: `${queueCheck} job(s) queued. Waiting for next poll.`,
-              currentJobId: null,
-              processedVideos,
-              queuedJobs: queueCheck,
-            });
-          } else {
-            console.log('[WAIT] No pending jobs, waiting...');
-            writeRunnerState({
-              status: 'idle',
-              message: 'No pending jobs. Waiting for next poll.',
-              currentJobId: null,
-              processedVideos,
-              queuedJobs: 0,
-            });
-          }
+          console.log('[WAIT] No pending jobs, waiting...');
+          writeRunnerState({
+            status: 'idle',
+            message: 'No pending jobs. Waiting for next poll.',
+            currentJobId: null,
+            processedVideos,
+          });
         }
-      }
     } catch (e) {
       console.error('[LOOP] Error:', e.message);
       writeRunnerState({

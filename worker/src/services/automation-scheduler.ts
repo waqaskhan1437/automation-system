@@ -1530,6 +1530,7 @@ export async function triggerAutomationRun(
     caption_text_color: readString(config.caption_text_color, "#FFFFFF"),
     caption_bg_opacity: readString(config.caption_bg_opacity, "0.5"),
     caption_position: readString(config.caption_position, "bottom"),
+    execution_mode: executionMode,
   };
 
   // Validate: If no videos found, return error

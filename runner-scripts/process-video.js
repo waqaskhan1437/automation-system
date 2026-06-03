@@ -236,15 +236,48 @@ function parseResolution(value) {
   return { width, height };
 }
 
+let _hwaccelEncoder = null;
+let _hwaccelChecked = false;
+
+function detectHardwareEncoder() {
+  if (_hwaccelChecked) return _hwaccelEncoder;
+  _hwaccelChecked = true;
+  try {
+    const output = execSync(`${FFMPEG} -hide_banner -encoders 2>&1`, { encoding: 'utf8', timeout: 15000 });
+    if (output.includes('h264_amf')) { _hwaccelEncoder = 'h264_amf'; return _hwaccelEncoder; }
+    if (output.includes('h264_nvenc')) { _hwaccelEncoder = 'h264_nvenc'; return _hwaccelEncoder; }
+    if (output.includes('h264_videotoolbox')) { _hwaccelEncoder = 'h264_videotoolbox'; return _hwaccelEncoder; }
+    if (output.includes('h264_qsv')) { _hwaccelEncoder = 'h264_qsv'; return _hwaccelEncoder; }
+  } catch {}
+  _hwaccelEncoder = 'libx264';
+  return _hwaccelEncoder;
+}
+
 function getOutputEncodeArgs(config, options = {}) {
   const quality = String(config.output_quality || "high");
   const presets = {
     low: { preset: "veryfast", crf: 30 },
-    medium: { preset: "fast", crf: 27 },
-    high: { preset: "medium", crf: 24 }
+    medium: { preset: "veryfast", crf: 27 },
+    high: { preset: "veryfast", crf: 24 }
   };
   const profile = presets[quality] || presets.high;
   const audioArgs = options.disableAudio ? "-an" : "-c:a aac -b:a 96k";
+  const encoder = detectHardwareEncoder();
+  if (encoder === 'libx264') {
+    return `-c:v libx264 -preset ${profile.preset} -crf ${profile.crf} ${audioArgs} -pix_fmt yuv420p`;
+  }
+  if (encoder === 'h264_amf') {
+    return `-c:v h264_amf -quality speed -usage transcoding ${audioArgs}`;
+  }
+  if (encoder === 'h264_nvenc') {
+    return `-c:v h264_nvenc -preset p1 -cq ${profile.crf} ${audioArgs}`;
+  }
+  if (encoder === 'h264_videotoolbox') {
+    return `-c:v h264_videotoolbox -quality speed -allow_sw 1 ${audioArgs}`;
+  }
+  if (encoder === 'h264_qsv') {
+    return `-c:v h264_qsv -preset veryfast -global_quality ${profile.crf} ${audioArgs}`;
+  }
   return `-c:v libx264 -preset ${profile.preset} -crf ${profile.crf} ${audioArgs} -pix_fmt yuv420p`;
 }
 
@@ -645,7 +678,7 @@ function hasAudioTrack(inputFile) {
 }
 
 function remuxWithFaststart(inputFile, outputFile, codecArgs) {
-  const cmd = `${FFMPEG} -y -i "${inputFile}" ${codecArgs} -movflags +faststart "${outputFile}"`;
+  const cmd = `${FFMPEG} -hwaccel auto -y -i "${inputFile}" ${codecArgs} -movflags +faststart "${outputFile}"`;
   console.log("Finalize CMD:", cmd);
   execSync(cmd, { stdio: "inherit", timeout: 300000 });
 }
@@ -835,7 +868,7 @@ function applySpeedSegments(inputFile, tempFile, config, videoDuration, segments
   const complexFilter = `${allFilters}; ${concatParts.join("")}concat=n=${n}:v=1${concatAudio}[out]`;
 
   const encodeArgs = getOutputEncodeArgs(config, { disableAudio: !hasAudio });
-  const cmd = `${FFMPEG} -y -i "${inputFile}" -filter_complex "${complexFilter}" -map "[out]" ${encodeArgs} -movflags +faststart "${tempFile}"`;
+  const cmd = `${FFMPEG} -hwaccel auto -y -i "${inputFile}" -filter_complex "${complexFilter}" -map "[out]" ${encodeArgs} -movflags +faststart "${tempFile}"`;
 
   console.log("Speed CMD:", cmd.substring(0, 300) + "...");
 
@@ -890,7 +923,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       console.log(`Mode: Fade Out (last ${audioFadeDuration}s)`);
       if (videoDuration && videoDuration > audioFadeDuration) {
         const fadeStart = videoDuration - audioFadeDuration;
-        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "afade=t=out:st=${fadeStart}:d=${audioFadeDuration}" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -hwaccel auto -y -i "${tempFile}" -af "afade=t=out:st=${fadeStart}:d=${audioFadeDuration}" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Fade CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -903,7 +936,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       console.log(`Mode: Mute Last (${muteLastSeconds}s)`);
       if (videoDuration && videoDuration > muteLastSeconds) {
         const keepEnd = videoDuration - muteLastSeconds;
-        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "volume=enable='between(t,${keepEnd},${videoDuration})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -hwaccel auto -y -i "${tempFile}" -af "volume=enable='between(t,${keepEnd},${videoDuration})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Mute Last CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -917,7 +950,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       if (videoDuration && muteRangeEnd > muteRangeStart && muteRangeStart >= 0) {
         const actualEnd = Math.min(muteRangeEnd, videoDuration);
         // Mute audio between start and end using volume filter with enable expression
-        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -hwaccel auto -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Mute Range CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -931,7 +964,7 @@ function applyAdvancedAudioMuting(tempFile, outputFile, config) {
       if (videoDuration && muteRangeEnd > muteRangeStart && muteRangeStart >= 0) {
         const actualEnd = Math.min(muteRangeEnd, videoDuration);
         // Same as mute_range but semantically different (could be extended)
-        const cmd = `${FFMPEG} -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
+        const cmd = `${FFMPEG} -hwaccel auto -y -i "${tempFile}" -af "volume=enable='between(t,${muteRangeStart},${actualEnd})':volume=0" ${getOutputEncodeArgs(config)} -movflags +faststart "${outputFile}"`;
         console.log("Mute Between CMD:", cmd);
         execSync(cmd, { stdio: "inherit", timeout: 300000 });
       } else {
@@ -1178,9 +1211,9 @@ function main() {
       complexFilter = `[0:v]${vfChain}select='${splitSelectExpr}',setpts=N/FRAME_RATE/TB[v]`;
       mapArgs = `-map "[v]"`;
     }
-      cmd = `${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -filter_complex "${complexFilter}" ${mapArgs} ${getOutputEncodeArgs(config, { disableAudio: !hasAudio })} -movflags +faststart "${TEMP_FILE}"`;
+      cmd = `${FFMPEG} -hwaccel auto -y -i "${SPEED_FILE}" -t ${duration} -filter_complex "${complexFilter}" ${mapArgs} ${getOutputEncodeArgs(config, { disableAudio: !hasAudio })} -movflags +faststart "${TEMP_FILE}"`;
   } else {
-    cmd = `${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -vf "${filterStr}" ${getOutputEncodeArgs(config)} -movflags +faststart "${TEMP_FILE}"`;
+    cmd = `${FFMPEG} -hwaccel auto -y -i "${SPEED_FILE}" -t ${duration} -vf "${filterStr}" ${getOutputEncodeArgs(config)} -movflags +faststart "${TEMP_FILE}"`;
   }
 
   console.log("CMD:", cmd);
