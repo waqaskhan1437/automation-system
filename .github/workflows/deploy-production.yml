@@ -61,15 +61,6 @@ jobs:
           npm ci
           npm run build
 
-      - name: Deploy Worker to Cloudflare
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd worker
-          npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-
       - name: Deployment handoff summary
         shell: bash
         run: |
@@ -80,7 +71,9 @@ jobs:
           |---|---|
           | Worker TypeScript check | success |
           | Frontend production build | success |
-          | Cloudflare Worker deploy | success via wrangler deploy |
+          | Cloudflare Worker deploy | handled by Cloudflare Git integration |
           | Vercel frontend deploy | handled by Vercel Git integration |
 
+          This workflow intentionally does not run `wrangler deploy` or `vercel deploy`.
+          The repository is already connected directly to Cloudflare and Vercel, so GitHub Actions only validates the code and lets those providers deploy from the pushed commit. This prevents duplicate deploys, invalid CLI-token failures, and skipped dependent deploy jobs.
           SUMMARY
