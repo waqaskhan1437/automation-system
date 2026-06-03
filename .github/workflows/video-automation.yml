@@ -2,7 +2,7 @@ name: "Video Automation Runner"
 run-name: "Video job ${{ inputs.job_id }} ${{ inputs.dispatch_nonce }}"
 concurrency:
   group: video-automation-${{ inputs.job_id || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 on:
   workflow_dispatch:
     inputs:
