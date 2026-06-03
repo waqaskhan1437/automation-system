@@ -6,5 +6,6 @@ export { default as VideoToggles } from "./VideoToggles";
 export { default as VideoSummary } from "./VideoSummary";
 export { default as PlanTab } from "./PlanTab";
 export { default as TaglinesTab } from "./TaglinesTab";
+export { default as OverlaysTab } from "./OverlaysTab";
 export { default as SocialTab } from "./SocialTab";
 export { default as CaptionsTab } from "./CaptionsTab";

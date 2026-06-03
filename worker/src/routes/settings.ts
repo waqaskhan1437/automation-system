@@ -686,6 +686,8 @@ export async function handleSettingsRoutes(
       topic?: string;
       platform?: string;
       count?: number;
+      focusKeyword?: string;
+      brief?: string;
       automationName?: string;
       brandName?: string;
       brandingUrl?: string;
@@ -783,6 +785,8 @@ export async function handleSettingsRoutes(
         const topic = String(body.topic || body.prompt || "").trim();
         const platform = String(body.platform || "instagram").trim();
         const count = Math.min(Math.max(Number(body.count || 10), 1), 50);
+        const focusKeyword = String(body.focusKeyword || "").trim();
+        const brief = String(body.brief || "").trim();
 
         if (!topic) {
           return jsonResponse({ success: false, error: "topic is required for social generation" }, 400);
@@ -792,10 +796,10 @@ export async function handleSettingsRoutes(
           aiSettings,
           provider,
           resolvedModel,
-          getSocialMessages({ topic, platform, count }),
+          getSocialMessages({ topic, platform, count, focusKeyword, brief }),
           aiRuntimeConfig
         );
-        const normalized = normalizeSocialResult(parsed, count);
+        const normalized = normalizeSocialResult(parsed, count, platform);
 
         return jsonResponse({
           success: true,
