@@ -272,7 +272,7 @@ function deriveSegmentInfo(config) {
   }
 
   const shortsMode = String(config?.source_shorts_mode || 'single');
-  const targetDuration = parsePositiveInteger(config?.short_duration, 60);
+  const targetDuration = parsePositiveInteger(config?.short_duration, 58);
 
   if (shortsMode === 'fixed_count') {
     const segmentCount = parsePositiveInteger(config?.source_shorts_max_count, 1);
@@ -346,7 +346,7 @@ function buildSegmentRuntimeConfig(baseConfig, segment) {
   const hashtags = Array.isArray(segment?.hashtags)
     ? segment.hashtags.filter((item) => typeof item === 'string' && item.trim())
     : [];
-  const duration = Math.max(1, Math.round(Number(segment?.duration) || Number(baseConfig.short_duration) || 60));
+  const duration = Math.max(1, Math.round(Number(segment?.duration) || Number(baseConfig.short_duration) || 58));
 
   // NOTE: Do not override top_taglines / bottom_taglines from AI hooks.
   // Video overlay taglines must always come from the user's Tagline tab,
@@ -607,7 +607,7 @@ async function main() {
 
         console.log(`[VIDEO ${i + 1}] Splitting into ${segments.length} segments`);
 
-        const concurrencyLimit = Math.max(1, os.cpus().length - 1);
+        const concurrencyLimit = Math.min(3, Math.max(1, os.cpus().length - 1));
         const segTasks = segments.map((seg) => async () => {
           const result = { seg, uploadUrl: null, record: null, error: null };
           try {
@@ -621,7 +621,7 @@ async function main() {
             const segmentConfig = buildSegmentRuntimeConfig(config, seg);
             writeConfig(segmentConfig);
 
-            const duration = Math.max(1, Math.round(Number(seg.duration) || parseInt(segmentConfig.short_duration || "60", 10) || 60));
+            const duration = Math.max(1, Math.round(Number(seg.duration) || parseInt(segmentConfig.short_duration || "58", 10) || 58));
             const aspectRatio = segmentConfig.aspect_ratio || "9:16";
             processSegmentDirect(segOutputFile, duration, aspectRatio, segmentConfig, seg.index, segments.length);
             const processedSegmentFile = path.join(OUTPUT_DIR, `processed-segment-${i}-${seg.index}.mp4`);

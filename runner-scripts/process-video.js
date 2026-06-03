@@ -298,22 +298,23 @@ function getOutputEncodeArgs(config, options = {}) {
   const profile = presets[quality] || presets.high;
   const audioArgs = options.disableAudio ? "-an" : "-c:a aac -b:a 96k";
   const encoder = detectHardwareEncoder();
+  const ytFlags = '-profile:v high -level:v 4.1 -g 48';
   if (encoder === 'libx264') {
-    return `-c:v libx264 -preset ${profile.preset} -crf ${profile.crf} ${audioArgs} -pix_fmt yuv420p`;
+    return `-c:v libx264 ${ytFlags} -preset ${profile.preset} -crf ${profile.crf} ${audioArgs} -pix_fmt yuv420p`;
   }
   if (encoder === 'h264_amf') {
-    return `-c:v h264_amf -quality speed -usage transcoding ${audioArgs}`;
+    return `-c:v h264_amf ${ytFlags} -quality speed -usage transcoding ${audioArgs}`;
   }
   if (encoder === 'h264_nvenc') {
-    return `-c:v h264_nvenc -preset p1 -cq ${profile.crf} ${audioArgs}`;
+    return `-c:v h264_nvenc ${ytFlags} -preset p1 -cq ${profile.crf} ${audioArgs}`;
   }
   if (encoder === 'h264_videotoolbox') {
-    return `-c:v h264_videotoolbox -quality speed -allow_sw 1 ${audioArgs}`;
+    return `-c:v h264_videotoolbox ${ytFlags} -quality speed -allow_sw 1 ${audioArgs}`;
   }
   if (encoder === 'h264_qsv') {
-    return `-c:v h264_qsv -preset veryfast -global_quality ${profile.crf} ${audioArgs}`;
+    return `-c:v h264_qsv ${ytFlags} -preset veryfast -global_quality ${profile.crf} ${audioArgs}`;
   }
-  return `-c:v libx264 -preset ${profile.preset} -crf ${profile.crf} ${audioArgs} -pix_fmt yuv420p`;
+  return `-c:v libx264 ${ytFlags} -preset ${profile.preset} -crf ${profile.crf} ${audioArgs} -pix_fmt yuv420p`;
 }
 
 function escapeDrawtextValue(value) {
@@ -721,7 +722,7 @@ function remuxWithFaststart(inputFile, outputFile, codecArgs) {
   } catch (e) {
     // If HW encoder failed, retry with libx264 CPU fallback
     console.log("[PROCESS] HW encoder failed, retrying with libx264...");
-    const fallbackCmd = `${FFMPEG} -y -i "${inputFile}" -c:v libx264 -preset veryfast -crf 24 -c:a aac -b:a 96k -pix_fmt yuv420p -movflags +faststart "${outputFile}"`;
+    const fallbackCmd = `${FFMPEG} -y -i "${inputFile}" -c:v libx264 -profile:v high -level:v 4.1 -g 48 -preset veryfast -crf 24 -c:a aac -b:a 96k -pix_fmt yuv420p -movflags +faststart "${outputFile}"`;
     console.log("Fallback CMD:", fallbackCmd);
     execSync(fallbackCmd, { stdio: "inherit", timeout: 600000 });
   }
@@ -1063,7 +1064,7 @@ function main() {
 
   // Duration settings
   const rawDuration = config.short_duration;
-  const duration = parseInt(rawDuration || "60") || 60;
+  const duration = parseInt(rawDuration || "58") || 58;
   const aspectRatio = config.aspect_ratio || "9:16";
   
   console.log("=== DURATION CONFIG ===");
@@ -1264,7 +1265,7 @@ function main() {
 
   function tryFallbackCopy() {
     try {
-      execSync(`${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -c copy "${TEMP_FILE}"`, {
+      execSync(`${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -c copy -movflags +faststart "${TEMP_FILE}"`, {
         stdio: "inherit", timeout: 300000
       });
     } catch (e2) {
@@ -1326,7 +1327,8 @@ function main() {
     applyAdvancedAudioMuting(TEMP_FILE, OUTPUT_FILE, config);
   } else {
     console.log("Audio Processing: Original (no muting)");
-    remuxWithFaststart(TEMP_FILE, OUTPUT_FILE, getOutputEncodeArgs(config));
+    console.log("TEMP_FILE already has faststart, copying directly to OUTPUT_FILE...");
+    fs.copyFileSync(TEMP_FILE, OUTPUT_FILE);
   }
 
   try { fs.unlinkSync(TEMP_FILE); } catch (e) {}

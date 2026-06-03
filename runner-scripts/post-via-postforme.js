@@ -520,6 +520,7 @@ async function main() {
     console.log(`Draft post created: ${draftPostId}`);
   } catch (err) {
     console.error(`PostForMe error: ${err.message}`);
+    postStatus = "failed";
   }
 
   const scheduledAccountMetadata = socialAccounts.map((accountId, index) => {
