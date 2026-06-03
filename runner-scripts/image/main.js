@@ -28,6 +28,7 @@ function ensureOutputDir() {
   }
 }
 
+/* LOCAL FEATURE (disabled for now)
 function resolveFinalOutputDir(config) {
   const configuredPath = typeof process.env.LOCAL_OUTPUT_DIR === "string" && process.env.LOCAL_OUTPUT_DIR.trim()
     ? process.env.LOCAL_OUTPUT_DIR.trim()
@@ -47,6 +48,7 @@ function saveLocalImageOutput(config, sourceFile) {
   fs.copyFileSync(sourceFile, localPath);
   return localPath;
 }
+*/
 
 function readString(value, fallback = "") {
   return typeof value === "string" ? value.trim() : fallback;
@@ -317,6 +319,7 @@ async function main() {
 
   const rendered = await renderImage(config);
   
+  /* LOCAL FEATURE (disabled for now)
   if (config.skip_upload === true) {
     const localPath = saveLocalImageOutput(config, rendered.outputFile);
     console.log(`[IMAGE][LOCAL] Skipping upload as per config. Image saved at: ${localPath}`);
@@ -325,6 +328,7 @@ async function main() {
     await sendWebhook({ status: "success", video_url: null, output_data: localResult });
     return;
   }
+  */
 
   const mediaUrl = await uploadFile(rendered.outputFile);
   const result = {

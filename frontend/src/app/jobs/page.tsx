@@ -70,6 +70,20 @@ export default function JobsPage() {
     }
   };
 
+  const handleForceContinue = async (id: number) => {
+    try {
+      const res = await fetch(`/api/jobs/${id}/force-continue`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        fetchJobs();
+      } else {
+        console.error("Force continue failed:", data.error);
+      }
+    } catch (err) {
+      console.error("Force continue failed");
+    }
+  };
+
   return (
     <div>
       <div className="mb-8 flex justify-between items-center">
@@ -166,6 +180,11 @@ export default function JobsPage() {
                     {job.status === "failed" && (
                       <button onClick={() => handleRetry(job.id)} className="glass-button text-sm py-2 px-4 text-[#f59e0b]">
                         Retry
+                      </button>
+                    )}
+                    {(job.status === "running" || job.status === "queued") && (
+                      <button onClick={() => handleForceContinue(job.id)} className="glass-button text-sm py-2 px-4 text-[#f97316]">
+                        Force Continue
                       </button>
                     )}
                     {job.github_run_url && (

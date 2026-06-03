@@ -19,6 +19,7 @@
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const OUTPUT_DIR = process.env.OUTPUT_DIR
   ? path.resolve(process.env.OUTPUT_DIR)
@@ -242,23 +243,57 @@ let _hwaccelChecked = false;
 function detectHardwareEncoder() {
   if (_hwaccelChecked) return _hwaccelEncoder;
   _hwaccelChecked = true;
+
+  // Linux (GitHub Actions runner) — no GPU drivers available, skip GPU encoders
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    _hwaccelEncoder = 'libx264';
+    return _hwaccelEncoder;
+  }
+
   try {
     const output = execSync(`${FFMPEG} -hide_banner -encoders 2>&1`, { encoding: 'utf8', timeout: 15000 });
-    if (output.includes('h264_amf')) { _hwaccelEncoder = 'h264_amf'; return _hwaccelEncoder; }
-    if (output.includes('h264_nvenc')) { _hwaccelEncoder = 'h264_nvenc'; return _hwaccelEncoder; }
-    if (output.includes('h264_videotoolbox')) { _hwaccelEncoder = 'h264_videotoolbox'; return _hwaccelEncoder; }
-    if (output.includes('h264_qsv')) { _hwaccelEncoder = 'h264_qsv'; return _hwaccelEncoder; }
+    if (output.includes('h264_amf')) {
+      try {
+        execSync(`${FFMPEG} -f lavfi -i color=c=black:d=1 -frames:v 1 -c:v h264_amf -f null - 2>&1`, { encoding: 'utf8', timeout: 10000 });
+        _hwaccelEncoder = 'h264_amf'; return _hwaccelEncoder;
+      } catch {}
+    }
+    if (output.includes('h264_nvenc')) {
+      try {
+        execSync(`${FFMPEG} -f lavfi -i color=c=black:d=1 -frames:v 1 -c:v h264_nvenc -f null - 2>&1`, { encoding: 'utf8', timeout: 10000 });
+        _hwaccelEncoder = 'h264_nvenc'; return _hwaccelEncoder;
+      } catch {}
+    }
+    if (output.includes('h264_videotoolbox')) {
+      try {
+        execSync(`${FFMPEG} -f lavfi -i color=c=black:d=1 -frames:v 1 -c:v h264_videotoolbox -f null - 2>&1`, { encoding: 'utf8', timeout: 10000 });
+        _hwaccelEncoder = 'h264_videotoolbox'; return _hwaccelEncoder;
+      } catch {}
+    }
+    if (output.includes('h264_qsv')) {
+      try {
+        execSync(`${FFMPEG} -f lavfi -i color=c=black:d=1 -frames:v 1 -c:v h264_qsv -f null - 2>&1`, { encoding: 'utf8', timeout: 10000 });
+        _hwaccelEncoder = 'h264_qsv'; return _hwaccelEncoder;
+      } catch {}
+    }
   } catch {}
   _hwaccelEncoder = 'libx264';
   return _hwaccelEncoder;
 }
 
+function getCPUPreset() {
+  const cores = os.cpus().length;
+  // 8+ cores = powerful runner → ultrafast for 3-4x faster encoding
+  return cores >= 8 ? 'ultrafast' : 'veryfast';
+}
+
 function getOutputEncodeArgs(config, options = {}) {
   const quality = String(config.output_quality || "high");
+  const cpuPreset = getCPUPreset();
   const presets = {
-    low: { preset: "veryfast", crf: 30 },
-    medium: { preset: "veryfast", crf: 27 },
-    high: { preset: "veryfast", crf: 24 }
+    low: { preset: cpuPreset, crf: 30 },
+    medium: { preset: cpuPreset, crf: 27 },
+    high: { preset: cpuPreset, crf: 24 }
   };
   const profile = presets[quality] || presets.high;
   const audioArgs = options.disableAudio ? "-an" : "-c:a aac -b:a 96k";
@@ -678,9 +713,18 @@ function hasAudioTrack(inputFile) {
 }
 
 function remuxWithFaststart(inputFile, outputFile, codecArgs) {
+  // Try with given codec args first (may include HW encoder)
   const cmd = `${FFMPEG} -hwaccel auto -y -i "${inputFile}" ${codecArgs} -movflags +faststart "${outputFile}"`;
   console.log("Finalize CMD:", cmd);
-  execSync(cmd, { stdio: "inherit", timeout: 300000 });
+  try {
+    execSync(cmd, { stdio: "inherit", timeout: 300000 });
+  } catch (e) {
+    // If HW encoder failed, retry with libx264 CPU fallback
+    console.log("[PROCESS] HW encoder failed, retrying with libx264...");
+    const fallbackCmd = `${FFMPEG} -y -i "${inputFile}" -c:v libx264 -preset veryfast -crf 24 -c:a aac -b:a 96k -pix_fmt yuv420p -movflags +faststart "${outputFile}"`;
+    console.log("Fallback CMD:", fallbackCmd);
+    execSync(fallbackCmd, { stdio: "inherit", timeout: 600000 });
+  }
 }
 
 /**
@@ -1197,6 +1241,17 @@ function main() {
 
   const filterStr = filters.length > 0 ? filters.join(",") : "null";
 
+  function tryFallbackCopy() {
+    try {
+      execSync(`${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -c copy "${TEMP_FILE}"`, {
+        stdio: "inherit", timeout: 300000
+      });
+    } catch (e2) {
+      console.error("Copy fallback failed:", e2.message);
+      process.exit(1);
+    }
+  }
+
   console.log("Running FFmpeg...");
   let cmd;
 
@@ -1222,14 +1277,18 @@ function main() {
     execSync(cmd, { stdio: "inherit", timeout: 600000 });
   } catch (e) {
     console.error("FFmpeg error:", e.message);
-    console.log("Trying copy fallback...");
-    try {
-      execSync(`${FFMPEG} -y -i "${SPEED_FILE}" -t ${duration} -c copy "${TEMP_FILE}"`, {
-        stdio: "inherit", timeout: 300000
-      });
-    } catch (e2) {
-      console.error("Fallback failed:", e2.message);
-      process.exit(1);
+    if (process.env.FFMPEG_FALLBACK === 'ultrafast') {
+      console.log("Ultrafast fallback mode...");
+      const ultrafastCmd = `${FFMPEG} -hwaccel auto -y -i "${SPEED_FILE}" -t ${duration} -vf "${filterStr === 'null' ? 'null' : filterStr}" -c:v libx264 -preset ultrafast -crf 30 -c:a aac -b:a 96k -pix_fmt yuv420p -movflags +faststart "${TEMP_FILE}"`;
+      try {
+        execSync(ultrafastCmd, { stdio: "inherit", timeout: 900000 });
+        console.log("Ultrafast fallback succeeded!");
+      } catch {
+        console.error("Ultrafast fallback also failed. Trying copy...");
+        tryFallbackCopy();
+      }
+    } else {
+      tryFallbackCopy();
     }
   }
 

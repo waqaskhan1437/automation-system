@@ -1,5 +1,8 @@
 name: "Image Automation Runner"
 run-name: "Image job ${{ inputs.job_id }} ${{ inputs.dispatch_nonce }}"
+concurrency:
+  group: image-automation-${{ inputs.job_id || github.run_id }}
+  cancel-in-progress: true
 on:
   workflow_dispatch:
     inputs:

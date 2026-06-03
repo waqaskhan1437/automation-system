@@ -1,7 +1,7 @@
 import { AuthContext, Env, Job, GithubSettings, Automation } from "../types";
 import { jsonResponse, githubHeaders, safeRequestJson } from "../utils";
 import { getScopedSettings } from "../services/user-settings";
-import { triggerAutomationRun } from "../services/automation-scheduler";
+import { triggerAutomationRun, markAutomationRunCompleted } from "../services/automation-scheduler";
 import { maskSecretValue } from "../services/ai-developer";
 
 
@@ -392,6 +392,30 @@ export async function handleJobsRoutes(
     }
 
     if (!job.github_run_id) {
+      const isActuallyGithub = (() => {
+        try {
+          const inputData = JSON.parse(job.input_data || '{}');
+          return inputData.execution_mode === "github";
+        } catch { return false; }
+      })();
+
+      if (isActuallyGithub) {
+        const pendingLabel = job.status === "running" || job.status === "queued"
+          ? "GitHub Actions run pending — detecting run ID..."
+          : "GitHub Actions run — no run ID synced yet";
+        return jsonResponse({
+          success: true,
+          data: {
+            run_id: null,
+            run_status: job.status,
+            run_conclusion: null,
+            run_url: job.github_run_url || null,
+            steps: [{ name: pendingLabel, status: "in_progress", conclusion: null, number: 1 }],
+            log_url: null,
+          },
+        });
+      }
+
       const localSteps = (() => {
         if (job.status === "queued") {
           return [
@@ -630,6 +654,26 @@ export async function handleJobsRoutes(
     ).bind("Cancelled by user", id, userId).run();
     
     return jsonResponse({ success: true, message: "Job marked as cancelled" });
+  }
+
+  // POST /api/jobs/:id/force-continue - Force-fail a stuck job to unblock the queue
+  if (id && action === "force-continue" && method === "POST") {
+    const job = await env.DB.prepare("SELECT * FROM jobs WHERE id = ? AND user_id = ?").bind(id, userId).first<Job>();
+    if (!job) {
+      return jsonResponse({ success: false, error: "Job not found" }, 404);
+    }
+
+    if (job.status !== "running" && job.status !== "queued") {
+      return jsonResponse({ success: false, error: `Job is "${job.status}", not stuck. Only running/queued jobs can be force-continued.` }, 400);
+    }
+
+    await env.DB.prepare(
+      "UPDATE jobs SET status = 'failed', error_message = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+    ).bind("Force-continued by user", id, userId).run();
+
+    await markAutomationRunCompleted(env, id, new Date());
+
+    return jsonResponse({ success: true, message: "Job force-continued. Next automation run can now proceed." });
   }
 
   return jsonResponse({ success: false, error: "Job route not found" }, 404);

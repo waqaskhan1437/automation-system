@@ -1156,11 +1156,22 @@ export async function triggerAutomationRun(
       );
     }
   } else if (await hasInProgressGithubJobForUser(env, userId)) {
-    return {
-      success: false,
-      inProgress: true,
-      error: "Another admin automation is already running",
-    };
+    if (!options.replaceExistingLocalRun) {
+      return {
+        success: false,
+        inProgress: true,
+        error: "Another admin automation is already running",
+      };
+    }
+    // Cancel previous Github jobs so new trigger can proceed
+    await env.DB.prepare(
+      `UPDATE jobs SET status = 'cancelled',
+          error_message = 'Superseded by a newer GitHub run',
+          completed_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ?
+         AND status IN ('pending', 'queued', 'running')`
+    ).bind(userId).run();
   }
 
   // ── Pre-fetch video URLs before GitHub trigger ───────────────────────
@@ -2295,28 +2306,52 @@ async function createPostformePost(
   return await response.json();
 }
 
+const STALE_JOB_TIMEOUT_MINUTES = 45;
+
 /**
  * Sync stale "running" jobs by polling GitHub Actions for their actual status.
  * This is a safety net for when the webhook callback fails or is never received.
  * Called every minute by the cron handler.
  */
 export async function syncStaleRunningJobs(env: Env): Promise<void> {
-  // Find jobs that are "running" with a github_run_id and started more than 5 minutes ago
+  // ── Auto-fail jobs stuck beyond timeout ──────────────────────────────
+  const timeoutMinutes = STALE_JOB_TIMEOUT_MINUTES;
+  const timedOutJobs = await env.DB.prepare(
+    `SELECT j.id, j.user_id, j.github_run_id
+     FROM jobs j
+     WHERE j.status = 'running'
+       AND j.started_at <= datetime('now', '-' || ? || ' minutes')
+     ORDER BY j.started_at ASC
+     LIMIT 10`
+  ).bind(timeoutMinutes).all<{ id: number; user_id: number; github_run_id: number | null }>();
+
+  if (timedOutJobs.results?.length) {
+    for (const job of timedOutJobs.results) {
+      console.log(`[syncStaleRunningJobs] Job ${job.id} timed out (>${timeoutMinutes} min). Auto-failing.`);
+      await env.DB.prepare(
+        "UPDATE jobs SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'"
+      ).bind(`Timed out after ${timeoutMinutes} minutes`, job.id).run();
+      await markAutomationRunCompleted(env, job.id, new Date());
+    }
+    return;
+  }
+
+  // ── Sync GitHub jobs stuck >5 min but <timeout ───────────────────────
   const staleJobs = await env.DB.prepare(
     `SELECT j.id, j.github_run_id, j.user_id, j.automation_id, j.started_at
      FROM jobs j
      WHERE j.status = 'running'
        AND j.github_run_id IS NOT NULL
        AND j.started_at <= datetime('now', '-5 minutes')
+       AND j.started_at > datetime('now', '-' || ? || ' minutes')
      ORDER BY j.started_at ASC
      LIMIT 10`
-  ).all<{ id: number; github_run_id: number; user_id: number; automation_id: number; started_at: string }>();
+  ).bind(timeoutMinutes).all<{ id: number; github_run_id: number; user_id: number; automation_id: number; started_at: string }>();
 
   if (!staleJobs.results?.length) {
     return;
   }
 
-  // Get GitHub settings (use the first user's settings, or admin)
   const firstJob = staleJobs.results[0];
   const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", firstJob.user_id);
   if (!githubSettings?.pat_token || !githubSettings.repo_owner || !githubSettings.repo_name) {
@@ -2330,7 +2365,6 @@ export async function syncStaleRunningJobs(env: Env): Promise<void> {
         continue;
       }
 
-      // Only sync if GitHub says the run is completed
       if (runStatus.status !== "completed") {
         continue;
       }
@@ -2342,7 +2376,6 @@ export async function syncStaleRunningJobs(env: Env): Promise<void> {
 
       console.log(`[syncStaleRunningJobs] Job ${job.id} (run ${job.github_run_id}): GitHub=${runStatus.status}/${runStatus.conclusion} -> updating to ${newStatus}`);
 
-      // For successful jobs, set video_url to the worker artifact proxy so Output page can display it
       const videoUrl = isSuccess ? `https://automation-api.waqaskhan1437.workers.dev/api/output/${job.id}` : null;
       const outputData = isSuccess ? JSON.stringify({ video_url: videoUrl, synced_from_github: true }) : null;
 
@@ -2350,10 +2383,34 @@ export async function syncStaleRunningJobs(env: Env): Promise<void> {
         "UPDATE jobs SET status = ?, completed_at = ?, error_message = ?, video_url = COALESCE(video_url, ?), output_data = COALESCE(output_data, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'"
       ).bind(newStatus, completedAt, errorMessage, videoUrl, outputData, job.id).run();
 
-      // Mark automation run as completed
       await markAutomationRunCompleted(env, job.id, new Date());
     } catch (err) {
       console.error(`[syncStaleRunningJobs] Error syncing job ${job.id}:`, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  // ── Mark runners offline if heartbeat missing >10 min ────────────────
+  await markStaleRunnersOffline(env);
+}
+
+async function markStaleRunnersOffline(env: Env): Promise<void> {
+  try {
+    const staleRunners = await env.DB.prepare(
+      `SELECT id FROM users
+       WHERE runner_status IN ('online', 'processing')
+         AND runner_last_seen_at <= datetime('now', '-10 minutes')
+       LIMIT 50`
+    ).all<{ id: number }>();
+
+    if (staleRunners.results?.length) {
+      for (const runner of staleRunners.results) {
+        console.log(`[heartbeat] Runner user ${runner.id} last seen >10 min ago. Marking offline.`);
+        await env.DB.prepare(
+          "UPDATE users SET runner_status = 'offline', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND runner_status IN ('online', 'processing')"
+        ).bind(runner.id).run();
+      }
+    }
+  } catch (err) {
+    console.error('[heartbeat] Error marking runners offline:', err instanceof Error ? err.message : String(err));
   }
 }

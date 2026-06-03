@@ -210,9 +210,11 @@ function getBrowserCookieFallbacks() {
     return configured.split(',').map((item) => item.trim()).filter(Boolean);
   }
 
+  /* LOCAL FEATURE (disabled for now)
   if (process.env.RUNNER_EXECUTION_MODE === 'local') {
     return ['firefox', 'chrome', 'edge'];
   }
+  */
 
   return [];
 }
@@ -456,13 +458,17 @@ async function preflightDirectMediaUrl(sourceUrl) {
       })();
 
       if (/catbox\.moe/i.test(host)) {
-        throw new Error(`Source link expired or deleted (${host} returned 404)`);
+        throw new Error(`[DOWNLOAD] Source link expired or deleted (${host} returned 404)`);
       }
 
-      throw new Error(`Source URL returned 404: ${sourceUrl}`);
+      throw new Error(`[DOWNLOAD] Source URL returned 404: ${sourceUrl}`);
+    }
+
+    if (response.status === 403) {
+      throw new Error(`[DOWNLOAD] Source URL returned 403 (forbidden): ${sourceUrl}`);
     }
   } catch (error) {
-    if (error instanceof Error && /404|expired or deleted/i.test(error.message)) {
+    if (error instanceof Error && /404|403|expired|forbidden/i.test(error.message)) {
       throw error;
     }
   }
@@ -1392,23 +1398,34 @@ function downloadDirectFile(sourceUrl, outFile) {
       runCommand('curl', [
         '-L',
         '--fail',
-        '--retry', '2',
+        '--retry', '1',
         '--retry-all-errors',
-        '--connect-timeout', '15',
-        '--max-time', '120',
+        '--connect-timeout', '10',
+        '--max-time', '30',
+        '--parallel',
+        '--parallel-max', '3',
         '-H', `User-Agent: ${getNextUserAgent()}`,
         '-o', outFile,
         sourceUrl,
-      ], 'curl', 150000);
+      ], 'curl', 50000);
       validateOutput(outFile);
       return;
     } catch (error) {
       lastError = error;
+      const errMsg = String(error && (error.message || error) || '');
+      if (/404|expired/i.test(errMsg)) {
+        console.log('[DOWNLOAD] Link expired — skipping remaining retries');
+        throw new Error('[DOWNLOAD] Source link expired or deleted (404)');
+      }
+      if (/403|forbidden/i.test(errMsg)) {
+        console.log('[DOWNLOAD] Access denied — skipping remaining retries');
+        throw new Error('[DOWNLOAD] Source URL returned 403 (forbidden)');
+      }
       console.log(`[DOWNLOAD] Direct media attempt ${attempt} failed: ${error.message}`);
     }
   }
 
-  throw lastError || new Error('Direct media download failed');
+  throw lastError || new Error('[DOWNLOAD] Direct media download failed');
 }
 
 function downloadDirectFileViaFfmpeg(sourceUrl, outFile) {
@@ -1555,6 +1572,7 @@ module.exports = async function download(videoUrl) {
     throw new Error('Missing video source');
   }
 
+  /* LOCAL FEATURE (disabled for now)
   if (!isRemoteUrl(normalizedSource)) {
     const localPath = resolveExistingLocalPath(normalizedSource);
     if (!fs.existsSync(localPath)) {
@@ -1566,6 +1584,7 @@ module.exports = async function download(videoUrl) {
     validateOutput(outFile);
     return;
   }
+  */
 
   // Check for pre-extracted download URL in runtime config (YouTube Queue mode)
   const runtimeCfg = loadRuntimeConfig();

@@ -196,6 +196,7 @@ function materializeManagedCookieFiles(config) {
   else delete process.env.GOOGLE_PHOTOS_COOKIES_FILE;
 }
 
+/* LOCAL FEATURE (disabled for now)
 function resolveFinalOutputDir(config) {
   const configuredPath = typeof process.env.LOCAL_OUTPUT_DIR === 'string' && process.env.LOCAL_OUTPUT_DIR.trim()
     ? process.env.LOCAL_OUTPUT_DIR.trim()
@@ -216,6 +217,7 @@ function saveLocalFinalMedia(config, extensionSuffix = '.mp4', sourceFile = path
   console.log(`[LOCAL] Saved locally: ${localPath}`);
   return localPath;
 }
+*/
 
 function getVideoDuration(inputFile) {
   try {
@@ -454,8 +456,15 @@ function extractSegment(inputFile, outputFile, start, end) {
   try {
     execSync(cmd, { stdio: "inherit", timeout: 60000 });
   } catch {
-    cmd = `${FFMPEG} -y -ss ${start} -i "${inputFile}" -t ${duration} -c copy -avoid_negative_ts make_zero "${outputFile}"`;
-    execSync(cmd, { stdio: "inherit", timeout: 60000 });
+    console.log(`[SEGMENT] Stream copy failed, trying re-encode...`);
+    try {
+      cmd = `${FFMPEG} -y -ss ${start} -i "${inputFile}" -t ${duration} -c copy -avoid_negative_ts make_zero "${outputFile}"`;
+      execSync(cmd, { stdio: "inherit", timeout: 60000 });
+    } catch {
+      console.log(`[SEGMENT] avoid_negative_ts failed, trying re-encode fallback...`);
+      cmd = `${FFMPEG} -y -ss ${start} -i "${inputFile}" -t ${duration} -c:v libx264 -preset ultrafast -crf 30 -c:a aac -b:a 96k -pix_fmt yuv420p -movflags +faststart "${outputFile}"`;
+      execSync(cmd, { stdio: "inherit", timeout: 120000 });
+    }
   }
 
   if (fs.existsSync(outputFile)) {
@@ -470,22 +479,43 @@ function processSegmentDirect(segmentFile, duration, aspectRatio, config, segmen
   const outputFile = path.join(OUTPUT_DIR, 'processed-video.mp4');
   console.log(`[SEGMENT-PROCESS] Running processor for segment ${segmentIndex + 1} (${duration}s @ ${aspectRatio})...`);
 
-  execSync('node process-video.js', {
-    cwd: __dirname,
-    stdio: 'inherit',
-    timeout: 600000,
-    env: {
-      ...process.env,
-      INPUT_FILE_PATH: segmentFile,
-      OUTPUT_FILE_PATH: outputFile,
-      TEMP_FILE_PATH: path.join(OUTPUT_DIR, `segment-temp-${segmentIndex}.mp4`),
-      SPEED_FILE_PATH: path.join(OUTPUT_DIR, `segment-speed-${segmentIndex}.mp4`),
-      OUTPUT_DIR,
+  const tryProcess = (retry) => {
+    execSync('node process-video.js', {
+      cwd: __dirname,
+      stdio: 'inherit',
+      timeout: retry ? 900000 : 600000,
+      env: {
+        ...process.env,
+        INPUT_FILE_PATH: segmentFile,
+        OUTPUT_FILE_PATH: outputFile,
+        TEMP_FILE_PATH: path.join(OUTPUT_DIR, `segment-temp-${segmentIndex}.mp4`),
+        SPEED_FILE_PATH: path.join(OUTPUT_DIR, `segment-speed-${segmentIndex}.mp4`),
+        OUTPUT_DIR,
+        ...(retry ? { FFMPEG_FALLBACK: 'ultrafast' } : {}),
+      }
+    });
+  };
+
+  try {
+    tryProcess(false);
+  } catch (firstErr) {
+    console.warn(`[SEGMENT-PROCESS] First attempt failed: ${firstErr.message}. Retrying with ultrafast...`);
+    try {
+      tryProcess(true);
+    } catch (secondErr) {
+      console.error(`[SEGMENT-PROCESS] Retry also failed: ${secondErr.message}`);
+      console.log(`[SEGMENT-PROCESS] Trying copy fallback for segment ${segmentIndex + 1}...`);
+      execSync(`"${process.execPath}" -e "` +
+        `const fs=require('fs');` +
+        `const src=${JSON.stringify(segmentFile)};` +
+        `const dst=${JSON.stringify(outputFile)};` +
+        `if(!fs.existsSync(src)){process.exit(1)}` +
+        `fs.copyFileSync(src,dst);console.log('[SEGMENT-PROCESS] Copy fallback done')"`, { timeout: 30000 });
     }
-  });
+  }
 
   if (!fs.existsSync(outputFile)) {
-    throw new Error('Processed file not created');
+    throw new Error('Processed file not created for segment ' + segmentIndex);
   }
 
   const stats = fs.statSync(outputFile);
@@ -594,33 +624,23 @@ async function main() {
               await caption();
 
               let uploadUrl = null;
-              if (config.skip_upload === true) {
-                const localPath = saveLocalFinalMedia(segmentConfig, `-seg${seg.index}.mp4`, processedSegmentFile);
-                result.uploadUrl = localPath;
+              // LOCAL FEATURE (skip_upload disabled for now)
+              uploadUrl = await withRetry(() => upload(processedSegmentFile), { maxRetries: 2, delayMs: 5000 });
+              if (uploadUrl) {
+                writeConfig(segmentConfig);
+                await withRetry(() => post(uploadUrl), { maxRetries: 2, delayMs: 5000 });
+                const postResult = readPostResult();
+                if (postResult && postResult.media_url) {
+                  uploadUrl = postResult.media_url;
+                }
+                result.uploadUrl = uploadUrl;
                 result.record = buildProcessedVideoRecord({
-                  videoUrl: localPath,
+                  videoUrl: uploadUrl,
                   originalUrl: url,
                   aspectRatio,
                   segment: seg,
+                  postResult,
                 });
-              } else {
-                uploadUrl = await withRetry(() => upload(processedSegmentFile), { maxRetries: 2, delayMs: 5000 });
-                if (uploadUrl) {
-                  writeConfig(segmentConfig);
-                  await withRetry(() => post(uploadUrl), { maxRetries: 2, delayMs: 5000 });
-                  const postResult = readPostResult();
-                  if (postResult && postResult.media_url) {
-                    uploadUrl = postResult.media_url;
-                  }
-                  result.uploadUrl = uploadUrl;
-                  result.record = buildProcessedVideoRecord({
-                    videoUrl: uploadUrl,
-                    originalUrl: url,
-                    aspectRatio,
-                    segment: seg,
-                    postResult,
-                  });
-                }
               }
             }
             console.log(`[SEGMENT ${seg.index + 1}] DONE`);
@@ -645,11 +665,13 @@ async function main() {
             await tracker.markVideoProcessed(url);
             await tracker.sendProgressUpdate(result.record);
             successCount++;
-          } else if (config.skip_upload && result.record) {
+          }
+          // LOCAL FEATURE (skip_upload disabled for now)
+          /* else if (config.skip_upload && result.record) {
             lastUrl = result.uploadUrl;
             allProcessedVideos.push(result.record);
             successCount++;
-          }
+          } */
         }
 
         if (shouldMergeSegments) {
@@ -665,18 +687,15 @@ async function main() {
           }
 
           let mergedUrl = null;
-          if (config.skip_upload === true) {
-            mergedUrl = saveLocalFinalMedia(config, '-merged.mp4', builtMergedFile);
-          } else {
-            writeConfig(config);
-            mergedUrl = await withRetry(() => upload(builtMergedFile), { maxRetries: 2, delayMs: 5000 });
-            await withRetry(() => post(mergedUrl), { maxRetries: 2, delayMs: 5000 });
-            const mergedPostResult = readPostResult();
-            if (mergedPostResult) {
-              lastPostResult = mergedPostResult;
-              if (mergedPostResult.media_url) {
-                mergedUrl = mergedPostResult.media_url;
-              }
+          // LOCAL FEATURE (skip_upload disabled for now)
+          writeConfig(config);
+          mergedUrl = await withRetry(() => upload(builtMergedFile), { maxRetries: 2, delayMs: 5000 });
+          await withRetry(() => post(mergedUrl), { maxRetries: 2, delayMs: 5000 });
+          const mergedPostResult = readPostResult();
+          if (mergedPostResult) {
+            lastPostResult = mergedPostResult;
+            if (mergedPostResult.media_url) {
+              mergedUrl = mergedPostResult.media_url;
             }
           }
 
@@ -705,20 +724,14 @@ async function main() {
         await caption();
         
         let uploadUrl = null;
-        if (config.skip_upload === true) {
-          const localPath = saveLocalFinalMedia(config);
-          lastUrl = localPath;
-          allProcessedVideos.push({ video_url: localPath, original_url: url });
-        } else {
-          uploadUrl = await withRetry(() => upload(), { maxRetries: 2, delayMs: 5000 });
-        }
+        // LOCAL FEATURE (skip_upload disabled for now)
+        uploadUrl = await withRetry(() => upload(), { maxRetries: 2, delayMs: 5000 });
 
         if (uploadUrl) {
           await withRetry(() => post(uploadUrl), { maxRetries: 2, delayMs: 5000 });
           const postResult = readPostResult();
           if (postResult) {
             lastPostResult = postResult;
-            // Use PostForMe media URL if available (real HTTPS URL instead of local path)
             if (postResult.media_url) {
               uploadUrl = postResult.media_url;
             }
@@ -737,8 +750,6 @@ async function main() {
           await tracker.sendProgressUpdate(processedVideoRecord);
           successCount++;
           console.log(`[VIDEO ${i + 1}] DONE`);
-        } else if (config.skip_upload) {
-          successCount++;
         }
       }
     } catch (e) {
