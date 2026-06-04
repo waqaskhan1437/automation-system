@@ -360,6 +360,14 @@ async function downloadViaYtdownTo(youtubeUrl, outFile) {
   ], "curl", 130000);
   validateOutput(outFile);
   console.log(`[DOWNLOAD] ytdown.to download SUCCESS (${pollResult.fileSize || "unknown"})`);
+
+  // Save video title for use_video_title_for_content feature
+  const videoTitle = initData.api.title;
+  if (videoTitle) {
+    const titleFile = path.join(OUTPUT_DIR, 'yt-video-title.txt');
+    fs.writeFileSync(titleFile, videoTitle.trim(), 'utf8');
+    console.log(`[DOWNLOAD] Saved video title: "${videoTitle.substring(0, 80)}"`);
+  }
 }
 
 function buildJsRuntimesArgs() {

@@ -594,6 +594,53 @@ async function main() {
     try {
       await withRetry(() => download(url), { maxRetries: 2, delayMs: 5000 });
 
+      // ── Auto Content from Video Title (channel URL fallback) ──────────
+      // At dispatch time, the worker can't resolve channel URLs to get the
+      // video title, so AI content generation is skipped. The runner resolves
+      // the channel URL during download and saves the title via ytdown.to.
+      // If use_video_title_for_content is true, call the worker to generate
+      // titles/descriptions/hashtags from the actual video title now.
+      const videoTitleFile = path.join(OUTPUT_DIR, 'yt-video-title.txt');
+      if (config.use_video_title_for_content && fs.existsSync(videoTitleFile)) {
+        const videoTitle = fs.readFileSync(videoTitleFile, 'utf8').trim();
+        if (videoTitle) {
+          console.log(`[CONTENT] use_video_title_for_content enabled — generating AI content from: "${videoTitle.substring(0, 80)}"`);
+          try {
+            const workerBaseUrl = String(process.env.WORKER_WEBHOOK_URL || '').replace(/\/api\/webhook\/github\/?$/, '');
+            const jobId = String(process.env.JOB_ID || '');
+            const runtimeToken = String(process.env.RUNTIME_CONFIG_TOKEN || '');
+            if (workerBaseUrl && jobId && runtimeToken) {
+              const response = await fetch(`${workerBaseUrl}/api/github/generate-content`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'User-Agent': 'AutomationSystemRunner/1.0' },
+                body: JSON.stringify({ job_id: Number(jobId), token: runtimeToken, video_title: videoTitle }),
+              });
+              const result = await response.json();
+              if (result.success && result.data) {
+                if (Array.isArray(result.data.titles) && result.data.titles.length > 0) {
+                  config.titles = result.data.titles;
+                }
+                if (Array.isArray(result.data.descriptions) && result.data.descriptions.length > 0) {
+                  config.descriptions = result.data.descriptions;
+                }
+                if (Array.isArray(result.data.hashtags) && result.data.hashtags.length > 0) {
+                  config.hashtags = result.data.hashtags;
+                }
+                writeConfig(config);
+                console.log(`[CONTENT] AI generated ${config.titles?.length || 0} titles, ${config.descriptions?.length || 0} descriptions, ${config.hashtags?.length || 0} hashtags`);
+              } else {
+                console.log(`[CONTENT] AI generation failed: ${result.error || 'unknown error'} — using fallback content from config`);
+              }
+            } else {
+              console.log('[CONTENT] Missing WORKER_WEBHOOK_URL, JOB_ID, or RUNTIME_CONFIG_TOKEN — cannot generate AI content');
+            }
+          } catch (genErr) {
+            console.log(`[CONTENT] AI generation error: ${genErr.message} — using fallback content from config`);
+          }
+          try { fs.unlinkSync(videoTitleFile); } catch {}
+        }
+      }
+
       if (explicitSegments.length > 0 || (segmentInfo && segmentInfo.segmentCount > 1)) {
         const inputFile = path.join(OUTPUT_DIR, 'input-video.mp4');
         const videoDuration = getVideoDuration(inputFile);

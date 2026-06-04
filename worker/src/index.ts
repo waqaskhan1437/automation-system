@@ -36,6 +36,8 @@ import { getAdminEmail, getAdminPassword, getAuthContext, issueAdminAccessToken,
 import { verifyWorkflowRuntimeConfigToken } from "./services/github";
 import { syncScheduledUploads } from "./services/postforme-sync";
 import { getScopedSettings } from "./services/user-settings";
+import { AISettings } from "./types";
+import { generateAiJson, getSocialMessages, normalizeSocialResult, getProviderApiKey, SupportedAIProvider } from "./services/ai";
 
 function buildVideoHeaders(sourceHeaders?: Headers): Headers {
   const headers = new Headers();
@@ -810,6 +812,85 @@ export default {
           "Cache-Control": "no-store",
         },
       });
+    }
+
+    if (path === "/api/github/generate-content" && method === "POST") {
+      const body = await safeRequestJson<{
+        job_id?: number;
+        token?: string;
+        video_title?: string;
+      }>(request);
+
+      const jobId = Number(body?.job_id || 0);
+      const token = String(body?.token || "").trim();
+      const videoTitle = String(body?.video_title || "").trim();
+
+      if (!Number.isFinite(jobId) || jobId <= 0 || !token || !videoTitle) {
+        return jsonResponse({ success: false, error: "job_id, token, and video_title are required" }, 400);
+      }
+
+      const job = await env.DB.prepare(
+        "SELECT id, user_id, input_data FROM jobs WHERE id = ? LIMIT 1"
+      ).bind(jobId).first<{ id: number; user_id: number; input_data: string | null }>();
+
+      if (!job?.id || !job.user_id) {
+        return jsonResponse({ success: false, error: "Job not found" }, 404);
+      }
+
+      const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", job.user_id);
+      if (!githubSettings?.pat_token) {
+        return jsonResponse({ success: false, error: "GitHub settings not configured" }, 404);
+      }
+
+      const isValidToken = await verifyWorkflowRuntimeConfigToken(job.id, token, githubSettings.pat_token);
+      if (!isValidToken) {
+        return jsonResponse({ success: false, error: "Invalid or expired token" }, 403);
+      }
+
+      let jobConfig: Record<string, unknown> = {};
+      try {
+        jobConfig = job.input_data ? JSON.parse(job.input_data) as Record<string, unknown> : {};
+      } catch {
+        return jsonResponse({ success: false, error: "Job config is unreadable" }, 500);
+      }
+
+      const aiSettings = await getScopedSettings<AISettings>(env.DB, "ai", job.user_id);
+      if (!aiSettings) {
+        return jsonResponse({ success: false, error: "No AI settings configured for this user" }, 400);
+      }
+
+      const provider = String(jobConfig.social_ai_provider || aiSettings.default_provider || "gemini");
+      const model = String(jobConfig.social_ai_model || "");
+      const platform = String(jobConfig.social_platform || "youtube");
+      const count = Math.min(Math.max(Number(jobConfig.social_count || 10), 1), 50);
+
+      try {
+        const messages = getSocialMessages({
+          topic: videoTitle,
+          platform,
+          count,
+          focusKeyword: undefined,
+          brief: undefined,
+        });
+        const raw = await generateAiJson(aiSettings, provider as SupportedAIProvider, model, messages);
+        const normalized = normalizeSocialResult(raw, count, platform);
+
+        return jsonResponse({
+          success: true,
+          data: {
+            titles: normalized.titles,
+            descriptions: normalized.descriptions,
+            hashtags: normalized.hashtags,
+            provider,
+            model,
+          },
+        });
+      } catch (err) {
+        return jsonResponse({
+          success: false,
+          error: `AI content generation failed: ${err instanceof Error ? err.message : String(err)}`,
+        }, 500);
+      }
     }
 
     if (path.startsWith("/api/settings")) {
