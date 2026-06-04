@@ -201,12 +201,12 @@ export async function extractYoutubeDownloadUrl(youtubeUrl: string): Promise<Ver
     "240p": 1, "240": 1,
     "144p": 0, "144": 0,
   };
-  let selected = mediaItems
+  const sorted = mediaItems
     .filter((item) => item.type === "Video")
-    .sort((a, b) => (qualityRank[b.mediaQuality] ?? -1) - (qualityRank[a.mediaQuality] ?? -1))[0];
-  if (!selected) {
-    selected = mediaItems.find((item) => item.type === "Video");
-  }
+    .sort((a, b) => (qualityRank[b.mediaQuality] ?? -1) - (qualityRank[a.mediaQuality] ?? -1));
+  const selected = sorted.length > 0
+    ? sorted[0]
+    : mediaItems.find((item) => item.type === "Video");
   if (!selected) {
     throw new Error("No video media items found");
   }
