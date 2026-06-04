@@ -223,6 +223,71 @@ function isYouTubeUrl(sourceUrl) {
   return /youtube\.com|youtu\.be/i.test(String(sourceUrl || ''));
 }
 
+function isChannelUrl(sourceUrl) {
+  return /youtube\.com\/@|youtube\.com\/channel\/|youtube\.com\/c\//i.test(String(sourceUrl || ''));
+}
+
+function isSingleVideoUrl(sourceUrl) {
+  return /\/watch\?v=|youtu\.be\/|\/shorts\//i.test(String(sourceUrl || ''));
+}
+
+function readConfigValue(config, key, fallback) {
+  if (config && typeof config[key] !== 'undefined') return config[key];
+  return fallback;
+}
+
+function pickPlaylistIndex(processStrategy, contentType, config) {
+  // --playlist-start and --playlist-end control which items to process
+  // Default: just get the first item (newest)
+  // oldest: reverse playlist ordering
+  // random: use random position
+  if (contentType === 'shorts') return { matchFilter: 'duration<60', start: 1, end: 1, reverse: false };
+  if (contentType === 'videos') return { matchFilter: 'duration>=60', start: 1, end: 1, reverse: false };
+  return { start: 1, end: 1, reverse: false };
+}
+
+function resolveSingleVideoFromChannel(channelUrl, config) {
+  const ytDlp = resolveYtDlpRunner();
+  if (!ytDlp) throw new Error('yt-dlp is required for channel URL resolution');
+
+  const contentType = String(readConfigValue(config, 'youtube_content_type', 'both'));
+  const processStrategy = String(readConfigValue(config, 'video_process_strategy', 'newest'));
+  const opts = pickPlaylistIndex(processStrategy, contentType, config);
+
+  // Step 1: List video URLs from the channel using --flat-playlist
+  const listArgs = [
+    ...ytDlp.baseArgs,
+    '--flat-playlist',
+    '--no-warnings',
+    '--print', 'url',
+    '--playlist-start', String(opts.start),
+    '--playlist-end', String(Math.min(opts.end, 5)),
+    ...(opts.reverse ? ['--playlist-reverse'] : []),
+    ...(opts.matchFilter ? ['--match-filters', opts.matchFilter] : []),
+    '--no-check-certificate',
+    '--socket-timeout', '15',
+    channelUrl,
+  ];
+
+  console.log(`[DOWNLOAD] Resolving channel URL to individual video...`);
+  const ytDlpCmd = resolveCommand(ytDlp.command);
+  const result = spawnSync(ytDlpCmd, listArgs, {
+    encoding: 'utf8',
+    timeout: 60000,
+    shell: needsShellWrapper(ytDlpCmd),
+  });
+
+  if (result.error) throw new Error(`Channel resolve failed: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`Channel resolve exited ${result.status}: ${(result.stderr || '').slice(0, 200)}`);
+
+  const urls = (result.stdout || '').split('\n').map(l => l.trim()).filter(l => l.startsWith('http'));
+  if (urls.length === 0) throw new Error('No videos found in channel');
+
+  const selectedUrl = urls[0];
+  console.log(`[DOWNLOAD] Resolved channel video: ${selectedUrl}`);
+  return selectedUrl;
+}
+
 function buildJsRuntimesArgs() {
   // Add flags to solve YouTube's n-challenge (anti-bot JS challenge).
   // --js-runtimes node: tells yt-dlp to use Node.js as the JavaScript runtime
@@ -1626,6 +1691,18 @@ module.exports = async function download(videoUrl) {
 
   // YouTube → full 5-layer fallback chain
   if (isLikelyYtDlpSource(normalizedSource) && /youtube\.com|youtu\.be/i.test(normalizedSource)) {
+    // If it's a channel URL, resolve to individual video first (avoid listing entire channel)
+    if (isChannelUrl(normalizedSource) && !isSingleVideoUrl(normalizedSource)) {
+      try {
+        console.log('[DOWNLOAD] Detected channel URL — resolving to individual video...');
+        const resolvedVideo = resolveSingleVideoFromChannel(normalizedSource, runtimeCfg);
+        console.log(`[DOWNLOAD] Channel resolved to: ${resolvedVideo}`);
+        await downloadYouTubeWithFullChain(resolvedVideo, outFile);
+        return;
+      } catch (resolveError) {
+        console.log(`[DOWNLOAD] Channel resolution failed: ${resolveError.message} — falling through to 5-layer chain`);
+      }
+    }
     await downloadYouTubeWithFullChain(normalizedSource, outFile);
     return;
   }
