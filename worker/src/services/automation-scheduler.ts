@@ -54,6 +54,16 @@ export interface AutomationRunResult {
   message?: string;
 }
 
+interface YoutubePlatformConfig {
+  title: string;
+  description?: string;
+  tags?: string[];
+  privacyStatus?: string;
+  selfDeclaredMadeForKids?: boolean;
+  defaultLanguage?: string;
+  categoryId?: string;
+}
+
 interface PostformeContentSelection {
   title: string;
   description: string;
@@ -61,7 +71,7 @@ interface PostformeContentSelection {
   caption: string;
   topTagline: string;
   bottomTagline: string;
-  platformConfigurations: Record<string, { title: string }>;
+  platformConfigurations: Record<string, { title: string; tags?: string[] } | YoutubePlatformConfig>;
   platformConfigurationMetadata: Array<{ platform: string; title: string; caption: string }>;
 }
 
@@ -2171,21 +2181,37 @@ function getSelectedPostformePlatforms(accountIds: string[], savedAccountsRaw: s
 function buildPostformePlatformConfigurations(
   accountIds: string[],
   savedAccountsRaw: string | null | undefined,
-  title: string
+  title: string,
+  description?: string,
+  hashtags?: string[]
 ): PostformeContentSelection["platformConfigurations"] {
   if (!title) {
     return {};
   }
 
   const platforms = getSelectedPostformePlatforms(accountIds, savedAccountsRaw);
-  return platforms.reduce<Record<string, { title: string }>>((accumulator, platform) => {
+  const tags = (Array.isArray(hashtags) ? hashtags : []).filter(Boolean);
+  return platforms.reduce<PostformeContentSelection["platformConfigurations"]>((accumulator, platform) => {
     if (!POSTFORME_TITLE_PLATFORMS.has(platform)) {
       return accumulator;
     }
 
-    accumulator[platform] = { title };
+    const config: Record<string, unknown> = { title };
+    if (tags.length > 0) {
+      config.tags = tags;
+    }
+
+    if (platform === "youtube") {
+      config.description = description || title;
+      config.privacyStatus = "public";
+      config.selfDeclaredMadeForKids = false;
+      config.defaultLanguage = "en";
+      config.categoryId = "22";
+    }
+
+    accumulator[platform] = config;
     if (platform === "tiktok") {
-      accumulator.tiktok_business = { title };
+      accumulator.tiktok_business = { title, tags };
     }
     return accumulator;
   }, {});
@@ -2242,7 +2268,9 @@ function buildPostformeContentSelection(
   const platformConfigurations = buildPostformePlatformConfigurations(
     socialAccounts,
     savedAccountsRaw,
-    title
+    title,
+    description,
+    hashtags
   );
 
   const nextPostContentCursor = postContentCursor + 1;

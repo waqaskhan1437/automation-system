@@ -13,7 +13,7 @@ import { getScopedSettings } from "./user-settings";
 const POSTFORME_REQUEST_TIMEOUT_MS = 15_000;
 
 const SCHEDULED_STATUSES = new Set(["scheduled"]);
-const POSTED_STATUSES = new Set(["processing", "processed", "published", "posted", "completed"]);
+const POSTED_STATUSES = new Set(["processed", "published", "posted", "completed"]);
 const FAILED_STATUSES = new Set(["failed", "error", "cancelled", "canceled", "rejected"]);
 const PENDING_STATUSES = new Set(["draft", "pending"]);
 

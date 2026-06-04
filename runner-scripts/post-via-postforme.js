@@ -26,6 +26,13 @@ function getRandomFromArray(arr) {
   return arr[Math.floor(Math.random() * arr.length)] || "";
 }
 
+function pickSequentialItem(arr, cursor) {
+  if (!Array.isArray(arr) || arr.length === 0) return { text: "", nextCursor: cursor };
+  const index = Math.min(cursor, arr.length - 1);
+  const text = typeof arr[index] === "string" ? arr[index].trim() : "";
+  return { text, nextCursor: cursor + 1 };
+}
+
 function parsePositiveInteger(value, fallback = null) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -294,7 +301,7 @@ async function fetchSelectedPostformeAccounts(apiKey, accountIds) {
   return Array.isArray(payload.data) ? payload.data : [];
 }
 
-function buildPlatformConfigurations(selectedAccounts, title) {
+function buildPlatformConfigurations(selectedAccounts, title, description, hashtags) {
   if (!title) {
     return {};
   }
@@ -312,9 +319,23 @@ function buildPlatformConfigurations(selectedAccounts, title) {
       return accumulator;
     }
 
-    accumulator[platform] = { title };
+    const config = { title };
+    const tags = (Array.isArray(hashtags) ? hashtags : []).filter(Boolean);
+    if (tags.length > 0) {
+      config.tags = tags;
+    }
+
+    if (platform === "youtube") {
+      config.description = description || title;
+      config.privacyStatus = "public";
+      config.selfDeclaredMadeForKids = false;
+      config.defaultLanguage = "en";
+      config.categoryId = "22";
+    }
+
+    accumulator[platform] = config;
     if (platform === "tiktok") {
-      accumulator.tiktok_business = { title };
+      accumulator.tiktok_business = { title, tags: config.tags };
     }
     return accumulator;
   }, {});
@@ -432,10 +453,23 @@ async function main() {
     }
   }
 
+  const rotationState = (config.rotation_state && typeof config.rotation_state === "object" && !Array.isArray(config.rotation_state))
+    ? config.rotation_state
+    : {};
+  const contentCursor = (typeof rotationState.post_content_cursor === "number" && rotationState.post_content_cursor >= 0)
+    ? rotationState.post_content_cursor
+    : (typeof config.post_content_cursor === "number" && config.post_content_cursor >= 0)
+      ? config.post_content_cursor
+      : 0;
+
   const topTagline = getRandomFromArray(topTaglines);
   const bottomTagline = getRandomFromArray(bottomTaglines);
-  const title = getRandomFromArray(titles);
-  const description = getRandomFromArray(descriptions);
+  const titleResult = pickSequentialItem(titles, contentCursor);
+  const descResult = pickSequentialItem(descriptions, titleResult.nextCursor);
+  const title = titleResult.text;
+  const description = descResult.text;
+  const usedCursor = contentCursor;
+  const nextCursor = Math.max(titleResult.nextCursor, descResult.nextCursor);
 
   // Gate: never auto-post when real social content is missing. The video is
   // still produced/uploaded and a draft is kept for review, but no live post
@@ -450,7 +484,7 @@ async function main() {
   const caption = [topTagline, title, description, hashtagsStr, bottomTagline]
     .filter(Boolean)
     .join("\n\n");
-  const platformConfigurations = buildPlatformConfigurations(selectedAccountDetails, title || "");
+  const platformConfigurations = buildPlatformConfigurations(selectedAccountDetails, title || "", description, normalizedHashtags);
 
   let mediaUrl = null;
   if (litterboxUrl && litterboxUrl.startsWith("https://")) {
@@ -566,6 +600,8 @@ async function main() {
     caption,
     post_status: postStatus,
     scheduled_at: scheduledAt,
+    content_cursor_used: usedCursor,
+    content_cursor_next: nextCursor,
     post_metadata: {
       title: title || "",
       description: description || "",
