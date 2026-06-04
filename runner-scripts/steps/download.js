@@ -237,13 +237,29 @@ function readConfigValue(config, key, fallback) {
 }
 
 function pickPlaylistIndex(processStrategy, contentType, config) {
-  // --playlist-start and --playlist-end control which items to process
-  // Default: just get the first item (newest)
-  // oldest: reverse playlist ordering
-  // random: use random position
-  if (contentType === 'shorts') return { matchFilter: 'duration<60', start: 1, end: 1, reverse: false };
-  if (contentType === 'videos') return { matchFilter: 'duration>=60', start: 1, end: 1, reverse: false };
-  return { start: 1, end: 1, reverse: false };
+  const perRun = Math.min(parseInt(readConfigValue(config, 'videos_per_run', '1'), 10) || 1, 10);
+  const reverse = processStrategy === 'oldest';
+  const opts = { start: 1, end: perRun, reverse, matchFilter: undefined };
+  if (contentType === 'shorts') opts.matchFilter = 'duration<60';
+  else if (contentType === 'videos') opts.matchFilter = 'duration>=60';
+  return opts;
+}
+
+function buildDateFilterArgs(config) {
+  const selection = String(readConfigValue(config, 'video_selection', 'days'));
+  const args = [];
+  if (selection === 'date_range') {
+    const dateFrom = String(readConfigValue(config, 'date_from', ''));
+    const dateTo = String(readConfigValue(config, 'date_to', ''));
+    if (dateFrom) args.push('--dateafter', dateFrom.replace(/-/g, ''));
+    if (dateTo) args.push('--datebefore', dateTo.replace(/-/g, ''));
+  } else {
+    const days = String(readConfigValue(config, 'video_days', ''));
+    if (days && parseInt(days, 10) > 0) {
+      args.push('--dateafter', `now-${days}days`);
+    }
+  }
+  return args;
 }
 
 function resolveSingleVideoFromChannel(channelUrl, config) {
@@ -253,6 +269,9 @@ function resolveSingleVideoFromChannel(channelUrl, config) {
   const contentType = String(readConfigValue(config, 'youtube_content_type', 'both'));
   const processStrategy = String(readConfigValue(config, 'video_process_strategy', 'newest'));
   const opts = pickPlaylistIndex(processStrategy, contentType, config);
+  const dateArgs = buildDateFilterArgs(config);
+
+  console.log(`[DOWNLOAD] Resolving channel videos (strategy=${processStrategy}, end=${opts.end}, reverse=${opts.reverse}, dateArgs=${JSON.stringify(dateArgs)})...`);
 
   // Step 1: List video URLs from the channel using --flat-playlist
   const listArgs = [
@@ -261,15 +280,15 @@ function resolveSingleVideoFromChannel(channelUrl, config) {
     '--no-warnings',
     '--print', 'url',
     '--playlist-start', String(opts.start),
-    '--playlist-end', String(Math.min(opts.end, 5)),
+    '--playlist-end', String(opts.end),
     ...(opts.reverse ? ['--playlist-reverse'] : []),
     ...(opts.matchFilter ? ['--match-filters', opts.matchFilter] : []),
+    ...dateArgs,
     '--no-check-certificate',
     '--socket-timeout', '15',
     channelUrl,
   ];
 
-  console.log(`[DOWNLOAD] Resolving channel URL to individual video...`);
   const ytDlpCmd = resolveCommand(ytDlp.command);
   const result = spawnSync(ytDlpCmd, listArgs, {
     encoding: 'utf8',
@@ -1694,10 +1713,10 @@ module.exports = async function download(videoUrl) {
     // If it's a channel URL, resolve to individual video first (avoid listing entire channel)
     if (isChannelUrl(normalizedSource) && !isSingleVideoUrl(normalizedSource)) {
       try {
-        console.log('[DOWNLOAD] Detected channel URL — resolving to individual video...');
-        const resolvedVideo = resolveSingleVideoFromChannel(normalizedSource, runtimeCfg);
-        console.log(`[DOWNLOAD] Channel resolved to: ${resolvedVideo}`);
-        await downloadYouTubeWithFullChain(resolvedVideo, outFile);
+        console.log('[DOWNLOAD] Detected channel URL — resolving to individual videos...');
+        const resolvedUrl = resolveSingleVideoFromChannel(normalizedSource, runtimeCfg);
+        console.log(`[DOWNLOAD] Channel resolved to: ${resolvedUrl}`);
+        await downloadYouTubeWithFullChain(resolvedUrl, outFile);
         return;
       } catch (resolveError) {
         console.log(`[DOWNLOAD] Channel resolution failed: ${resolveError.message} — falling through to 5-layer chain`);
