@@ -1494,17 +1494,30 @@ export async function triggerAutomationRun(
   // Runner will use this pre-extracted download URL via curl, bypassing the unreliable 5-layer chain
   let ytDownloadUrl: string | null = null;
   let ytDownloadUrlExpiresAt: number | null = null;
-  if (videoSource === "youtube" && videoUrls.length > 0) {
-    const firstYtUrl = videoUrls[0];
-    try {
-      console.log(`[TRIGGER] Extracting download URL via ytdown.to for ${firstYtUrl.substring(0, 60)}...`);
-      const ytdownResult = await extractYoutubeDownloadUrl(firstYtUrl);
-      ytDownloadUrl = ytdownResult.downloadUrl;
-      ytDownloadUrlExpiresAt = ytdownResult.expiresAt;
-      console.log(`[TRIGGER] ytdown.to: extracted download URL (expires at ${ytdownResult.expiresAt})`);
-    } catch (ytdownErr) {
-      console.log(`[TRIGGER] ytdown.to extraction failed (non-fatal): ${ytdownErr instanceof Error ? ytdownErr.message : String(ytdownErr)}`);
-      // Non-fatal — runner will fall through to the 5-layer chain
+  let ytDownloadMapped: Record<string, string> | undefined;
+  if ((videoSource === "youtube" || videoSource === "youtube_channel") && videoUrls.length > 0) {
+    const mapped: Record<string, string> = {};
+    for (const ytUrl of videoUrls) {
+      try {
+        console.log(`[TRIGGER] Extracting download URL via ytdown.to for ${ytUrl.substring(0, 60)}...`);
+        const ytdownResult = await extractYoutubeDownloadUrl(ytUrl);
+        if (ytdownResult.verified) {
+          mapped[ytUrl] = ytdownResult.downloadUrl;
+          if (!ytDownloadUrl) {
+            ytDownloadUrl = ytdownResult.downloadUrl;
+            ytDownloadUrlExpiresAt = ytdownResult.expiresAt;
+            console.log(`[TRIGGER] ytdown.to: extracted verified download URL for ${ytUrl.substring(0, 50)} (expires at ${ytdownResult.expiresAt})`);
+          }
+        } else {
+          console.log(`[TRIGGER] ytdown.to: extracted URL for ${ytUrl.substring(0, 50)} but verification failed — runner will use fallback`);
+          mapped[ytUrl] = ytdownResult.downloadUrl;
+        }
+      } catch (ytdownErr) {
+        console.log(`[TRIGGER] ytdown.to extraction failed for ${ytUrl.substring(0, 50)}: ${ytdownErr instanceof Error ? ytdownErr.message : String(ytdownErr)}`);
+      }
+    }
+    if (Object.keys(mapped).length > 0) {
+      ytDownloadMapped = mapped;
     }
   }
 
@@ -1543,6 +1556,11 @@ export async function triggerAutomationRun(
       ? {
           yt_download_url: ytDownloadUrl,
           yt_download_url_expires_at: ytDownloadUrlExpiresAt,
+        }
+      : {}),
+    ...(ytDownloadMapped
+      ? {
+          yt_download_url_mapped: ytDownloadMapped,
         }
       : {}),
     whisper_enabled: readString(config.whisper_enabled) === "true",

@@ -1586,13 +1586,23 @@ module.exports = async function download(videoUrl) {
   }
   */
 
-  // Check for pre-extracted download URL in runtime config (YouTube Queue mode)
+  // Check for pre-extracted download URL in runtime config (ytdown.to / YouTube Queue mode)
   const runtimeCfg = loadRuntimeConfig();
   const preExtractedUrl = runtimeCfg && runtimeCfg.yt_download_url;
-  if (preExtractedUrl && typeof preExtractedUrl === 'string' && preExtractedUrl.startsWith('http')) {
+  const urlMapped = runtimeCfg && runtimeCfg.yt_download_url_mapped;
+
+  // If we have a mapping for this specific URL, use it instead
+  let resolvedUrl = preExtractedUrl;
+  if (urlMapped && typeof urlMapped === 'object' && urlMapped[videoUrl]) {
+    resolvedUrl = urlMapped[videoUrl];
+    console.log(`[DOWNLOAD] Found mapped download URL for ${videoUrl.substring(0, 50)}`);
+  }
+
+  if (resolvedUrl && typeof resolvedUrl === 'string' && resolvedUrl.startsWith('http')) {
     console.log(`[DOWNLOAD] Found pre-extracted download URL in config — bypassing YouTube chain`);
     try {
-      downloadDirectFile(preExtractedUrl, outFile);
+      await preflightDirectMediaUrl(resolvedUrl);
+      downloadDirectFile(resolvedUrl, outFile);
       console.log('[DOWNLOAD] Pre-extracted download SUCCESS');
       return;
     } catch (error) {

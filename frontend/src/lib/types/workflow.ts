@@ -21,6 +21,8 @@ export interface WorkflowInputs {
   rotation_enabled: string;
   rotation_shuffle: string;
   rotation_auto_reset: string;
+  video_process_strategy: string;
+  youtube_content_type: string;
   whisper_enabled: string;
   whisper_language: string;
   top_taglines: string;

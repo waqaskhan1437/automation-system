@@ -62,7 +62,7 @@ export default function BasicTab({
   const weeklyDays = getWeekdays(data.schedule_weekdays);
   const isPromptMode = data.short_generation_mode === "prompt";
   const sourceOptions = [
-    { value: "youtube", label: "Single YouTube Video" },
+    { value: "youtube", label: "YouTube (Videos + Channel)" },
     { value: "youtube_channel", label: "YouTube Channel" },
     { value: "google_photos", label: "Google Photos" },
     { value: "manual_links", label: "Multiple Video Links" },
@@ -165,19 +165,34 @@ export default function BasicTab({
       )}
 
       {!isPromptMode && (data.video_source === "youtube" || !data.video_source) && (
-        <div>
-          <label className="block text-sm font-medium mb-1">YouTube Source URL(s) (one per line)</label>
-          <textarea
-            className="glass-input min-h-[120px]"
-            value={data.video_url as string || ""}
-            onChange={(event) => onChange("video_url", event.target.value)}
-            placeholder={"https://www.youtube.com/watch?v=abc123\nhttps://www.youtube.com/watch?v=xyz789"}
-          />
-          <div className="flex items-center justify-between mt-1">
-            <p className="text-xs text-[#a1a1aa]">Har line pe ek public YouTube source URL paste karein. Runner is URL ko resolve karke download karega.</p>
-            <span className="text-xs font-medium text-[#8b5cf6]">
-              {((data.video_url as string || "").split("\n").filter((line: string) => line.trim()).length)} links
-            </span>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">YouTube Video URL(s) (one per line)</label>
+            <textarea
+              className="glass-input min-h-[120px]"
+              value={data.video_url as string || ""}
+              onChange={(event) => onChange("video_url", event.target.value)}
+              placeholder={"https://www.youtube.com/watch?v=abc123\nhttps://www.youtube.com/watch?v=xyz789"}
+            />
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-xs text-[#a1a1aa]">Har line pe ek public YouTube video URL paste karein.</p>
+              <span className="text-xs font-medium text-[#8b5cf6]">
+                {((data.video_url as string || "").split("\n").filter((line: string) => line.trim()).length)} links
+              </span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">YouTube Channel URL (optional — fetch videos)</label>
+            <input
+              type="url"
+              className="glass-input"
+              value={data.youtube_channel_url as string || ""}
+              onChange={(event) => onChange("youtube_channel_url", event.target.value)}
+              placeholder="https://www.youtube.com/@ChannelName"
+            />
+            <p className="text-xs text-[#a1a1aa] mt-1">
+              Channel ka URL dein to system us channel ki videos fetch karega aur upar diye gaye URLs ke saath process karega.
+            </p>
           </div>
         </div>
       )}
@@ -201,18 +216,51 @@ export default function BasicTab({
       )}
 
       {!isPromptMode && data.video_source === "youtube_channel" && (
-        <div>
-          <label className="block text-sm font-medium mb-1">YouTube Channel URL</label>
-          <input
-            type="url"
-            className="glass-input"
-            value={data.youtube_channel_url as string || ""}
-            onChange={(event) => onChange("youtube_channel_url", event.target.value)}
-            placeholder="https://www.youtube.com/@ChannelName"
-          />
-          <p className="text-xs text-[#a1a1aa] mt-1">
-            Channel ka URL. System last {data.video_days as string || "30"} days ki videos fetch karega.
-          </p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">YouTube Channel URL</label>
+            <input
+              type="url"
+              className="glass-input"
+              value={data.youtube_channel_url as string || ""}
+              onChange={(event) => onChange("youtube_channel_url", event.target.value)}
+              placeholder="https://www.youtube.com/@ChannelName"
+            />
+            <p className="text-xs text-[#a1a1aa] mt-1">
+              Channel ka URL. System is channel ki videos fetch karega.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!isPromptMode && (data.video_source === "youtube" || data.video_source === "youtube_channel") && (
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Content Type</label>
+            <select
+              className="glass-select"
+              value={data.youtube_content_type as string || "both"}
+              onChange={(event) => onChange("youtube_content_type", event.target.value)}
+            >
+              <option value="both">Shorts + Videos (Both)</option>
+              <option value="shorts">Shorts Only</option>
+              <option value="videos">Videos Only</option>
+            </select>
+            <p className="text-xs text-[#a1a1aa] mt-1">Channel se shorts ya videos fetch karna hai.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Process Order</label>
+            <select
+              className="glass-select"
+              value={data.video_process_strategy as string || "random"}
+              onChange={(event) => onChange("video_process_strategy", event.target.value)}
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="random">Random</option>
+            </select>
+            <p className="text-xs text-[#a1a1aa] mt-1">Kis order mein process karna hai.</p>
+          </div>
         </div>
       )}
 

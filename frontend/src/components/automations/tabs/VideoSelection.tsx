@@ -31,11 +31,11 @@ export default function VideoSelection({ data, onChange }: Props) {
         value={currentValue}
         onChange={e => handleChange(e.target.value)}
       >
-        <option value="1">Today</option>
-        <option value="2">Yesterday</option>
+        <option value="1">Last 1 Day</option>
         <option value="7">Last 7 Days</option>
-        <option value="14">Last 14 Days</option>
         <option value="30">Last 30 Days</option>
+        <option value="90">Last 3 Months</option>
+        <option value="365">Last 1 Year</option>
         <option value="date_range">Custom Range</option>
       </select>
 
