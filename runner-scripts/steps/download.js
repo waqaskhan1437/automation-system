@@ -237,29 +237,15 @@ function readConfigValue(config, key, fallback) {
 }
 
 function pickPlaylistIndex(processStrategy, contentType, config) {
-  const perRun = Math.min(parseInt(readConfigValue(config, 'videos_per_run', '1'), 10) || 1, 10);
-  const reverse = processStrategy === 'oldest';
-  const opts = { start: 1, end: perRun, reverse, matchFilter: undefined };
-  if (contentType === 'shorts') opts.matchFilter = 'duration<60';
-  else if (contentType === 'videos') opts.matchFilter = 'duration>=60';
-  return opts;
+  const matchFilter = contentType === 'shorts' ? 'duration<60' : contentType === 'videos' ? 'duration>=60' : undefined;
+  return { matchFilter };
 }
 
-function buildDateFilterArgs(config) {
-  const selection = String(readConfigValue(config, 'video_selection', 'days'));
-  const args = [];
-  if (selection === 'date_range') {
-    const dateFrom = String(readConfigValue(config, 'date_from', ''));
-    const dateTo = String(readConfigValue(config, 'date_to', ''));
-    if (dateFrom) args.push('--dateafter', dateFrom.replace(/-/g, ''));
-    if (dateTo) args.push('--datebefore', dateTo.replace(/-/g, ''));
-  } else {
-    const days = String(readConfigValue(config, 'video_days', ''));
-    if (days && parseInt(days, 10) > 0) {
-      args.push('--dateafter', `now-${days}days`);
-    }
-  }
-  return args;
+function buildScanDepth(config) {
+  const days = parseInt(readConfigValue(config, 'video_days', '0'), 10) || 0;
+  if (days <= 0) return 200;
+  // Estimate ~20 uploads/day, scale to cover the requested range
+  return Math.min(days * 20, 1000);
 }
 
 function resolveSingleVideoFromChannel(channelUrl, config) {
@@ -268,22 +254,25 @@ function resolveSingleVideoFromChannel(channelUrl, config) {
 
   const contentType = String(readConfigValue(config, 'youtube_content_type', 'both'));
   const processStrategy = String(readConfigValue(config, 'video_process_strategy', 'newest'));
+  const perRun = Math.min(parseInt(readConfigValue(config, 'videos_per_run', '1'), 10) || 1, 10);
   const opts = pickPlaylistIndex(processStrategy, contentType, config);
-  const dateArgs = buildDateFilterArgs(config);
+  // For newest: get exactly perRun entries (fast, stops early)
+  // For oldest: scan deeper to get a wider selection, then take the last
+  const endIdx = processStrategy === 'oldest' ? buildScanDepth(config) : perRun;
 
-  console.log(`[DOWNLOAD] Resolving channel videos (strategy=${processStrategy}, end=${opts.end}, reverse=${opts.reverse}, dateArgs=${JSON.stringify(dateArgs)})...`);
+  console.log(`[DOWNLOAD] Resolving channel videos (strategy=${processStrategy}, end=${endIdx})...`);
 
-  // Step 1: List video URLs from the channel using --flat-playlist
+  // List video URLs via --flat-playlist (fast, no download). yt-dlp returns
+  // newest-first. We NEVER use --playlist-reverse because it forces full
+  // enumeration of all playlist entries (very slow for 1000+ channels).
   const listArgs = [
     ...ytDlp.baseArgs,
     '--flat-playlist',
     '--no-warnings',
     '--print', 'url',
-    '--playlist-start', String(opts.start),
-    '--playlist-end', String(opts.end),
-    ...(opts.reverse ? ['--playlist-reverse'] : []),
+    '--playlist-start', '1',
+    '--playlist-end', String(endIdx),
     ...(opts.matchFilter ? ['--match-filters', opts.matchFilter] : []),
-    ...dateArgs,
     '--no-check-certificate',
     '--socket-timeout', '15',
     channelUrl,
@@ -302,8 +291,9 @@ function resolveSingleVideoFromChannel(channelUrl, config) {
   const urls = (result.stdout || '').split('\n').map(l => l.trim()).filter(l => l.startsWith('http'));
   if (urls.length === 0) throw new Error('No videos found in channel');
 
-  const selectedUrl = urls[0];
-  console.log(`[DOWNLOAD] Resolved channel video: ${selectedUrl}`);
+  // For oldest strategy, take the last URL (yt-dlp returns newest-first)
+  const selectedUrl = processStrategy === 'oldest' ? urls[urls.length - 1] : urls[0];
+  console.log(`[DOWNLOAD] Resolved channel video (${processStrategy}): ${selectedUrl} (${urls.length} candidates)`);
   return selectedUrl;
 }
 
