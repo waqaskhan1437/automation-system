@@ -297,6 +297,71 @@ function resolveSingleVideoFromChannel(channelUrl, config) {
   return selectedUrl;
 }
 
+// ──────────────────────────────────────────────
+// ytdown.to download (bypasses YouTube cookie/rate-limit issues)
+// ──────────────────────────────────────────────
+const YTDOWN_PROXY = "https://app.ytdown.to/proxy.php";
+
+async function downloadViaYtdownTo(youtubeUrl, outFile) {
+  console.log(`[DOWNLOAD] Attempting ytdown.to download for ${youtubeUrl.substring(0, 60)}...`);
+
+  // Step 1: Submit URL to ytdown.to and get media items
+  const initRes = await fetch(YTDOWN_PROXY, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ url: youtubeUrl }),
+  });
+  if (!initRes.ok) throw new Error(`ytdown.to init failed: HTTP ${initRes.status}`);
+  const initData = await initRes.json();
+  if (initData.api?.status !== "ok" || !initData.api.mediaItems?.length) {
+    throw new Error(initData.api?.message || "No media items from ytdown.to");
+  }
+
+  // Step 2: Pick the best quality video
+  const qualityRank = { FHD: 5, "1080p": 5, HD: 4, "720p": 4, "480p": 3, "360p": 2, "240p": 1, "144p": 0 };
+  const sorted = initData.api.mediaItems
+    .filter((i) => i.type === "Video")
+    .sort((a, b) => (qualityRank[b.mediaQuality] ?? -1) - (qualityRank[a.mediaQuality] ?? -1));
+  const selected = sorted.length > 0 ? sorted[0] : initData.api.mediaItems.find((i) => i.type === "Video");
+  if (!selected) throw new Error("No video media items from ytdown.to");
+
+  // Step 3: Poll until download URL is ready
+  let lastStatus = "";
+  let pollResult = null;
+  for (let attempt = 1; attempt <= 30; attempt++) {
+    const pollRes = await fetch(selected.mediaUrl, { method: "GET" });
+    if (!pollRes.ok) {
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    const data = await pollRes.json();
+    if (data.status === "error") throw new Error(data.message || "ytdown.to error");
+    if (data.status === "completed") {
+      if (!data.fileUrl) throw new Error("ytdown.to completed but no fileUrl");
+      pollResult = data;
+      break;
+    }
+    if (data.status !== lastStatus) {
+      console.log(`[DOWNLOAD] ytdown.to: status="${data.status}" (${attempt}/30)`);
+      lastStatus = data.status;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (!pollResult) throw new Error("ytdown.to did not complete after 30 polls");
+
+  console.log(`[DOWNLOAD] ytdown.to download URL ready: ${pollResult.fileUrl.substring(0, 80)}`);
+  // Step 4: Download directly via curl
+  runCommand("curl", [
+    "-L", "--fail", "--retry", "2", "--retry-all-errors",
+    "--connect-timeout", "15", "--max-time", "120",
+    "-H", "User-Agent: Mozilla/5.0 (compatible; ytdown-runner)",
+    "-o", outFile,
+    pollResult.fileUrl,
+  ], "curl", 130000);
+  validateOutput(outFile);
+  console.log(`[DOWNLOAD] ytdown.to download SUCCESS (${pollResult.fileSize || "unknown"})`);
+}
+
 function buildJsRuntimesArgs() {
   // Add flags to solve YouTube's n-challenge (anti-bot JS challenge).
   // --js-runtimes node: tells yt-dlp to use Node.js as the JavaScript runtime
@@ -1706,12 +1771,16 @@ module.exports = async function download(videoUrl) {
         console.log('[DOWNLOAD] Detected channel URL — resolving to individual videos...');
         const resolvedUrl = resolveSingleVideoFromChannel(normalizedSource, runtimeCfg);
         console.log(`[DOWNLOAD] Channel resolved to: ${resolvedUrl}`);
-        await downloadYouTubeWithFullChain(resolvedUrl, outFile);
-        return;
+        // Try ytdown.to first (bypasses YouTube cookie/rate-limit issues)
+        // Fall back to the full YouTube chain if ytdown.to fails
+        try {
+          await downloadViaYtdownTo(resolvedUrl, outFile);
+          return;
+        } catch (ytdownError) {
+          console.log(`[DOWNLOAD] ytdown.to failed: ${ytdownError.message} — trying direct YouTube chain...`);
+        }
       } catch (resolveError) {
         // Only fall through if resolution itself failed (no videos found in channel)
-        // If resolution succeeded but download failed, throw immediately
-        // (don't download the entire channel as a playlist)
         const isResolveFailure = /No videos found/i.test(resolveError.message) 
           || /Channel resolve failed/i.test(resolveError.message)
           || /Channel resolve exited/i.test(resolveError.message);
