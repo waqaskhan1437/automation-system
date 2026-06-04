@@ -1709,7 +1709,17 @@ module.exports = async function download(videoUrl) {
         await downloadYouTubeWithFullChain(resolvedUrl, outFile);
         return;
       } catch (resolveError) {
-        console.log(`[DOWNLOAD] Channel resolution failed: ${resolveError.message} — falling through to 5-layer chain`);
+        // Only fall through if resolution itself failed (no videos found in channel)
+        // If resolution succeeded but download failed, throw immediately
+        // (don't download the entire channel as a playlist)
+        const isResolveFailure = /No videos found/i.test(resolveError.message) 
+          || /Channel resolve failed/i.test(resolveError.message)
+          || /Channel resolve exited/i.test(resolveError.message);
+        if (isResolveFailure) {
+          console.log(`[DOWNLOAD] Channel resolution failed: ${resolveError.message} — falling through to 5-layer chain`);
+        } else {
+          throw resolveError;
+        }
       }
     }
     await downloadYouTubeWithFullChain(normalizedSource, outFile);
