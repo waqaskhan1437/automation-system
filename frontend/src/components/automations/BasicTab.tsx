@@ -342,6 +342,20 @@ export default function BasicTab({
         <p className="text-xs text-[#a1a1aa]">Enable this for local runners to skip Catbox/Litterbox uploading and keep videos on your PC.</p>
       </div>
 
+      <div className="space-y-2 py-2">
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="use_video_title_for_content"
+            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            checked={!!data.use_video_title_for_content}
+            onChange={(e) => onChange("use_video_title_for_content", e.target.checked)}
+          />
+          <label htmlFor="use_video_title_for_content" className="text-sm font-medium">Auto Content from Video Title</label>
+        </div>
+        <p className="text-xs text-[#a1a1aa]">YouTube video ka title AI ko de kar description, title aur hashtags auto-generate karein. Social tab content override hoga.</p>
+      </div>
+
       {!!data.skip_upload && (
         <div>
           <label className="block text-sm font-medium mb-1">Processed Video Save Folder</label>

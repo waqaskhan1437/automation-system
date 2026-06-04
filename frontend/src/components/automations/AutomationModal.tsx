@@ -106,6 +106,7 @@ const DEFAULT_VIDEO_CONFIG = {
   postforme_schedule_timezone: "",
   post_stagger_minutes: "15",
   postforme_account_stagger_enabled: false,
+  use_video_title_for_content: false,
 };
 
 function extractPromptSocialContent(plan: PromptPlanPayload | null | undefined): {

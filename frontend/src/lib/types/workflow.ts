@@ -51,6 +51,7 @@ export interface WorkflowInputs {
   postforme_account_stagger_enabled: string;
   postforme_account_stagger_min: string;
   postforme_account_stagger_max: string;
+  use_video_title_for_content: string;
   run_mode: string;
   api_key_id: string;
 }

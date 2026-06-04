@@ -1,10 +1,11 @@
-import { Automation, Env, GithubSettings, PostformeSettings, VideoSourceSettings } from "../types";
+import { AISettings, Automation, Env, GithubSettings, PostformeSettings, VideoSourceSettings } from "../types";
 import { buildWorkflowInputs, buildWorkflowRuntimeConfigToken, dispatchWorkflow, getWorkflowRunStatus } from "./github";
 import { getImageAspectRatio, prepareImageAutomationRunConfig } from "./image-automation";
 import { buildStoredPostMetadata, parseSavedPostformeAccounts, resolveScheduledAccounts } from "./post-metadata";
 import { getScopedSettings } from "./user-settings";
 import { parseGhazalTimestamps, createVideoMetadata, processGhazalVideo } from "./ghazal-timestamps";
 import { extractYoutubeDownloadUrl } from "./ytdown-proxy";
+import { generateAiJson, getSocialMessages, normalizeSocialResult } from "./ai";
 
 
 type ScheduleType = "minutes" | "hourly" | "daily" | "weekly";
@@ -1495,6 +1496,7 @@ export async function triggerAutomationRun(
   let ytDownloadUrl: string | null = null;
   let ytDownloadUrlExpiresAt: number | null = null;
   let ytDownloadMapped: Record<string, string> | undefined;
+  let firstVideoTitle: string | undefined;
   if ((videoSource === "youtube" || videoSource === "youtube_channel") && videoUrls.length > 0) {
     const mapped: Record<string, string> = {};
     for (const ytUrl of videoUrls) {
@@ -1506,11 +1508,15 @@ export async function triggerAutomationRun(
           if (!ytDownloadUrl) {
             ytDownloadUrl = ytdownResult.downloadUrl;
             ytDownloadUrlExpiresAt = ytdownResult.expiresAt;
+            firstVideoTitle = ytdownResult.title;
             console.log(`[TRIGGER] ytdown.to: extracted verified download URL for ${ytUrl.substring(0, 50)} (expires at ${ytdownResult.expiresAt})`);
           }
         } else {
           console.log(`[TRIGGER] ytdown.to: extracted URL for ${ytUrl.substring(0, 50)} but verification failed — runner will use fallback`);
           mapped[ytUrl] = ytdownResult.downloadUrl;
+        }
+        if (!firstVideoTitle) {
+          firstVideoTitle = ytdownResult.title;
         }
       } catch (ytdownErr) {
         console.log(`[TRIGGER] ytdown.to extraction failed for ${ytUrl.substring(0, 50)}: ${ytdownErr instanceof Error ? ytdownErr.message : String(ytdownErr)}`);
@@ -1518,6 +1524,42 @@ export async function triggerAutomationRun(
     }
     if (Object.keys(mapped).length > 0) {
       ytDownloadMapped = mapped;
+    }
+  }
+
+  // ── Auto Content from Video Title ──────────────────────────────────────
+  // When use_video_title_for_content is true, generate AI content using the
+  // extracted YouTube video title, overriding social tab content.
+  let generatedTitles: string[] | undefined;
+  let generatedDescriptions: string[] | undefined;
+  let generatedHashtags: string[] | undefined;
+  if (config.use_video_title_for_content && firstVideoTitle) {
+    try {
+      console.log(`[TRIGGER] use_video_title_for_content enabled — generating AI content from video title: "${firstVideoTitle.substring(0, 80)}"`);
+      const aiSettings = await getScopedSettings<AISettings>(env.DB, "ai", userId);
+      if (aiSettings) {
+        const provider = String(config.social_ai_provider || aiSettings.default_provider || "gemini");
+        const model = String(config.social_ai_model || "");
+        const platform = String(config.social_platform || "youtube");
+        const count = Math.min(Math.max(Number(config.social_count || 10), 1), 50);
+        const messages = getSocialMessages({
+          topic: firstVideoTitle,
+          platform,
+          count,
+          focusKeyword: undefined,
+          brief: undefined,
+        });
+        const raw = await generateAiJson(aiSettings, provider as any, model, messages);
+        const normalized = normalizeSocialResult(raw, count, platform);
+        generatedTitles = normalized.titles;
+        generatedDescriptions = normalized.descriptions;
+        generatedHashtags = normalized.hashtags;
+        console.log(`[TRIGGER] AI generated ${generatedTitles.length} titles, ${generatedDescriptions.length} descriptions, ${generatedHashtags.length} hashtags from video title`);
+      } else {
+        console.log(`[TRIGGER] No AI settings found — cannot generate content from video title`);
+      }
+    } catch (aiErr) {
+      console.log(`[TRIGGER] AI content generation failed: ${aiErr instanceof Error ? aiErr.message : String(aiErr)}`);
     }
   }
 
@@ -1570,6 +1612,9 @@ export async function triggerAutomationRun(
     caption_bg_opacity: readString(config.caption_bg_opacity, "0.5"),
     caption_position: readString(config.caption_position, "bottom"),
     execution_mode: executionMode,
+    ...(generatedTitles ? { titles: generatedTitles } : {}),
+    ...(generatedDescriptions ? { descriptions: generatedDescriptions } : {}),
+    ...(generatedHashtags ? { hashtags: generatedHashtags } : {}),
   };
 
   // Validate: If no videos found, return error
