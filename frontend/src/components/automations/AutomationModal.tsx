@@ -418,6 +418,8 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
   const handleGenerateSocial = useCallback(async () => {
     const topic = String(data.social_topic || "").trim();
     const platform = String(data.social_platform || "youtube");
+    const focusKeyword = String(data.social_focus_keyword || "").trim();
+    const brief = String(data.social_brief || "").trim();
     const promptSegmentCount = getPromptPlanSegmentCount(data.prompt_short_plan as PromptPlanPayload | undefined);
     const count = data.short_generation_mode === "prompt" && promptSegmentCount > 0
       ? promptSegmentCount
@@ -450,6 +452,8 @@ export default memo(function AutomationModal({ type, editData, onClose, onSaved 
         model,
         topic,
         platform,
+        focusKeyword,
+        brief,
         count: Number.isFinite(count) ? count : 10,
       }, { timeout: 60000 });
       const result = res;

@@ -146,6 +146,24 @@ export default function SocialTab({
             onChange={e => onChange("social_topic", e.target.value)}
           />
 
+          <input
+            className="w-full px-3 py-2 bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-xl text-xs text-white placeholder-[#52525b] focus:outline-none"
+            placeholder="Focus keyword (title + description me 2x use hoga)"
+            value={data.social_focus_keyword as string || ""}
+            onChange={e => onChange("social_focus_keyword", e.target.value)}
+          />
+
+          <textarea
+            className="w-full h-16 px-3 py-2 bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-xl text-xs text-white placeholder-[#52525b] focus:outline-none resize-none"
+            placeholder="Brief / angle: AI is brief ko poora cover karega (e.g. beginners ke liye, top 5 tips, mistakes to avoid)"
+            value={data.social_brief as string || ""}
+            onChange={e => onChange("social_brief", e.target.value)}
+          />
+
+          <div className="text-[9px] text-[#71717a] px-1">
+            AI in fields ko follow karega — focus keyword 2x, brief poora cover, aur platform ke hisab se title/description length.
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <select
               className="px-2 py-2 bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[11px] text-white focus:outline-none"
