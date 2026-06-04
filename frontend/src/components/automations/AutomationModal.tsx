@@ -88,7 +88,6 @@ const DEFAULT_VIDEO_CONFIG = {
   short_duration: "60",
   videos_per_run: "1",
   aspect_ratio: "9:16",
-  video_process_strategy: "random",
   tagline_gen_count: 3,
   tagline_add_more: false,
   short_generation_mode: "normal",
