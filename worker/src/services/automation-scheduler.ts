@@ -2178,6 +2178,18 @@ function getSelectedPostformePlatforms(accountIds: string[], savedAccountsRaw: s
   return Array.from(new Set(platforms));
 }
 
+function sanitizeYoutubeTags(tags: string[]): string[] {
+  const cleanTags = tags.map((t) => t.replace(/^#+/, "").trim()).filter(Boolean);
+  let totalLen = 0;
+  const result: string[] = [];
+  for (const tag of cleanTags) {
+    if (totalLen + tag.length + 1 > 500) break;
+    result.push(tag);
+    totalLen += tag.length + 1;
+  }
+  return result;
+}
+
 function buildPostformePlatformConfigurations(
   accountIds: string[],
   savedAccountsRaw: string | null | undefined,
@@ -2204,7 +2216,7 @@ function buildPostformePlatformConfigurations(
     if (platform === "youtube") {
       const ytConfig: YoutubePlatformConfig = {
         title,
-        tags: tags.length > 0 ? tags : undefined,
+        tags: tags.length > 0 ? sanitizeYoutubeTags(tags) : undefined,
         description: description || title,
         privacyStatus: "public",
         selfDeclaredMadeForKids: false,

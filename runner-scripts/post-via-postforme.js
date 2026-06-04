@@ -301,6 +301,18 @@ async function fetchSelectedPostformeAccounts(apiKey, accountIds) {
   return Array.isArray(payload.data) ? payload.data : [];
 }
 
+function sanitizeYoutubeTags(tags) {
+  const cleanTags = tags.map((t) => String(t).replace(/^#+/g, "").trim()).filter(Boolean);
+  let totalLen = 0;
+  const result = [];
+  for (const tag of cleanTags) {
+    if (totalLen + tag.length + 1 > 500) break;
+    result.push(tag);
+    totalLen += tag.length + 1;
+  }
+  return result;
+}
+
 function buildPlatformConfigurations(selectedAccounts, title, description, hashtags) {
   if (!title) {
     return {};
@@ -326,6 +338,7 @@ function buildPlatformConfigurations(selectedAccounts, title, description, hasht
     }
 
     if (platform === "youtube") {
+      config.tags = config.tags ? sanitizeYoutubeTags(config.tags) : undefined;
       config.description = description || title;
       config.privacyStatus = "public";
       config.selfDeclaredMadeForKids = false;
