@@ -2196,20 +2196,25 @@ function buildPostformePlatformConfigurations(
       return accumulator;
     }
 
-    const config: Record<string, unknown> = { title };
+    const baseConfig: { title: string; tags?: string[] } = { title };
     if (tags.length > 0) {
-      config.tags = tags;
+      baseConfig.tags = tags;
     }
 
     if (platform === "youtube") {
-      config.description = description || title;
-      config.privacyStatus = "public";
-      config.selfDeclaredMadeForKids = false;
-      config.defaultLanguage = "en";
-      config.categoryId = "22";
+      const ytConfig: YoutubePlatformConfig = {
+        title,
+        tags: tags.length > 0 ? tags : undefined,
+        description: description || title,
+        privacyStatus: "public",
+        selfDeclaredMadeForKids: false,
+        defaultLanguage: "en",
+        categoryId: "22",
+      };
+      accumulator[platform] = ytConfig;
+    } else {
+      accumulator[platform] = baseConfig;
     }
-
-    accumulator[platform] = config;
     if (platform === "tiktok") {
       accumulator.tiktok_business = { title, tags };
     }
