@@ -370,6 +370,13 @@ async function downloadViaYtdownTo(youtubeUrl, outFile) {
   }
 }
 
+function saveResolvedChannelUrl(resolvedUrl) {
+  if (!resolvedUrl) return;
+  const urlFile = path.join(OUTPUT_DIR, 'yt-resolved-url.txt');
+  fs.writeFileSync(urlFile, resolvedUrl.trim(), 'utf8');
+  console.log(`[DOWNLOAD] Saved resolved channel URL for processed-videos tracking`);
+}
+
 function buildJsRuntimesArgs() {
   // Add flags to solve YouTube's n-challenge (anti-bot JS challenge).
   // --js-runtimes node: tells yt-dlp to use Node.js as the JavaScript runtime
@@ -1775,31 +1782,35 @@ module.exports = async function download(videoUrl) {
   if (isLikelyYtDlpSource(normalizedSource) && /youtube\.com|youtu\.be/i.test(normalizedSource)) {
     // If it's a channel URL, resolve to individual video first (avoid listing entire channel)
     if (isChannelUrl(normalizedSource) && !isSingleVideoUrl(normalizedSource)) {
+      let channelResolvedUrl = null;
       try {
-        console.log('[DOWNLOAD] Detected channel URL — resolving to individual videos...');
-        const resolvedUrl = resolveSingleVideoFromChannel(normalizedSource, runtimeCfg);
-        console.log(`[DOWNLOAD] Channel resolved to: ${resolvedUrl}`);
-        // Try ytdown.to first (bypasses YouTube cookie/rate-limit issues)
-        // Fall back to the full YouTube chain if ytdown.to fails
-        try {
-          await downloadViaYtdownTo(resolvedUrl, outFile);
-          return;
-        } catch (ytdownError) {
-          console.log(`[DOWNLOAD] ytdown.to failed: ${ytdownError.message} — trying direct YouTube chain...`);
-        }
-      } catch (resolveError) {
-        // Only fall through if resolution itself failed (no videos found in channel)
-        const isResolveFailure = /No videos found/i.test(resolveError.message) 
-          || /Channel resolve failed/i.test(resolveError.message)
-          || /Channel resolve exited/i.test(resolveError.message);
-        if (isResolveFailure) {
-          console.log(`[DOWNLOAD] Channel resolution failed: ${resolveError.message} — falling through to 5-layer chain`);
-        } else {
-          throw resolveError;
+          console.log('[DOWNLOAD] Detected channel URL — resolving to individual videos...');
+          const resolvedUrl = resolveSingleVideoFromChannel(normalizedSource, runtimeCfg);
+          channelResolvedUrl = resolvedUrl;
+          console.log(`[DOWNLOAD] Channel resolved to: ${resolvedUrl}`);
+          // Try ytdown.to first (bypasses YouTube cookie/rate-limit issues)
+          // Fall back to the full YouTube chain if ytdown.to fails
+          try {
+            await downloadViaYtdownTo(resolvedUrl, outFile);
+            saveResolvedChannelUrl(resolvedUrl);
+            return;
+          } catch (ytdownError) {
+            console.log(`[DOWNLOAD] ytdown.to failed: ${ytdownError.message} — trying direct YouTube chain...`);
+          }
+        } catch (resolveError) {
+          // Only fall through if resolution itself failed (no videos found in channel)
+          const isResolveFailure = /No videos found/i.test(resolveError.message) 
+            || /Channel resolve failed/i.test(resolveError.message)
+            || /Channel resolve exited/i.test(resolveError.message);
+          if (isResolveFailure) {
+            console.log(`[DOWNLOAD] Channel resolution failed: ${resolveError.message} — falling through to 5-layer chain`);
+          } else {
+            throw resolveError;
+          }
         }
       }
-    }
     await downloadYouTubeWithFullChain(normalizedSource, outFile);
+    if (channelResolvedUrl) saveResolvedChannelUrl(channelResolvedUrl);
     return;
   }
 

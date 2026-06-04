@@ -157,6 +157,17 @@ function writeConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config || {}, null, 2), 'utf8');
 }
 
+function getResolvedChannelUrl() {
+  const urlFile = path.join(OUTPUT_DIR, 'yt-resolved-url.txt');
+  if (fs.existsSync(urlFile)) {
+    try {
+      const resolved = fs.readFileSync(urlFile, 'utf8').trim();
+      if (resolved) return resolved;
+    } catch {}
+  }
+  return null;
+}
+
 function normalizeCookieText(value) {
   if (typeof value !== 'string') {
     return null;
@@ -717,7 +728,7 @@ async function main() {
           if (result.uploadUrl) {
             lastUrl = result.uploadUrl;
             allProcessedVideos.push(result.record);
-            await tracker.markVideoProcessed(url);
+            await tracker.markVideoProcessed(getResolvedChannelUrl() || url);
             await tracker.sendProgressUpdate(result.record);
             successCount++;
           }
@@ -765,7 +776,7 @@ async function main() {
               segmentCount: segments.length,
             });
             allProcessedVideos.push(mergedRecord);
-            await tracker.markVideoProcessed(url);
+            await tracker.markVideoProcessed(getResolvedChannelUrl() || url);
             await tracker.sendProgressUpdate(mergedRecord);
             successCount++;
           }
@@ -801,7 +812,7 @@ async function main() {
           });
           allProcessedVideos.push(processedVideoRecord);
 
-          await tracker.markVideoProcessed(url);
+          await tracker.markVideoProcessed(getResolvedChannelUrl() || url);
           await tracker.sendProgressUpdate(processedVideoRecord);
           successCount++;
           console.log(`[VIDEO ${i + 1}] DONE`);
