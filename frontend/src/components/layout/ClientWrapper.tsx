@@ -229,7 +229,7 @@ export default function ClientWrapper({ children }: { children: React.ReactNode 
         ? input.toString()
         : input.url;
 
-      const shouldAttachToken = url.startsWith("/") || url.startsWith(API_BASE_URL);
+      const shouldAttachToken = url.startsWith("/") || (API_BASE_URL !== "" && url.startsWith(API_BASE_URL));
       if (!shouldAttachToken) {
         return originalFetch(input, init);
       }

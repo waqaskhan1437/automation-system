@@ -153,7 +153,7 @@ export default function AiAccessPage() {
   const [allowDirectFileWrite, setAllowDirectFileWrite] = useState(false);
 
   const activeKeys = useMemo(() => keys.filter((key) => !key.revoked_at).length, [keys]);
-  const baseUrl = API_BASE_URL.replace(/\/$/, "");
+  const baseUrl = API_BASE_URL ? API_BASE_URL.replace(/\/$/, "") : "https://automation-api.waqaskhan1437.workers.dev";
 
   const loadKeys = async () => {
     setLoading(true);
