@@ -754,6 +754,7 @@ function buildRunnerScriptsEnv(job) {
     AUTOMATION_NAME: String(job.automation_name || ''),
     RUNNER_EXECUTION_MODE: 'local',
     WORKER_WEBHOOK_URL: `${config.serverUrl.replace(/\/$/, '')}/api/webhook/github`,
+    RUNTIME_CONFIG_TOKEN: config.accessToken,
     LOCAL_OUTPUT_DIR: ensureLocalOutputDir(job),
   };
 }

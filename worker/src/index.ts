@@ -32,7 +32,7 @@ import { handleAiAccessRoutes } from "./routes/ai-access";
 import { handleWebhookRoutes } from "./routes/webhooks";
 import { handleYoutubeExtractRoutes } from "./routes/youtube-extract";
 import { formatDatabaseDate, markAutomationRunCompleted, processDueAutomations, processPendingUploads, syncStaleRunningJobs } from "./services/automation-scheduler";
-import { getAdminEmail, getAdminPassword, getAuthContext, issueAdminAccessToken, requireAuth, logApiRequest } from "./services/auth";
+import { getAdminEmail, getAdminPassword, getAuthContext, issueAdminAccessToken, requireAuth, logApiRequest, findUserByAccessToken } from "./services/auth";
 import { verifyWorkflowRuntimeConfigToken } from "./services/github";
 import { syncScheduledUploads } from "./services/postforme-sync";
 import { getScopedSettings } from "./services/user-settings";
@@ -837,13 +837,28 @@ export default {
         return jsonResponse({ success: false, error: "Job not found" }, 404);
       }
 
+      // Try HMAC-based runtime config token validation (GitHub runner)
       const githubSettings = await getScopedSettings<GithubSettings>(env.DB, "github", job.user_id);
-      if (!githubSettings?.pat_token) {
-        return jsonResponse({ success: false, error: "GitHub settings not configured" }, 404);
+      let isTokenValid = false;
+      if (githubSettings?.pat_token) {
+        isTokenValid = await verifyWorkflowRuntimeConfigToken(job.id, token, githubSettings.pat_token);
       }
 
-      const isValidToken = await verifyWorkflowRuntimeConfigToken(job.id, token, githubSettings.pat_token);
-      if (!isValidToken) {
+      // Fallback: validate as a user access token (local runner)
+      // Local runners set RUNTIME_CONFIG_TOKEN = config.accessToken (user's bearer token)
+      if (!isTokenValid) {
+        try {
+          const userByToken = await findUserByAccessToken(env, token);
+          if (userByToken && userByToken.id === job.user_id) {
+            isTokenValid = true;
+            console.log(`[generate-content] Local runner auth: user ${userByToken.id} validated via access token`);
+          }
+        } catch (authErr) {
+          console.log(`[generate-content] Access token fallback auth failed: ${authErr instanceof Error ? authErr.message : String(authErr)}`);
+        }
+      }
+
+      if (!isTokenValid) {
         return jsonResponse({ success: false, error: "Invalid or expired token" }, 403);
       }
 

@@ -1605,6 +1605,9 @@ export async function triggerAutomationRun(
           yt_download_url_mapped: ytDownloadMapped,
         }
       : {}),
+    processed_source_urls: (videoSource === "youtube_channel" || videoSource === "youtube")
+      ? Array.from(await getProcessedSourceUrls(env, automation.id, userId))
+      : [],
     whisper_enabled: readString(config.whisper_enabled) === "true",
     whisper_language: readString(config.whisper_language, "en"),
     caption_font_size: readString(config.caption_font_size, "medium"),
@@ -1744,19 +1747,40 @@ export async function markAutomationRunCompleted(env: Env, jobId: number, comple
     "SELECT status, input_data, output_data FROM jobs WHERE id = ?"
   ).bind(jobId).first<{ status: string; input_data: string | null; output_data: string | null }>();
 
-  if (automation.type === "image" && jobRecord?.status === "success") {
-    const inputData = parseJsonRecord(jobRecord.input_data);
-    const nextRotationState = asRecord(inputData.rotation_state_next);
+  if (jobRecord?.status === "success") {
+    const outputData = parseJsonRecord(jobRecord.output_data);
+    const contentCursorNext = outputData.content_cursor_next;
 
-    if (Object.keys(nextRotationState).length > 0) {
+    if (automation.type === "image") {
+      const inputData = parseJsonRecord(jobRecord.input_data);
+      const nextRotationState = asRecord(inputData.rotation_state_next);
+
+      if (Object.keys(nextRotationState).length > 0) {
+        config = {
+          ...config,
+          rotation_state: {
+            source_cursor: normalizeCursorValue(nextRotationState.source_cursor),
+            branding_cursor: normalizeCursorValue(nextRotationState.branding_cursor),
+            branding_image_cursor: normalizeCursorValue(nextRotationState.branding_image_cursor),
+            content_cursor: normalizeCursorValue(nextRotationState.content_cursor),
+            post_content_cursor: normalizeCursorValue(nextRotationState.post_content_cursor),
+          },
+        };
+      }
+    }
+
+    // Persist post_content_cursor for video automations (Issue 1 fix)
+    // Runner sends content_cursor_next in post_result.json → webhook output_data
+    if (contentCursorNext !== undefined && contentCursorNext !== null && automation.type !== "image") {
+      const cursorValue = normalizeCursorValue(contentCursorNext);
+      const existingRotationState = (config.rotation_state && typeof config.rotation_state === "object" && !Array.isArray(config.rotation_state))
+        ? config.rotation_state as Record<string, unknown>
+        : {};
       config = {
         ...config,
         rotation_state: {
-          source_cursor: normalizeCursorValue(nextRotationState.source_cursor),
-          branding_cursor: normalizeCursorValue(nextRotationState.branding_cursor),
-          branding_image_cursor: normalizeCursorValue(nextRotationState.branding_image_cursor),
-          content_cursor: normalizeCursorValue(nextRotationState.content_cursor),
-          post_content_cursor: normalizeCursorValue(nextRotationState.post_content_cursor),
+          ...existingRotationState,
+          post_content_cursor: cursorValue,
         },
       };
     }

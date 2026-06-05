@@ -291,9 +291,20 @@ function resolveSingleVideoFromChannel(channelUrl, config) {
   const urls = (result.stdout || '').split('\n').map(l => l.trim()).filter(l => l.startsWith('http'));
   if (urls.length === 0) throw new Error('No videos found in channel');
 
+  // Filter out already-processed videos by checking against processed_source_urls
+  // from the runtime config (injected by worker at dispatch time)
+  const processedSourceUrls = Array.isArray(config.processed_source_urls) ? config.processed_source_urls : [];
+  const unprocessedUrls = processedSourceUrls.length > 0
+    ? urls.filter((url) => !processedSourceUrls.includes(url))
+    : urls;
+
+  if (unprocessedUrls.length === 0) {
+    throw new Error('All videos in channel have already been processed (processed_source_urls filter)');
+  }
+
   // For oldest strategy, take the last URL (yt-dlp returns newest-first)
-  const selectedUrl = processStrategy === 'oldest' ? urls[urls.length - 1] : urls[0];
-  console.log(`[DOWNLOAD] Resolved channel video (${processStrategy}): ${selectedUrl} (${urls.length} candidates)`);
+  const selectedUrl = processStrategy === 'oldest' ? unprocessedUrls[unprocessedUrls.length - 1] : unprocessedUrls[0];
+  console.log(`[DOWNLOAD] Resolved channel video (${processStrategy}): ${selectedUrl} (${unprocessedUrls.length} unprocessed of ${urls.length} candidates)`);
   return selectedUrl;
 }
 

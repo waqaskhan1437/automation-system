@@ -475,14 +475,47 @@ async function main() {
       ? config.post_content_cursor
       : 0;
 
+  // ── Duplicate-title guard ──────────────────────────────────────────────
+  // Read the previous post_result.json (if any) to check if the same title
+  // was used in the last run. If so, advance the cursor to skip it.
+  let effectiveCursor = contentCursor;
+  let prevUsedTitle = null;
+  try {
+    const prevPostResultPath = path.join(OUTPUT_DIR, '..', 'output', 'post_result.json');
+    if (fs.existsSync(prevPostResultPath)) {
+      const prevPostResult = JSON.parse(fs.readFileSync(prevPostResultPath, 'utf8'));
+      if (prevPostResult && typeof prevPostResult === 'object') {
+        const prevMeta = prevPostResult.post_metadata;
+        prevUsedTitle = (prevMeta && typeof prevMeta.title === 'string' && prevMeta.title.trim())
+          ? prevMeta.title.trim()
+          : null;
+      }
+    }
+  } catch {
+    // Ignore read/parse errors — previous result may not exist or be corrupt
+  }
+
+  // If the cursor points to the same title as the previous post AND there are
+  // more titles available, advance cursor by 1 to avoid posting the same title.
+  if (prevUsedTitle && titles.length > 1) {
+    const candidate = pickSequentialItem(titles, effectiveCursor);
+    if (candidate.text.trim() === prevUsedTitle) {
+      const nextCandidate = pickSequentialItem(titles, effectiveCursor + 1);
+      if (nextCandidate.text.trim() && nextCandidate.text.trim() !== prevUsedTitle) {
+        effectiveCursor = effectiveCursor + 1;
+        console.log(`[DUPLICATE-GUARD] Title "${prevUsedTitle.substring(0, 40)}..." already used in last run → advancing cursor to ${effectiveCursor}`);
+      }
+    }
+  }
+
   const topTagline = getRandomFromArray(topTaglines);
   const bottomTagline = getRandomFromArray(bottomTaglines);
-  const titleResult = pickSequentialItem(titles, contentCursor);
-  const descResult = pickSequentialItem(descriptions, titleResult.nextCursor);
+  const titleResult = pickSequentialItem(titles, effectiveCursor);
+  const descResult = pickSequentialItem(descriptions, effectiveCursor);
   const title = titleResult.text;
   const description = descResult.text;
-  const usedCursor = contentCursor;
-  const nextCursor = Math.max(titleResult.nextCursor, descResult.nextCursor);
+  const usedCursor = effectiveCursor;
+  const nextCursor = effectiveCursor + 1;
 
   // Gate: never auto-post when real social content is missing. The video is
   // still produced/uploaded and a draft is kept for review, but no live post
