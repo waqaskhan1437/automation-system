@@ -173,6 +173,47 @@ export async function handleUploadsRoutes(
     return await response.json();
   };
 
+  // Audio upload URL — proxy postforme presigned upload for Audio tab assets.
+  // Handled before id-based routes so the "audio-upload-url" segment never parses as an id.
+  if (path === "/api/uploads/audio-upload-url" && method === "POST") {
+    const body = await safeRequestJson<{ filename?: string; content_type?: string }>(request);
+    if (!body?.filename) {
+      return jsonResponse({ success: false, error: "filename is required" }, 400);
+    }
+    const contentType = body.content_type || "audio/mpeg";
+    if (!contentType.startsWith("audio/")) {
+      return jsonResponse({ success: false, error: "Only audio files are allowed" }, 400);
+    }
+
+    const postformeSettings = await getPostformeSettings();
+    if (!postformeSettings?.api_key) {
+      return jsonResponse({ success: false, error: "Postforme API key not configured. Settings me API key save karein." }, 400);
+    }
+
+    try {
+      const res = await fetch("https://api.postforme.dev/v1/media/create-upload-url", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${postformeSettings.api_key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filename: body.filename, content_type: contentType }),
+      });
+      if (!res.ok) {
+        const errorText = await res.text();
+        return jsonResponse({ success: false, error: `Postforme create-upload-url failed: ${errorText}` }, 502);
+      }
+      const data = await res.json() as { upload_url?: string; media_url?: string };
+      if (!data.upload_url || !data.media_url) {
+        return jsonResponse({ success: false, error: "Postforme returned invalid upload data" }, 502);
+      }
+      return jsonResponse({ success: true, data: { upload_url: data.upload_url, media_url: data.media_url } });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Upload URL request failed";
+      return jsonResponse({ success: false, error: errorMsg }, 500);
+    }
+  }
+
   if (path === "/api/uploads" && method === "GET") {
     const url = new URL(request.url);
     const jobId = url.searchParams.get("job_id");

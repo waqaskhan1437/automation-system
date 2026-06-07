@@ -31,6 +31,7 @@ const OUTPUT_FILE = process.env.OUTPUT_FILE_PATH ? path.resolve(process.env.OUTP
 const TEMP_FILE = process.env.TEMP_FILE_PATH ? path.resolve(process.env.TEMP_FILE_PATH) : path.join(OUTPUT_DIR, "temp-noaudio.mp4");
 const SPEED_FILE = process.env.SPEED_FILE_PATH ? path.resolve(process.env.SPEED_FILE_PATH) : path.join(OUTPUT_DIR, "temp-speed.mp4");
 const OVERLAY_FILE = process.env.OVERLAY_FILE_PATH ? path.resolve(process.env.OVERLAY_FILE_PATH) : path.join(OUTPUT_DIR, "temp-overlay.mp4");
+const AUDIOTRACK_FILE = path.join(OUTPUT_DIR, "temp-audiotracks.mp4");
 
 function getCommandCandidates(name) {
   const isWin = process.platform === "win32";
@@ -1053,6 +1054,246 @@ function applyOverlays(inFile, outFile, overlays, config, width, height) {
 }
 
 /**
+ * ============================================================================
+ * Multi-Track Audio System (Audio tab)
+ * ============================================================================
+ * Applies an array of audio tracks in a dedicated audio-only FFmpeg pass
+ * (run AFTER the mute pass — mute only affects the original audio, user-added
+ * tracks are layered on top and can't be silenced by mute).
+ *
+ * Each track (config.audio_tracks[i]):
+ *   url, use_full_audio, source_start, source_end, loop,
+ *   placement (whole|first|last|custom), placement_seconds,
+ *   placement_start, placement_end, mode (replace|mix),
+ *   audio_volume (0-200 %), original_volume (0-100 %, mix only),
+ *   fade_in, fade_out (seconds)
+ *
+ * Video stream is stream-copied (-c:v copy) — only audio is re-encoded.
+ * Per-track failures are isolated — a bad track is skipped, job continues.
+ * ============================================================================
+ */
+
+const MAX_AUDIO_TRACKS = 5;
+
+function audioExtFromUrl(url) {
+  const m = String(url || "").toLowerCase().replace(/[?#].*$/, "").match(/\.([a-z0-9]+)$/);
+  if (m && ["mp3", "wav", "m4a", "aac", "ogg", "flac", "opus", "wma", "mp4"].includes(m[1])) {
+    return m[1];
+  }
+  return "mp3";
+}
+
+/**
+ * Resolve where on the video timeline a track applies.
+ * Returns { start, end } in seconds, or null when invalid/outside video.
+ */
+function resolveAudioPlacement(track, videoDuration) {
+  const p = String(track.placement || "whole");
+  if (p === "first") {
+    const n = Math.min(Math.max(0.1, num(track.placement_seconds, 10)), videoDuration);
+    return { start: 0, end: n };
+  }
+  if (p === "last") {
+    const n = Math.min(Math.max(0.1, num(track.placement_seconds, 10)), videoDuration);
+    return { start: videoDuration - n, end: videoDuration };
+  }
+  if (p === "custom") {
+    const s = Math.max(0, num(track.placement_start, 0));
+    const e = Math.min(num(track.placement_end, videoDuration), videoDuration);
+    if (e <= s || s >= videoDuration) return null;
+    return { start: s, end: e };
+  }
+  return { start: 0, end: videoDuration }; // whole
+}
+
+/**
+ * Build the filter sub-chain for one audio track input.
+ * Returns the prep string ("[N:a]...[trkN]").
+ */
+function buildAudioTrackChain(track, inputIndex, placement, audioDuration) {
+  const sectionLen = placement.end - placement.start;
+  const filters = [];
+
+  // Source clip selection (audio ke andar se range)
+  const useFull = track.use_full_audio !== false;
+  if (!useFull) {
+    let srcStart = Math.max(0, num(track.source_start, 0));
+    let srcEnd = num(track.source_end, 0);
+    if (audioDuration && srcStart >= audioDuration) {
+      srcStart = 0; // invalid start — fall back to full audio
+      srcEnd = 0;
+    }
+    if (srcEnd > srcStart) {
+      filters.push(`atrim=start=${srcStart}:end=${srcEnd}`);
+    } else if (srcStart > 0) {
+      filters.push(`atrim=start=${srcStart}`);
+    }
+    if (filters.length > 0) {
+      filters.push("asetpts=PTS-STARTPTS");
+    }
+  }
+
+  // Loop the (trimmed) clip to fill the placement window
+  if (track.loop === true || track.loop === "true") {
+    filters.push("aloop=loop=-1:size=2e9");
+  }
+
+  // Always cap to the section length (caps loops and too-long clips)
+  filters.push(`atrim=0:${sectionLen.toFixed(3)}`, "asetpts=PTS-STARTPTS");
+
+  // Volume (0-200 %)
+  const vol = Math.max(0, Math.min(200, num(track.audio_volume, 100))) / 100;
+  if (vol !== 1) {
+    filters.push(`volume=${vol.toFixed(3)}`);
+  }
+
+  // Fades (clamped to half the section each)
+  const fadeIn = Math.max(0, Math.min(num(track.fade_in, 0), sectionLen / 2));
+  const fadeOut = Math.max(0, Math.min(num(track.fade_out, 0), sectionLen / 2));
+  if (fadeIn > 0) {
+    filters.push(`afade=t=in:st=0:d=${fadeIn}`);
+  }
+  if (fadeOut > 0) {
+    filters.push(`afade=t=out:st=${(sectionLen - fadeOut).toFixed(3)}:d=${fadeOut}`);
+  }
+
+  // Shift to the placement start on the video timeline
+  const delayMs = Math.round(placement.start * 1000);
+  if (delayMs > 0) {
+    filters.push(`adelay=${delayMs}|${delayMs}`);
+  }
+
+  return `[${inputIndex}:a]${filters.join(",")}[trk${inputIndex}]`;
+}
+
+/**
+ * Orchestrator: download audio assets, build filter graph, run audio-only pass.
+ * Returns true if outFile was produced; false to keep the previous output.
+ */
+function applyAudioTracks(inFile, outFile, audioTracks, config) {
+  console.log("=== APPLY AUDIO TRACKS ===");
+  const list = Array.isArray(audioTracks) ? audioTracks.slice(0, MAX_AUDIO_TRACKS) : [];
+  if (list.length === 0) {
+    return false;
+  }
+
+  const videoDuration = getVideoDuration(inFile) || 0;
+  if (!videoDuration) {
+    console.log("[AUDIO] could not determine video duration, skipping audio tracks");
+    return false;
+  }
+  console.log(`[AUDIO] video duration: ${videoDuration}s, tracks requested: ${list.length}`);
+
+  const downloaded = [];
+
+  try {
+    // Download + validate each track
+    const validTracks = [];
+    list.forEach((track, i) => {
+      const url = String(track && track.url || "").trim();
+      if (!url) {
+        console.log(`[AUDIO] skipping #${i} — no url`);
+        return;
+      }
+      const placement = resolveAudioPlacement(track, videoDuration);
+      if (!placement) {
+        console.log(`[AUDIO] skipping #${i} — invalid placement (outside video timeline)`);
+        return;
+      }
+      const destPath = path.join(OUTPUT_DIR, `audiotrack_${i}.${audioExtFromUrl(url)}`);
+      try {
+        downloadOverlayAsset(url, destPath);
+        downloaded.push(destPath);
+        const audioDuration = getVideoDuration(destPath) || 0;
+        validTracks.push({ track, placement, filePath: destPath, audioDuration, originalIndex: i });
+        console.log(`[AUDIO] #${i} downloaded (${audioDuration ? audioDuration.toFixed(1) + "s" : "unknown duration"}): ${url}`);
+      } catch (err) {
+        console.log(`[AUDIO] skipping #${i} — download failed: ${err.message}`);
+      }
+    });
+
+    if (validTracks.length === 0) {
+      console.log("[AUDIO] no usable audio tracks, skipping audio pass");
+      return false;
+    }
+
+    // Base audio chain: original audio, or silence when the video has none
+    const hasAudio = hasAudioTrack(inFile);
+    const preps = [];
+    const inputArgs = [];
+    let nextInputIndex = 1; // input 0 is the video
+
+    let baseLabel;
+    if (hasAudio) {
+      baseLabel = "0:a";
+    } else {
+      inputArgs.push("-f", "lavfi", "-t", String(videoDuration), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
+      baseLabel = `${nextInputIndex}:a`;
+      nextInputIndex += 1;
+    }
+
+    // Replace-mode windows silence the base; mix-mode windows duck it
+    const baseFilters = [];
+    validTracks.forEach(({ track, placement }) => {
+      const start = placement.start.toFixed(3);
+      const end = placement.end.toFixed(3);
+      if (String(track.mode || "replace") === "replace") {
+        baseFilters.push(`volume=enable='between(t,${start},${end})':volume=0`);
+      } else {
+        const ov = Math.max(0, Math.min(100, num(track.original_volume, 30))) / 100;
+        baseFilters.push(`volume=enable='between(t,${start},${end})':volume=${ov.toFixed(3)}`);
+      }
+    });
+    preps.push(`[${baseLabel}]${baseFilters.join(",")}[abase]`);
+
+    // Per-track prep chains
+    const trackLabels = [];
+    validTracks.forEach((entry) => {
+      const inputIndex = nextInputIndex;
+      nextInputIndex += 1;
+      inputArgs.push("-i", entry.filePath);
+      preps.push(buildAudioTrackChain(entry.track, inputIndex, entry.placement, entry.audioDuration));
+      trackLabels.push(`[trk${inputIndex}]`);
+    });
+
+    // Final mix — normalize=0 preserves user volume settings
+    const mixInputs = 1 + trackLabels.length;
+    const filterComplex = [
+      ...preps,
+      `[abase]${trackLabels.join("")}amix=inputs=${mixInputs}:duration=first:dropout_transition=0:normalize=0[aout]`,
+    ].join(";");
+
+    const args = [
+      "-y",
+      "-i", inFile,
+      ...inputArgs,
+      "-filter_complex", filterComplex,
+      "-map", "0:v",
+      "-map", "[aout]",
+      "-c:v", "copy",
+      "-c:a", "aac", "-b:a", "128k",
+      "-movflags", "+faststart",
+      outFile,
+    ];
+    console.log("[AUDIO] FFmpeg filter_complex:", filterComplex);
+    const result = spawnSync(FFMPEG_BIN, args, { stdio: "inherit", timeout: 600000 });
+    if (!result.error && result.status === 0 && fs.existsSync(outFile)) {
+      console.log("✅ Audio tracks applied successfully!");
+      return true;
+    }
+    console.log("[AUDIO] audio pass failed, keeping previous output");
+    return false;
+  } catch (err) {
+    console.error("[AUDIO] Unexpected error:", err.message);
+    return false;
+  } finally {
+    for (const file of downloaded) {
+      try { fs.unlinkSync(file); } catch {}
+    }
+  }
+}
+
+/**
  * Speed Control Functions using FFmpeg
  * Supports multiple speed modes:
  * - none: No speed change
@@ -1672,9 +1913,28 @@ function main() {
     fs.copyFileSync(stageFile, OUTPUT_FILE);
   }
 
+  // === AUDIO TRACKS PASS (Audio tab) ===
+  // Applied after mute — mute only touches the original audio, user-added
+  // tracks are layered last. Backward compatible: empty config leaves output unchanged.
+  let audioTracks = config.audio_tracks;
+  if (typeof audioTracks === "string") {
+    try { audioTracks = JSON.parse(audioTracks); } catch { audioTracks = []; }
+  }
+  if (Array.isArray(audioTracks) && audioTracks.length > 0) {
+    const audioApplied = applyAudioTracks(OUTPUT_FILE, AUDIOTRACK_FILE, audioTracks, config);
+    if (audioApplied) {
+      fs.copyFileSync(AUDIOTRACK_FILE, OUTPUT_FILE);
+    } else {
+      console.log("[AUDIO] audio tracks pass skipped/failed, keeping previous output");
+    }
+  } else {
+    console.log("Audio tracks: none");
+  }
+
   try { fs.unlinkSync(TEMP_FILE); } catch (e) {}
   try { fs.unlinkSync(SPEED_FILE); } catch (e) {}
   try { fs.unlinkSync(OVERLAY_FILE); } catch (e) {}
+  try { fs.unlinkSync(AUDIOTRACK_FILE); } catch (e) {}
 
   if (!fs.existsSync(OUTPUT_FILE)) {
     console.error("ERROR: OUTPUT_FILE not created!");
