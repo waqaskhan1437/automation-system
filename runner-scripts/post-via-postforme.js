@@ -357,7 +357,12 @@ function buildPlatformConfigurations(selectedAccounts, title, description, hasht
 async function uploadMediaToPostforme(apiKey, filePath) {
   const fileName = path.basename(filePath);
   const fileData = fs.readFileSync(filePath);
-  console.log(`Uploading ${fileName} to PostForMe (${(fileData.length / 1024 / 1024).toFixed(2)} MB)...`);
+  const fileSizeMB = (fileData.length / 1024 / 1024).toFixed(2);
+  console.log(`Uploading ${fileName} to PostForMe (${fileSizeMB} MB, ${fileData.length} bytes)...`);
+
+  if (fileData.length === 0) {
+    throw new Error(`Video file is empty: ${filePath}`);
+  }
 
   const createUrlBody = JSON.stringify({
     filename: fileName,
@@ -381,18 +386,53 @@ async function uploadMediaToPostforme(apiKey, filePath) {
   const urlData = await createUrlResponse.json();
   const { upload_url: uploadUrl, media_url: mediaUrl } = urlData;
 
+  if (!uploadUrl || !mediaUrl) {
+    throw new Error("PostForMe returned invalid create-upload-url response (missing upload_url or media_url)");
+  }
+
+  console.log(`Uploading ${fileSizeMB} MB to pre-signed URL (timeout: 600s)...`);
   const uploadResponse = await timedFetch(uploadUrl, {
     method: "PUT",
-    headers: { "Content-Type": "video/mp4" },
+    headers: {
+      "Content-Type": "video/mp4",
+      "Content-Length": String(fileData.length),
+    },
     body: fileData,
-  }, 120000);
+  }, 600000); // 10-minute timeout for large video uploads
 
   if (!uploadResponse.ok) {
-    throw new Error(`Failed to upload media: ${uploadResponse.status}`);
+    const errorText = await uploadResponse.text().catch(() => "");
+    throw new Error(`Failed to upload media to PostForMe storage: ${uploadResponse.status} ${errorText}`);
   }
 
   console.log(`Media uploaded to PostForMe: ${mediaUrl}`);
   return mediaUrl;
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function createPostformePostWithRetry(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations, maxRetries = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await createPostformePost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations);
+    } catch (err) {
+      lastError = err;
+      const message = String(err.message || "");
+      // Retry on transient staging failures (YouTube staging timeout, size mismatch, 5xx)
+      const isTransient = /stage.*(?:media|youtube)|size mismatch|timeout|5\d{2}|service.unavailable|too many requests/i.test(message);
+      if (attempt < maxRetries && isTransient) {
+        const delay = Math.min(10000 * Math.pow(2, attempt - 1), 60000);
+        console.log(`[RETRY] Post creation attempt ${attempt}/${maxRetries} failed (${err.message}), retrying in ${delay}ms...`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
 }
 
 async function createPostformePost(apiKey, mediaUrl, caption, socialAccounts, scheduledAt, isDraft, platformConfigurations) {
@@ -566,7 +606,7 @@ async function main() {
 
       if (publishingPlan.publishMode === "stagger" && scheduledAccounts.length > 0) {
         for (const scheduledAccount of scheduledAccounts) {
-          const livePost = await createPostformePost(
+          const livePost = await createPostformePostWithRetry(
             apiKey,
             mediaUrl,
             caption,
@@ -582,7 +622,7 @@ async function main() {
 
         livePostId = livePostIds.find(Boolean) || null;
       } else {
-        const livePost = await createPostformePost(
+        const livePost = await createPostformePostWithRetry(
           apiKey,
           mediaUrl,
           caption,
@@ -599,7 +639,7 @@ async function main() {
     }
 
     console.log("Creating draft post for review queue...");
-    const draftPost = await createPostformePost(
+    const draftPost = await createPostformePostWithRetry(
       apiKey,
       mediaUrl,
       caption,

@@ -31,7 +31,7 @@ module.exports = async function post(litterboxUrl) {
     execSync('node post-via-postforme.js', {
       cwd: ROOT_DIR,
       stdio: 'inherit',
-      timeout: 180000,
+      timeout: 600000,
       env: { ...process.env, LITTERBOX_URL: litterboxUrl, POSTFORME_API_KEY: apiKey }
     });
     
