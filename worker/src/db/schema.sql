@@ -300,3 +300,42 @@ CREATE INDEX IF NOT EXISTS idx_video_uploads_user ON video_uploads(user_id);
 CREATE INDEX IF NOT EXISTS idx_processed_videos_automation ON processed_videos(automation_id);
 CREATE INDEX IF NOT EXISTS idx_processed_videos_url ON processed_videos(automation_id, video_url);
 CREATE INDEX IF NOT EXISTS idx_runner_commands_user_status ON runner_commands(user_id, status, created_at);
+
+-- Social accounts table for direct posting (OAuth connected accounts)
+CREATE TABLE IF NOT EXISTS social_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  platform TEXT NOT NULL,
+  platform_account_id TEXT NOT NULL,
+  account_name TEXT,
+  access_token TEXT NOT NULL,
+  token_expires_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  UNIQUE(user_id, platform, platform_account_id)
+);
+
+-- Social settings table for storing app credentials (App ID, Secret etc)
+CREATE TABLE IF NOT EXISTS settings_social (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER,
+  facebook_app_id TEXT,
+  facebook_app_secret TEXT,
+  facebook_callback_url TEXT,
+  youtube_client_id TEXT,
+  youtube_client_secret TEXT,
+  youtube_callback_url TEXT,
+  tiktok_client_key TEXT,
+  tiktok_client_secret TEXT,
+  tiktok_callback_url TEXT,
+  twitter_api_key TEXT,
+  twitter_api_secret TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_accounts_user ON social_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_social_accounts_platform ON social_accounts(user_id, platform);
+CREATE INDEX IF NOT EXISTS idx_settings_social_user ON settings_social(user_id);

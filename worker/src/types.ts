@@ -217,3 +217,33 @@ export interface RunnerCommand {
   completed_at?: string | null;
   updated_at?: string;
 }
+
+export interface SocialAccount {
+  id?: number;
+  user_id: number;
+  platform: string;
+  platform_account_id: string;
+  account_name: string | null;
+  access_token: string;
+  token_expires_at: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SocialSettings {
+  id?: number;
+  user_id?: number | null;
+  facebook_app_id: string | null;
+  facebook_app_secret: string | null;
+  facebook_callback_url: string | null;
+  youtube_client_id: string | null;
+  youtube_client_secret: string | null;
+  youtube_callback_url: string | null;
+  tiktok_client_key: string | null;
+  tiktok_client_secret: string | null;
+  tiktok_callback_url: string | null;
+  twitter_api_key: string | null;
+  twitter_api_secret: string | null;
+  created_at?: string;
+  updated_at?: string;
+}

@@ -31,6 +31,7 @@ import { handleApiKeysRoutes } from "./routes/api-keys";
 import { handleAiAccessRoutes } from "./routes/ai-access";
 import { handleWebhookRoutes } from "./routes/webhooks";
 import { handleYoutubeExtractRoutes } from "./routes/youtube-extract";
+import { handleOAuthRoutes } from "./routes/oauth";
 import { formatDatabaseDate, markAutomationRunCompleted, processDueAutomations, processPendingUploads, syncStaleRunningJobs } from "./services/automation-scheduler";
 import { getAdminEmail, getAdminPassword, getAuthContext, issueAdminAccessToken, requireAuth, logApiRequest, findUserByAccessToken } from "./services/auth";
 import { verifyWorkflowRuntimeConfigToken } from "./services/github";
@@ -515,6 +516,11 @@ export default {
        );
        
        return response;
+     }
+
+     // OAuth callback routes (public, called by platforms after authorization)
+     if (path === "/api/oauth/facebook/callback" && method === "GET") {
+       return handleOAuthRoutes(request, env, path, null);
      }
 
      if (path === "/api/auth/token" && method === "POST") {

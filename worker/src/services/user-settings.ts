@@ -1,13 +1,14 @@
-import { AISettings, GithubSettings, PostformeSettings, TailscaleSettings, VideoSourceSettings } from "../types";
+import { AISettings, GithubSettings, PostformeSettings, SocialSettings, TailscaleSettings, VideoSourceSettings } from "../types";
 
-type SupportedSettings = PostformeSettings | GithubSettings | VideoSourceSettings | AISettings | TailscaleSettings;
+type SupportedSettings = PostformeSettings | GithubSettings | VideoSourceSettings | AISettings | TailscaleSettings | SocialSettings;
 
-const SETTINGS_TABLES = {
+export const SETTINGS_TABLES = {
   postforme: "settings_postforme",
   github: "settings_github",
   "video-sources": "settings_video_sources",
   ai: "settings_ai",
   tailscale: "settings_tailscale",
+  social: "settings_social",
 } as const;
 
 export type SettingsKey = keyof typeof SETTINGS_TABLES;

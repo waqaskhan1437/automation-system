@@ -4,7 +4,7 @@ import UserTokensSettings from "@/components/settings/UserTokensSettings";
 import VideoSourceSettings from "@/components/settings/VideoSourceSettings";
 import { useSessionUser } from "@/components/layout/ClientWrapper";
 
-type Tab = "users" | "postforme" | "github" | "video" | "ai";
+type Tab = "users" | "postforme" | "github" | "video" | "ai" | "social";
 
 export default function SettingsPage() {
   const sessionUser = useSessionUser();
@@ -16,6 +16,7 @@ export default function SettingsPage() {
   }, [isAdmin]);
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
+    { id: "social", label: "Social Accounts", icon: "M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" },
     { id: "postforme", label: "Postforme API", icon: "M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" },
     { id: "github", label: "GitHub Runner", icon: "M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2m-2-4h.01M17 16h.01" },
     { id: "video", label: "Video Sources", icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" },
@@ -53,6 +54,7 @@ export default function SettingsPage() {
 
       <div className="glass-card p-8">
         {activeTab === "users" && isAdmin && <UserTokensSettings />}
+        {activeTab === "social" && <SocialAccountsSettings />}
         {activeTab === "postforme" && <PostformeSettings />}
         {activeTab === "github" && <GithubSettings />}
         {activeTab === "video" && <VideoSourceSettings />}
@@ -585,6 +587,173 @@ function AISettings() {
       >
         {saving ? "Saving..." : "Save AI Settings"}
       </button>
+    </div>
+  );
+}
+
+function SocialAccountsSettings() {
+  const [appId, setAppId] = useState("");
+  const [appSecret, setAppSecret] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [accounts, setAccounts] = useState<Array<{ id: number; platform_account_id: string; account_name: string; created_at: string }>>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadSettings();
+    loadAccounts();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      const res = await fetch("/api/oauth/facebook/settings");
+      const data = await res.json();
+      if (data.success && data.data) {
+        setAppId(data.data.facebook_app_id || "");
+        setAppSecret(data.data.facebook_app_secret || "");
+      }
+    } catch {}
+  };
+
+  const loadAccounts = async () => {
+    try {
+      const res = await fetch("/api/oauth/facebook/accounts");
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setAccounts(data.data);
+      }
+    } catch {}
+    setLoading(false);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/oauth/facebook/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ facebook_app_id: appId, facebook_app_secret: appSecret }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("Facebook settings saved");
+      } else {
+        alert(data.error || "Failed to save");
+      }
+    } catch {
+      alert("Failed to save");
+    }
+    setSaving(false);
+  };
+
+  const handleConnect = async () => {
+    try {
+      const res = await fetch("/api/oauth/facebook/url");
+      const data = await res.json();
+      if (data.success && data.data?.url) {
+        window.location.href = data.data.url;
+      } else {
+        alert(data.error || "Failed to generate OAuth URL");
+      }
+    } catch {
+      alert("Failed to connect");
+    }
+  };
+
+  const handleDisconnect = async (id: number) => {
+    if (!confirm("Disconnect this account?")) return;
+    try {
+      const res = await fetch(`/api/oauth/facebook/accounts/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        loadAccounts();
+      }
+    } catch {}
+  };
+
+  return (
+    <div>
+      <div className="mb-8">
+        <h3 className="text-xl font-semibold mb-1">Social Accounts</h3>
+        <p className="text-sm text-[#a1a1aa]">Connect your social media accounts via OAuth for direct posting (no Postforme needed)</p>
+      </div>
+
+      <div className="mb-8 p-4 rounded-xl bg-[rgba(99,102,241,0.1)] border border-[#6366f1]/30">
+        <p className="text-sm text-[#c4c4f0]">
+          <strong>Abhi:</strong> Facebook OAuth setup karein. Baad mein YouTube, TikTok, Twitter add honge.
+        </p>
+      </div>
+
+      <div className="mb-8">
+        <h4 className="text-lg font-medium mb-4">Facebook App Credentials</h4>
+        <p className="text-sm text-[#a1a1aa] mb-4">
+          Facebook Developers se App ID aur App Secret lain. Redirect URL settings mein dalna: <code className="text-[#6366f1]">{typeof window !== "undefined" ? window.location.origin : ""}/api/oauth/facebook/callback</code>
+        </p>
+
+        <div className="grid gap-4 max-w-md mb-4">
+          <div>
+            <label className="block text-sm text-[#a1a1aa] mb-2">Facebook App ID</label>
+            <input
+              type="text"
+              className="glass-input w-full"
+              placeholder="1234567890"
+              value={appId}
+              onChange={(e) => setAppId(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-[#a1a1aa] mb-2">Facebook App Secret</label>
+            <input
+              type="password"
+              className="glass-input w-full"
+              placeholder="••••••••"
+              value={appSecret}
+              onChange={(e) => setAppSecret(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-3">
+          <button onClick={handleSave} disabled={saving} className="glass-button-primary">
+            {saving ? "Saving..." : "Save Credentials"}
+          </button>
+          <button
+            onClick={handleConnect}
+            disabled={!appId || !appSecret}
+            className="glass-button"
+          >
+            Connect Facebook
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <h4 className="text-lg font-medium mb-4">Connected Facebook Pages</h4>
+        {loading ? (
+          <p className="text-[#a1a1aa]">Loading...</p>
+        ) : accounts.length === 0 ? (
+          <div className="text-center py-8 text-[#a1a1aa]">
+            <p>No Facebook pages connected yet</p>
+            <p className="text-sm mt-1">Save App ID/Secret and click "Connect Facebook"</p>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {accounts.map((acc) => (
+              <div key={acc.id} className="flex items-center justify-between p-4 rounded-xl bg-[rgba(255,255,255,0.03)] border border-white/5">
+                <div>
+                  <p className="font-medium">{acc.account_name || acc.platform_account_id}</p>
+                  <p className="text-sm text-[#a1a1aa]">Facebook Page</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="badge badge-success">Connected</span>
+                  <button onClick={() => handleDisconnect(acc.id)} className="text-red-400 hover:text-red-300 text-sm">
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
