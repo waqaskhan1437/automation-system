@@ -1172,6 +1172,21 @@ export default {
         );
       }
 
+      // OAuth routes (Facebook, etc.)
+      if (path.startsWith("/api/oauth/")) {
+        return handleRouteWithAuditLog(
+          env,
+          () => handleOAuthRoutes(request, env, path, auth),
+          auth,
+          path,
+          method,
+          startTime,
+          ipAddress,
+          userAgent,
+          requestSize
+        );
+      }
+
       // Runner routes (local runner connections)
       if (path.startsWith("/api/runner") || path.startsWith("/api/admin/")) {
        return handleRouteWithAuditLog(
